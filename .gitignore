@@ -1,0 +1,13 @@
+node_modules/
+
+# 运行时状态：隔离的 codex 家目录（凭证 / 会话 / 日志）与数据目录，全部不入库
+.codex-home/
+data/*
+!data/.gitkeep
+
+# 本地工具状态
+.mimosa/
+
+*.log
+.DS_Store
+Thumbs.db

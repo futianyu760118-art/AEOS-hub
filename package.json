@@ -1,0 +1,30 @@
+{
+  "name": "aeos-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AEOS 中枢 Agent 第一阶段脚手架：codex app-server 编排 + MCP 工具面 + evidence 落库",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "mcp": "node mcp/demo-erp.mjs",
+    "test:mcp": "node scripts/test-mcp.mjs",
+    "test:harbor": "node --test test/harbor-store.test.ts",
+    "test:runtime": "node --test src/runtime/runtime-health.test.ts",
+    "test": "npm run test:harbor && npm run test:runtime && npm run test:mcp",
+    "demo": "node src/demo-run.ts",
+    "web": "node src/server.ts",
+    "web:lan": "node src/server.ts --lan",
+    "doctor": "codex doctor"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "lucide": "^0.469.0",
+    "ws": "^8.21.3",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@openai/codex": "0.153.0"
+  }
+}
