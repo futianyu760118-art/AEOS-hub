@@ -14,7 +14,7 @@ export interface RpcIncoming {
   params?: unknown;
 }
 
-type Pending = { method: string; resolve: (v: unknown) => void; reject: (e: Error) => void };
+type Pending = { method: string; resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 export interface StartOptions {
   cwd: string;
@@ -23,6 +23,7 @@ export interface StartOptions {
   /** 要启动的 codex 可执行文件（项目内固定版本），不依赖 PATH 上的全局安装 */
   binary: string;
   clientName: string;
+  requestTimeoutMs?: number;
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -31,6 +32,8 @@ export class CodexAppServerClient extends EventEmitter {
   private seq = 0;
   private pending = new Map<number, Pending>();
   private initialized = false;
+  private failed = false;
+  private requestTimeoutMs = 90_000;
   readonly codexHome: string;
 
   private constructor(child: ChildProcessWithoutNullStreams, rl: Interface, codexHome: string) {
@@ -41,13 +44,28 @@ export class CodexAppServerClient extends EventEmitter {
     rl.on('line', (line) => this.onLine(line));
     child.on('exit', (code) => {
       const err = new Error(`codex app-server 进程退出，exitCode=${code}`);
-      for (const p of this.pending.values()) p.reject(err);
-      this.pending.clear();
-      this.emit('exit', code);
+      this.fail(err, code);
     });
+    child.on('error', (error) => this.fail(error));
+    child.stdin.on('error', (error) => this.fail(error));
+    child.stdout.on('error', (error) => this.fail(error));
+    rl.on('close', () => this.fail(new Error('codex stdout closed')));
+  }
+
+  private fail(error: Error, code: number | null = null): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.initialized = false;
+    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
+    this.pending.clear();
+    this.emit('exit', code);
+    this.child.kill();
+    const forceKill = setTimeout(() => { if (this.child.exitCode === null) this.child.kill('SIGKILL'); }, 3000);
+    forceKill.unref();
   }
 
   static async start(opts: StartOptions): Promise<CodexAppServerClient> {
+    if (opts.requestTimeoutMs !== undefined && (!Number.isFinite(opts.requestTimeoutMs) || opts.requestTimeoutMs < 1)) throw new Error('requestTimeoutMs must be positive');
     // Windows 下 .cmd 启动器需要 shell；env 里强制 CODEX_HOME（即使外层已有也覆盖），
     // 保证本进程与全局 ~/.codex（桌面版/其他 CLI）完全隔离
     const win = process.platform === 'win32';
@@ -70,7 +88,9 @@ export class CodexAppServerClient extends EventEmitter {
     child.stderr.on('data', (d) => process.stderr.write(`[codex-stderr] ${d}`));
     const rl = createInterface({ input: child.stdout });
     const client = new CodexAppServerClient(child, rl, opts.codexHome);
-    await client.initialize(opts.clientName);
+    client.requestTimeoutMs = opts.requestTimeoutMs ?? 90_000;
+    try { await client.initialize(opts.clientName); }
+    catch (error) { client.close(); throw error; }
     return client;
   }
 
@@ -85,6 +105,7 @@ export class CodexAppServerClient extends EventEmitter {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
+      clearTimeout(p.timer);
       if (msg.error) p.reject(new Error(`RPC ${p.method} 失败: ${msg.error.message} (code=${msg.error.code})`));
       else p.resolve(msg.result);
       return;
@@ -94,7 +115,8 @@ export class CodexAppServerClient extends EventEmitter {
         // 服务端发起的请求（审批等），交给调用方决定，默认拒绝
         this.emit('serverRequest', msg);
       } else {
-        this.recordNotification(msg.method, msg.params);
+        try { this.recordNotification(msg.method, msg.params); }
+        catch (error) { this.fail(error as Error); return; }
         this.emit('notification', msg.method, msg.params);
       }
     }
@@ -126,13 +148,18 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   request(method: string, params: unknown = {}): Promise<unknown> {
+    if (this.failed) return Promise.reject(new Error('codex transport is closed'));
     if (!this.initialized && method !== 'initialize') {
       return Promise.reject(new Error('Not initialized'));
     }
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { method, resolve, reject });
-      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      let serialized: string;
+      try { serialized = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'; }
+      catch (error) { reject(error as Error); return; }
+      const timer = setTimeout(() => this.fail(new Error(`RPC ${method} timed out after ${this.requestTimeoutMs}ms; runtime reset required`)), this.requestTimeoutMs);
+      this.pending.set(id, { method, resolve, reject, timer });
+      this.child.stdin.write(serialized, (error) => { if (error) this.fail(error); });
     });
   }
 
@@ -169,6 +196,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   close(): void {
+    this.fail(new Error('codex transport closed'));
     try {
       this.child.stdin.end();
     } catch { /* ignore */ }

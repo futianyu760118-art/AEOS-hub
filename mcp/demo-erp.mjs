@@ -27,6 +27,7 @@ server.registerTool(
   {
     title: '扫描订单风险（只读）',
     description: '扫描未来窗口内存在交付风险的关键订单。只读工具，输出含 evidence_refs。',
+    annotations: { readOnlyHint: true },
     inputSchema: {
       window_days: z.number().int().min(1).max(180).default(60).describe('未来天数窗口'),
       min_probability: z.number().min(0).max(1).default(0).describe('最低风险概率过滤'),
@@ -45,6 +46,7 @@ server.registerTool(
   {
     title: '检查物料供应缺口（只读）',
     description: '按物料编码检查供应缺口；不传编码则返回全部有缺口的物料。只读工具，输出含 evidence_refs。',
+    annotations: { readOnlyHint: true },
     inputSchema: {
       material_code: z.string().optional().describe('物料编码，如 MO-8821'),
     },
@@ -62,6 +64,7 @@ server.registerTool(
   {
     title: '连接自检（只读）',
     description: '返回 demo-ERP 能力状态，用于验证 中枢Agent→MCP 链路连通性。',
+    annotations: { readOnlyHint: true },
     inputSchema: {},
   },
   async () => {

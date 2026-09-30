@@ -69,6 +69,26 @@ test('verifyHealth does not start a stopped runtime unless requested', async () 
   assert.equal(transport.requests.length, 0);
 });
 
+test('lists the live MCP server and tool inventory through a read-only runtime request', async () => {
+  const { runtime, transport, starts } = createFixture();
+  transport.probeResponse = { data: [{ name: 'company-control', runtimeStatus: 'connected', tools: {} }], nextCursor: null };
+  const result = await runtime.listMcpServerStatus();
+  assert.equal(starts(), 1);
+  assert.deepEqual(result, transport.probeResponse);
+  assert.deepEqual(transport.requests, [{ method: 'mcpServerStatus/list', params: { limit: 100, detail: 'full' } }]);
+});
+
+test('calls a selected MCP tool with its session context', async () => {
+  const { runtime, transport } = createFixture();
+  transport.probeResponse = { content: [{ type: 'text', text: '{"status":"ok"}' }] };
+  const result = await runtime.callMcpTool('thread-dashboard', 'demo-erp', 'get_system_health', {});
+  assert.deepEqual(result, transport.probeResponse);
+  assert.deepEqual(transport.requests, [{
+    method: 'mcpServer/tool/call',
+    params: { threadId: 'thread-dashboard', server: 'demo-erp', tool: 'get_system_health', arguments: {} },
+  }]);
+});
+
 test('verifyHealth starts once, probes without requesting a token, and sanitizes details', async () => {
   const { supervisor, transport, starts } = createFixture();
   const results = await Promise.all(Array.from({ length: 8 }, () => supervisor.verifyHealth(

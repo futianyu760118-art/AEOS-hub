@@ -1,0 +1,74 @@
+services:
+  # Named volumes are initially owned by root. Prepare them before the
+  # non-root application process starts, including on a brand-new deployment.
+  aeos-init:
+    image: aeos-hub:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    user: root
+    entrypoint: ["/bin/sh", "-c", "chown node:node /app/data /app/.codex-home"]
+    command: []
+    volumes:
+      - aeos-data:/app/data
+      - aeos-codex-home:/app/.codex-home
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+
+  aeos-hub:
+    container_name: AEOS
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aeos-hub:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    init: true
+    depends_on:
+      aeos-init:
+        condition: service_completed_successfully
+    ports:
+      # The Hub is intended for the trusted LAN. Restrict this port at the
+      # host firewall when the network includes untrusted devices.
+      - "${AEOS_BIND_ADDRESS:-0.0.0.0}:${AEOS_PORT:-8787}:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      HUB_NO_AUTH: "1"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      # Runtime state only. Neither model credentials nor data are baked into the image.
+      - aeos-data:/app/data
+      - aeos-codex-home:/app/.codex-home
+      # The MCP process reads this file itself; do not expose its credentials
+      # through the container environment or bake it into the image.
+      - type: bind
+        source: ./mcp-company-control/.env
+        target: /app/mcp-company-control/.env
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  aeos-data:
+  aeos-codex-home:

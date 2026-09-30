@@ -1,8 +1,10 @@
+import { atomicWrite } from './atomic-file.ts';
 // hub 配置管理：读写隔离 CODEX_HOME 的 config.toml（模型提供商区段）与 .env（密钥）
 // 原则：只重写"模型提供商"区段；MCP 区段（# ---- MCP 服务器 ---- 之后）原样保留。
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname, sep } from 'node:path';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listConfiguredMcpServers, renderMcpConfigBlock } from './mcp-registry.ts';
 
 export const hubRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const codexHome = join(hubRoot, '.codex-home');
@@ -10,29 +12,43 @@ export const configFile = join(codexHome, 'config.toml');
 export const envFile = join(codexHome, '.env');
 export const presetsFile = join(hubRoot, 'data', 'model-presets.json');
 const MCP_MARK = '# ---- MCP 服务器';
+const RUNTIME_POLICY_LINES = [
+  '# AEOS 试点运行时边界：只读沙箱，所有非只读动作必须人工审批。',
+  'approval_policy = "on-request"',
+  'sandbox_mode = "read-only"',
+];
 
-/** 默认 MCP 注册块：路径按当前项目位置生成，克隆到任何目录都可直接用 */
-export function defaultMcpBlock(): string {
-  const mcpPath = join(hubRoot, 'mcp', 'demo-erp.mjs').split(sep).join('/');
-  return [
-    MCP_MARK + '（中枢 Agent 的工具面，= 各自治系统/业务系统的能力入口）----',
-    '[mcp_servers.demo-erp]',
-    'command = "node"',
-    `args = ["${mcpPath}"]`,
+function withFixedRuntimePolicy(beforeMcp: string): string {
+  const lines = beforeMcp
+    .split('\n')
+    .filter((line) => !/^\s*(approval_policy|sandbox_mode)\s*=/.test(line)
+      && line.trim() !== RUNTIME_POLICY_LINES[0]);
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const insertAt = firstTable >= 0 ? firstTable : lines.length;
+  lines.splice(insertAt, 0, ...RUNTIME_POLICY_LINES, '');
+  return lines.join('\n').trimEnd();
+}
+
+function configWithRegistryMcp(existing: string): string {
+  const markerAt = existing.indexOf(MCP_MARK);
+  const beforeMcp = withFixedRuntimePolicy(markerAt >= 0 ? existing.slice(0, markerAt).trimEnd() : existing.trimEnd());
+  return `${beforeMcp}\n\n${renderMcpConfigBlock()}\n`;
+}
+
+/** 将唯一 MCP 注册清单同步成运行时 TOML；不保留手工 MCP 区段，避免双真相源。 */
+export function syncMcpConfig(): void {
+  mkdirSync(codexHome, { recursive: true });
+  const existing = existsSync(configFile) ? readFileSync(configFile, 'utf8') : [
+    '# AEOS hub 隔离的 Codex 配置（CODEX_HOME 指向本目录，不污染全局 ~/.codex）',
+    '# 模型区段由 Web 配置页管理；MCP 区段由 mcp/registry.json 生成。',
     '',
   ].join('\n');
+  atomicWrite(configFile, configWithRegistryMcp(existing));
 }
 
 /** 首次运行自动生成隔离 config.toml（含 MCP 注册）；已存在则不覆盖 */
 export function ensureConfigFile(): void {
-  if (existsSync(configFile)) return;
-  mkdirSync(codexHome, { recursive: true });
-  const header = [
-    '# AEOS hub 隔离的 Codex 配置（CODEX_HOME 指向本目录，不污染全局 ~/.codex）',
-    '# 模型区段由 Web 配置页管理；MCP 区段以下原样保留。',
-    '',
-  ].join('\n');
-  writeFileSync(configFile, header + defaultMcpBlock(), 'utf-8');
+  syncMcpConfig();
 }
 
 /** 各提供商的默认"可切换模型"清单（存 data/model-presets.json，不写入 config.toml） */
@@ -53,7 +69,7 @@ export function loadModelPresets(): Record<string, string[]> {
 
 export function saveModelPresets(presets: Record<string, string[]>): void {
   mkdirSync(dirname(presetsFile), { recursive: true });
-  writeFileSync(presetsFile, JSON.stringify({ ...DEFAULT_MODEL_PRESETS, ...presets }, null, 2), 'utf-8');
+  atomicWrite(presetsFile, JSON.stringify({ ...DEFAULT_MODEL_PRESETS, ...presets }, null, 2));
 }
 
 export interface ProviderCfg {
@@ -76,7 +92,7 @@ function unquote(v: string): string {
 
 /** 解析当前 config.toml 中我们管理的区段（容错：解析失败时返回空结构） */
 export function readConfig(): ModelConfig {
-  const cfg: ModelConfig = { model: '', modelProvider: '', providers: [], mcpServers: [] };
+  const cfg: ModelConfig = { model: '', modelProvider: '', providers: [], mcpServers: listConfiguredMcpServers() };
   if (!existsSync(configFile)) return cfg;
   const lines = readFileSync(configFile, 'utf-8').split('\n');
   let section: string | null = null;
@@ -89,9 +105,6 @@ export function readConfig(): ModelConfig {
       if (path.startsWith('model_providers.')) {
         section = 'model_providers';
         cfg.providers.push({ id: path.slice('model_providers.'.length), wire_api: 'responses' });
-      } else if (path.startsWith('mcp_servers.')) {
-        section = 'mcp';
-        cfg.mcpServers.push(path.slice('mcp_servers.'.length));
       } else {
         section = null;
       }
@@ -114,27 +127,29 @@ export function readConfig(): ModelConfig {
 
 /** 重写模型区段（从文件头到 MCP 标记之前），MCP 及以后原样保留 */
 export function saveModelConfig(cfg: { model: string; modelProvider: string; providers: ProviderCfg[] }): void {
-  const existing = existsSync(configFile) ? readFileSync(configFile, 'utf-8') : '';
-  const mcpTailIdx = existing.indexOf(MCP_MARK);
-  const tail = mcpTailIdx >= 0 ? existing.slice(mcpTailIdx) : defaultMcpBlock();
-
+  for (const p of cfg.providers) {
+    if (!/^[A-Za-z0-9_-]+$/.test(p.id)) throw new Error('提供商 ID 只能包含字母、数字、下划线和连字符');
+    if (p.wire_api && p.wire_api !== 'responses') throw new Error('当前固定 Codex 运行时仅支持 responses；请配置兼容接口，不能选择 chat');
+    if (p.env_key && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(p.env_key)) throw new Error('非法环境变量名');
+  }
   const parts: string[] = [];
   parts.push('# AEOS hub 隔离的 Codex 配置（CODEX_HOME 指向本目录，不污染全局 ~/.codex）');
-  parts.push('# 模型区段由 Web 配置页管理；MCP 区段以下原样保留。');
+  parts.push('# 模型区段由 Web 配置页管理；MCP 区段由 mcp/registry.json 生成。');
+  parts.push(...RUNTIME_POLICY_LINES);
   parts.push('');
-  if (cfg.model.trim()) parts.push(`model = "${cfg.model.trim()}"`);
-  if (cfg.modelProvider.trim()) parts.push(`model_provider = "${cfg.modelProvider.trim()}"`);
+  if (cfg.model.trim()) parts.push(`model = ${JSON.stringify(cfg.model.trim())}`);
+  if (cfg.modelProvider.trim()) parts.push(`model_provider = ${JSON.stringify(cfg.modelProvider.trim())}`);
   if (parts.length > 2) parts.push('');
   for (const p of cfg.providers) {
     if (!p.id.trim()) continue;
     parts.push(`[model_providers.${p.id.trim()}]`);
     parts.push(`name = "${p.id.trim()}"`);
-    if (p.base_url?.trim()) parts.push(`base_url = "${p.base_url.trim()}"`);
+    if (p.base_url?.trim()) parts.push(`base_url = ${JSON.stringify(p.base_url.trim())}`);
     if (p.env_key?.trim()) parts.push(`env_key = "${p.env_key.trim()}"`);
     parts.push(`wire_api = "responses"`);
     parts.push('');
   }
-  writeFileSync(configFile, parts.join('\n') + '\n' + tail, 'utf-8');
+  atomicWrite(configFile, parts.join('\n') + '\n' + renderMcpConfigBlock() + '\n');
 }
 
 /** .env 中已配置的密钥名列表 */
@@ -161,5 +176,5 @@ export function setEnvKey(name: string, value: string | null): void {
     const safe = value.replace(/[\r\n]/g, '');
     kept.push(`${key}=${safe}`);
   }
-  writeFileSync(envFile, kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', 'utf-8');
+  atomicWrite(envFile, kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n');
 }

@@ -1,4 +1,8 @@
 node_modules/
+.venv/
+.env
+.env.*
+**/__pycache__/
 
 # 运行时状态：隔离的 codex 家目录（凭证 / 会话 / 日志）与数据目录，全部不入库
 .codex-home/
@@ -7,6 +11,10 @@ data/*
 
 # 本地工具状态
 .mimosa/
+.idea/
+
+# 本地交付物（桌面测试文档等），不属于可部署源码
+deliverables/
 
 *.log
 .DS_Store

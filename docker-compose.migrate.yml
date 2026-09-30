@@ -1,0 +1,9 @@
+# 仅供 docker/seed-state.ps1 调用：把本机 data 目录以只读方式挂入一次性容器。
+# 不要把这个文件用于常规 `docker compose up`。
+services:
+  aeos-hub:
+    volumes:
+      - type: bind
+        source: ./data
+        target: /seed/data
+        read_only: true

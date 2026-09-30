@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 const AUTONOMY_LEVELS = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'] as const;
+const AGENT_HIERARCHY_LEVELS = ['L0', 'L1', 'L2', 'L3'] as const;
 const AGENT_STATUSES = ['draft', 'idle', 'working', 'offline', 'archived'] as const;
 const RUNTIME_STATUSES = ['ready', 'online', 'busy', 'offline', 'unstable'] as const;
 const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli'] as const;
@@ -26,6 +27,7 @@ const RUN_STATUSES = ['queued', 'running', 'waiting_approval', 'completed', 'fai
 const MAX_HARBOR_FILE_BYTES = 25 * 1024 * 1024;
 
 export const AutonomyLevelSchema = z.enum(AUTONOMY_LEVELS);
+export const AgentHierarchyLevelSchema = z.enum(AGENT_HIERARCHY_LEVELS);
 export const HarborAgentStatusSchema = z.enum(AGENT_STATUSES);
 export const HarborRuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
 export const HarborRuntimeKindSchema = z.enum(RUNTIME_KINDS);
@@ -36,6 +38,7 @@ export const HarborRunTriggerSchema = z.enum(RUN_TRIGGERS);
 export const HarborRunStatusSchema = z.enum(RUN_STATUSES);
 
 export type AutonomyLevel = z.infer<typeof AutonomyLevelSchema>;
+export type AgentHierarchyLevel = z.infer<typeof AgentHierarchyLevelSchema>;
 export type HarborAgentStatus = z.infer<typeof HarborAgentStatusSchema>;
 export type HarborRuntimeStatus = z.infer<typeof HarborRuntimeStatusSchema>;
 export type HarborRuntimeKind = z.infer<typeof HarborRuntimeKindSchema>;
@@ -69,6 +72,8 @@ export const HarborAgentSchema = z.object({
   provider: trimmedString(80, 1),
   model: trimmedString(120, 1),
   runtimeId: identifierSchema.nullable(),
+  parentAgentId: identifierSchema.nullable().default(null),
+  hierarchyLevel: AgentHierarchyLevelSchema.default('L2'),
   autonomyLevel: AutonomyLevelSchema,
   access: z.enum(['private', 'workspace', 'selected']),
   skills: stringListSchema(200),
@@ -181,6 +186,12 @@ export const HarborSnapshotSchema = z.object({
     if (!agent.runtimeId && !['draft', 'archived'].includes(agent.status)) {
       ctx.addIssue({ code: 'custom', path: ['agents', index, 'status'], message: '未绑定 Runtime 的 Agent 只能是 draft 或 archived' });
     }
+    if (agent.parentAgentId && !agentIds.has(agent.parentAgentId)) {
+      ctx.addIssue({ code: 'custom', path: ['agents', index, 'parentAgentId'], message: '上级 Agent 不存在' });
+    }
+    if (agent.parentAgentId === agent.id) {
+      ctx.addIssue({ code: 'custom', path: ['agents', index, 'parentAgentId'], message: 'Agent 不能将自己设为上级' });
+    }
     addDuplicateIssues(agent.skills, ctx, ['agents', index, 'skills'], 'Skill');
   });
 
@@ -238,6 +249,10 @@ export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
   role?: unknown;
   runtimeId?: unknown;
 };
+const HARBOR_AGENT_CREATE_KEYS = new Set([
+  'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
+  'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
+]);
 export type HarborRuntimeCreateInput = Readonly<Record<string, unknown>> & { name?: unknown };
 export interface HarborRuntimeVerificationInput {
   status: HarborRuntimeVerificationStatus;
@@ -253,6 +268,7 @@ export type HarborRunCreateInput = Readonly<Record<string, unknown>> & {
   agentId?: unknown;
   workItem?: unknown;
 };
+export type HarborAgentDeleteInput = Readonly<Record<string, unknown>> & { id?: unknown };
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const harborFile = join(root, 'data', 'ai-harbor.json');
@@ -421,10 +437,16 @@ export class HarborStore {
 
   createAgent(input: HarborAgentCreateInput): HarborAgent {
     return this.mutate((snapshot) => {
+      const unknownKeys = Object.keys(input).filter((key) => !HARBOR_AGENT_CREATE_KEYS.has(key));
+      if (unknownKeys.length) throw new Error(`Agent 创建包含未知字段：${unknownKeys.join(', ')}`);
       const timestamp = this.now();
       const runtimeId = optionalText(input, 'runtimeId', 160) || null;
+      const parentAgentId = optionalText(input, 'parentAgentId', 160) || null;
       if (runtimeId && !snapshot.runtimes.some((runtime) => runtime.id === runtimeId)) {
         throw new Error('所选 Runtime 不存在');
+      }
+      if (parentAgentId && !snapshot.agents.some((agent) => agent.id === parentAgentId)) {
+        throw new Error('所选上级 Agent 不存在');
       }
       const agent = HarborAgentSchema.parse({
         id: `agent-${this.idFactory()}`,
@@ -435,6 +457,8 @@ export class HarborStore {
         provider: requiredText(input, 'provider', 80),
         model: optionalText(input, 'model', 120, 'provider-default'),
         runtimeId,
+        parentAgentId,
+        hierarchyLevel: enumValue(input, 'hierarchyLevel', AGENT_HIERARCHY_LEVELS, 'L2'),
         autonomyLevel: enumValue(input, 'autonomyLevel', AUTONOMY_LEVELS, 'A1'),
         access: enumValue(input, 'access', ['private', 'workspace', 'selected'] as const, 'private'),
         skills: stringList(input.skills, 200),
@@ -467,6 +491,22 @@ export class HarborStore {
       });
       snapshot.runtimes.push(runtime);
       return runtime;
+    });
+  }
+
+  deleteAgent(input: HarborAgentDeleteInput): HarborAgent {
+    return this.mutate((snapshot) => {
+      const id = requiredText(input, 'id', 160);
+      const agent = snapshot.agents.find((item) => item.id === id);
+      if (!agent) throw new HarborStoreNotFoundError(`Agent 不存在: ${id}`);
+      const children = snapshot.agents.filter((item) => item.parentAgentId === id);
+      if (children.length) throw new Error(`请先为 ${children.length} 个直属子 Agent 重新指定上级`);
+      const projectCount = snapshot.projects.filter((project) => project.agentIds.includes(id) || (project.leadType === 'agent' && project.leadId === id)).length;
+      if (projectCount) throw new Error(`该 Agent 仍关联 ${projectCount} 个协作项目，请先解除项目编队关系`);
+      const runCount = snapshot.runs.filter((run) => run.agentId === id).length;
+      if (runCount) throw new Error(`该 Agent 保留 ${runCount} 条运行记录；为保留审计链不可删除`);
+      snapshot.agents = snapshot.agents.filter((item) => item.id !== id);
+      return agent;
     });
   }
 
@@ -820,6 +860,10 @@ export function saveHarbor(snapshot: HarborSnapshot): HarborSnapshot {
 
 export function createHarborAgent(input: HarborAgentCreateInput): HarborAgent {
   return defaultStore.createAgent(input);
+}
+
+export function deleteHarborAgent(input: HarborAgentDeleteInput): HarborAgent {
+  return defaultStore.deleteAgent(input);
 }
 
 export function createHarborRuntime(input: HarborRuntimeCreateInput): HarborRuntime {

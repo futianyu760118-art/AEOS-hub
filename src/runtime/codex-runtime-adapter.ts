@@ -353,6 +353,43 @@ export class CodexRuntimeAdapter implements AgentRuntime {
     };
   }
 
+  /** Read-only live inventory used by the Capability Registry page. */
+  async listMcpServerStatus(): Promise<unknown> {
+    const client = await this.readyClient();
+    return withTimeout(
+      client.request('mcpServerStatus/list', { limit: 100, detail: 'full' }),
+      20_000,
+      'MCP server inventory timed out after 20000ms',
+    );
+  }
+
+  /**
+   * Read an existing provider thread so the Hub can repair a local transcript
+   * that predates transcript persistence. This is a read-only RPC.
+   */
+  async readSessionHistory(sessionId: string): Promise<unknown> {
+    requireId(sessionId, 'sessionId');
+    const client = await this.readyClient();
+    return withTimeout(
+      client.request('thread/read', { threadId: sessionId, includeTurns: true }),
+      20_000,
+      'thread history read timed out after 20000ms',
+    );
+  }
+
+  /** Execute an explicitly selected MCP tool. Callers must enforce their own read-only allowlist. */
+  async callMcpTool(sessionId: string, server: string, tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    requireId(sessionId, 'sessionId');
+    requireId(server, 'server');
+    requireId(tool, 'tool');
+    const client = await this.readyClient();
+    return withTimeout(
+      client.request('mcpServer/tool/call', { threadId: sessionId, server, tool, arguments: args }),
+      30_000,
+      `MCP tool ${server}/${tool} timed out after 30000ms`,
+    );
+  }
+
   /**
    * Perform a provider-level, read-only health probe. This deliberately does
    * not start a stopped runtime unless the caller opts in with startIfStopped.

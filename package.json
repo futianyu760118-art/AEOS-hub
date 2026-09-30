@@ -10,9 +10,24 @@
   "scripts": {
     "mcp": "node mcp/demo-erp.mjs",
     "test:mcp": "node scripts/test-mcp.mjs",
+    "test:daily-questions": "node --test test/daily-questions.test.ts",
+    "test:conversations": "node --test test/conversations.test.ts",
+    "test:registry": "node --test test/capability-registry.test.ts",
+    "test:dashboard": "node --test test/dashboard.test.ts",
+    "test:attention-search": "node --test test/attention-search.test.ts",
+    "test:production": "node --test test/production-coordination.test.ts",
+    "test:pagination": "node --test test/mcp-pagination.test.ts",
     "test:harbor": "node --test test/harbor-store.test.ts",
+    "test:squad": "node --test test/agent-squad-store.test.ts",
+    "test:operating-center": "node --test test/operating-center.test.ts",
+    "test:mcp-policy": "node --test test/mcp-registry.test.ts test/mcp-access-gateway.test.ts",
     "test:runtime": "node --test src/runtime/runtime-health.test.ts",
-    "test": "npm run test:harbor && npm run test:runtime && npm run test:mcp",
+    "test:security": "node --test test/security-hardening.test.ts",
+    "smoke:protocol": "node scripts/smoke-protocol.mjs",
+    "check:types": "tsc --noEmit",
+    "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",
+    "setup:quality-agents": "node scripts/ensure-quality-agents.ts",
+    "test": "npm run test:daily-questions && npm run test:conversations && npm run test:registry && npm run test:dashboard && npm run test:attention-search && npm run test:production && npm run test:pagination && npm run test:harbor && npm run test:squad && npm run test:operating-center && npm run test:mcp-policy && npm run test:runtime && npm run test:security && npm run test:mcp",
     "demo": "node src/demo-run.ts",
     "web": "node src/server.ts",
     "web:lan": "node src/server.ts --lan",
@@ -25,6 +40,9 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@openai/codex": "0.153.0"
+    "@openai/codex": "0.153.0",
+    "@types/node": "24.13.6",
+    "@types/ws": "8.18.1",
+    "typescript": "7.0.2"
   }
 }

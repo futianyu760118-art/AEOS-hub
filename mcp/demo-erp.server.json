@@ -1,0 +1,10 @@
+{
+  "name": "demo-erp",
+  "version": "0.1.0",
+  "description": "AEOS 演示 ERP 的只读经营分析能力",
+  "tools": [
+    { "name": "list_order_risks", "permission_level": "READ_ONLY" },
+    { "name": "check_material_shortages", "permission_level": "READ_ONLY" },
+    { "name": "get_system_health", "permission_level": "READ_ONLY" }
+  ]
+}

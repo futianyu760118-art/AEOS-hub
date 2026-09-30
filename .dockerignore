@@ -1,0 +1,15 @@
+.git/
+.idea/
+.agents/
+.codex/
+node_modules/
+.venv/
+.codex-home/
+data/
+*.log
+.env
+mcp-company-control/.env
+mcp-company-control-v0.2/.env
+__pycache__/
+**/__pycache__/
+*.pyc

@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f7f7f8" />
+  <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=modal-system-20260930" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -114,11 +114,17 @@
         <div class="nav-group">
           <span class="nav-label">自治运行</span>
           <button class="nav-item" type="button" data-view="chat" data-title="中枢 Agent"><i data-lucide="bot"></i><span>中枢 Agent</span></button>
-          <button class="nav-item" type="button" data-view="attention" data-title="Attention 中心"><i data-lucide="list-checks"></i><span>Attention 中心</span><b id="nav-attention-count" class="nav-badge">3</b></button>
+          <button class="nav-item" type="button" data-view="attention" data-title="Attention 中心"><i data-lucide="list-checks"></i><span>Attention 中心</span><b id="nav-attention-count" class="nav-badge">0</b></button>
+        </div>
+        <div class="nav-group" id="operating-center-nav">
+          <span class="nav-label">经营闭环</span>
+          <button class="nav-item" type="button" data-view="cases" data-title="经营事项"><i data-lucide="clipboard-list"></i><span>经营事项</span></button>
+          <button class="nav-item" type="button" data-view="inbox" data-title="Inbox"><i data-lucide="inbox"></i><span>Inbox</span><b id="nav-inbox-count" class="nav-badge">0</b></button>
         </div>
         <div class="nav-group">
           <span class="nav-label">AI 资源协作</span>
           <button class="nav-item" type="button" data-view="harbor" data-title="AI 港湾"><i data-lucide="waypoints"></i><span>AI 港湾</span></button>
+          <button class="nav-item" type="button" data-view="squad" data-title="Agent 小队"><i data-lucide="users-round"></i><span>Agent 小队</span></button>
         </div>
         <div class="nav-group">
           <span class="nav-label">治理与证据</span>
@@ -148,78 +154,103 @@
       <main id="workspace-content" class="workspace-content">
         <section id="view-dashboard" class="view app-view">
           <div class="page-head">
-            <div><span class="page-module">经营总览</span><h1>管理者首页</h1><p>AEOS V7.2 · 中枢 Agent 第一阶段试点 · 数据基准 2026-09-03</p></div>
-            <div class="page-actions"><button class="btn secondary prompt-action" type="button" data-prompt="扫描未来 30 天内的订单风险与物料缺口，输出 TOP 需人关注事项（按 金额影响×概率×时效 排序），所有结论必须引用 evidence_refs。"><i data-lucide="sparkles"></i>生成经营简报</button><button class="btn primary nav-action" type="button" data-target="chat"><i data-lucide="message-square-text"></i>进入中枢对话</button></div>
+            <div><span class="page-module">经营总览</span><h1>管理者首页</h1><p id="dashboard-data-caption">AEOS V7.2 · 中枢 Agent 第一阶段试点 · 正在同步经营数据</p></div>
+            <div class="page-actions"><button class="btn secondary nav-action" type="button" data-target="cases"><i data-lucide="clipboard-list"></i>进入经营闭环</button><button class="btn primary nav-action" type="button" data-target="chat"><i data-lucide="message-square-text"></i>进入智能分析</button></div>
           </div>
 
+          <section class="dashboard-layout-item dashboard-objective-module">
           <div class="objective-strip">
             <span class="objective-icon"><i data-lucide="target"></i></span>
             <div><div><strong>当前目标</strong><code>Objective V7.2 / Pilot-01</code></div><p>跑通“中枢 Agent → Capability → Evidence → Guard”只读经营分析闭环</p></div>
             <div class="objective-status"><span class="status-dot running"></span><span>A1/A2 试点运行</span></div>
           </div>
+          </section>
 
+          <section class="dashboard-layout-item">
           <div class="metric-grid">
             <a class="metric" href="#chat" data-target="chat"><span>自治成熟度</span><strong>A2</strong><small>自动编排建议 · 只读</small></a>
             <a class="metric" href="#chat" data-target="chat"><span>中枢会话</span><strong id="metric-conversations">0</strong><small>个 · 可连续推理</small></a>
             <a class="metric" href="#evidence" data-target="evidence"><span>Evidence</span><strong id="metric-evidence">0</strong><small>条 · 结果可穿透</small></a>
-            <a class="metric" href="#registry" data-target="registry"><span>可调用能力</span><strong>3</strong><small>项 · demo-ERP 只读</small></a>
-            <a class="metric danger" href="#attention" data-target="attention"><span>高风险订单</span><strong>2</strong><small>项 · 演示经营数据</small></a>
-            <a class="metric" href="#attention" data-target="attention"><span>待人关注</span><strong id="metric-attention">3</strong><small>项 · TOP 决策窗口</small></a>
+            <a class="metric" href="#registry" data-target="registry"><span>可调用能力</span><strong id="metric-capabilities">—</strong><small id="metric-capabilities-caption">实时读取 MCP Registry</small></a>
+            <a class="metric danger" href="#attention" data-target="attention"><span>高风险订单</span><strong id="metric-high-risks">—</strong><small id="metric-high-risks-caption">实时读取经营数据</small></a>
+            <a class="metric" href="#attention" data-target="attention"><span>待人关注</span><strong id="metric-attention">—</strong><small id="metric-attention-caption">实时计算 TOP 决策窗口</small></a>
           </div>
+          </section>
 
-          <div class="dashboard-grid dashboard-grid-main">
+          <section class="surface future-window-surface dashboard-layout-item">
+            <div class="surface-head"><div><h2>未来窗口 · 经营风险</h2><p id="dashboard-future-caption">订单交付、物料齐套与质量异常 · 正在同步</p></div><button class="text-action nav-action" type="button" data-target="attention">全部待关注事项<i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-future-table" class="data-table future-window-table">
+              <div class="future-window-row future-window-head"><span>来源 / 风险事项</span><span>需求对象</span><span>影响金额</span><span>风险信号</span><span>交期 / 需求日期</span><span>责任人</span></div>
+              <div class="dashboard-loading">正在读取未来窗口风险…</div>
+            </div>
+          </section>
+
+          <div class="dashboard-grid dashboard-grid-main dashboard-layout-item">
             <section class="surface risk-surface">
-              <div class="surface-head"><div><h2>未来窗口 · 经营风险</h2><p>未来 60 天 · demo-ERP 演示数据</p></div><button class="text-action prompt-action" type="button" data-prompt="扫描未来 60 天内概率不低于 0.4 的订单风险，按金额影响、概率和时效排序，并逐条引用 evidence_refs。">交给中枢分析<i data-lucide="chevron-right"></i></button></div>
-              <div class="data-table risk-table">
-                <div class="table-row table-head"><span>风险事项</span><span>影响金额</span><span>概率</span><span>时限</span><span>状态</span></div>
-                <button class="table-row prompt-action" type="button" data-prompt="分析订单 SO-2610-004 的图纸冻结延迟风险、影响范围与建议动作，引用证据。"><span><b>SO-2610-004</b><small>结构图纸 ECN-445 评审未关闭</small></span><span class="mono">¥210万</span><span class="mono danger-text">80%</span><span class="mono">10-05</span><span><i class="status-dot critical"></i>高风险</span></button>
-                <button class="table-row prompt-action" type="button" data-prompt="检查 SO-2609-001 与 MO-8821 的供应缺口，说明缺口数量、时间影响和建议动作，引用证据。"><span><b>SO-2609-001</b><small>驱动电源 MO-8821 采购在途未到</small></span><span class="mono">¥128万</span><span class="mono danger-text">72%</span><span class="mono">09-20</span><span><i class="status-dot critical"></i>高风险</span></button>
-                <button class="table-row prompt-action" type="button" data-prompt="分析订单 SO-2609-002 的产能瓶颈风险，并给出需要谁在何时采取什么动作。"><span><b>SO-2609-002</b><small>压铸车间第三周产能利用率预计 96%</small></span><span class="mono">¥56万</span><span class="mono warning-text">45%</span><span class="mono">09-28</span><span><i class="status-dot warning"></i>需关注</span></button>
+              <div class="surface-head"><div><h2>订单交付风险 · 异常概览</h2><p id="dashboard-risk-caption">未来 60 天 · 仅展示订单交付风险 · 正在同步</p></div><button id="dashboard-order-agent" class="text-action module-agent-action" type="button">交给风险交付 Agent 分析<i data-lucide="chevron-right"></i></button></div>
+              <div id="dashboard-order-metrics" class="order-risk-metric-grid" aria-live="polite"><div class="order-risk-metric"><span>订单风险</span><strong>—</strong><small>正在同步</small></div></div>
+              <div id="dashboard-data-quality" class="dashboard-data-quality" aria-live="polite">正在核对订单字段完整度…</div>
+              <div id="dashboard-risk-table" class="data-table risk-table">
+                <div class="table-row table-head"><span>风险事项</span><span>客户 / 产品</span><span>订单数量</span><span>影响金额</span><span>概率 / 等级</span><span>合同交期 / 出货计划</span><span>负责人</span><span>订单状态</span></div>
+                <div class="dashboard-loading">正在读取订单风险…</div>
               </div>
             </section>
 
             <section class="surface question-surface">
-              <div class="surface-head"><div><h2>每日经营六问</h2><p>用对话替代传统菜单巡检</p></div><i data-lucide="message-circle-question"></i></div>
-              <div class="question-list">
-                <button class="prompt-action" type="button" data-prompt="基于当前可用数据，说明企业现在追求什么目标，以及目标版本和硬约束。"><span>01</span>企业现在追求什么？<i data-lucide="arrow-up-right"></i></button>
-                <button class="prompt-action" type="button" data-prompt="基于当前 evidence，总结上期结果怎样，哪些结论的数据置信度不足。"><span>02</span>上期结果怎样？<i data-lucide="arrow-up-right"></i></button>
-                <button class="prompt-action" type="button" data-prompt="扫描最近发生的重要变化，只保留会影响未来经营结果的变化。"><span>03</span>最近发生了什么新变化？<i data-lucide="arrow-up-right"></i></button>
-                <button class="prompt-action" type="button" data-prompt="分析未来 7/30/60/90 天可能发生的风险与机会，按优先级输出。"><span>04</span>未来可能发生什么？<i data-lucide="arrow-up-right"></i></button>
-                <button class="prompt-action" type="button" data-prompt="列出当前真正需要总经理决定的事项，默认最多 5 项，并说明不决策的影响。"><span>05</span>哪些事情需要总经理决定？<i data-lucide="arrow-up-right"></i></button>
-                <button class="prompt-action" type="button" data-prompt="给出今天企业应该采取的行动：谁做、做什么、何时完成、需要何种审批。"><span>06</span>今天企业应该行动什么？<i data-lucide="arrow-up-right"></i></button>
-              </div>
+              <div class="surface-head"><div><h2 id="daily-question-title">每日经营六问</h2><p id="daily-question-caption">大模型按日期、角色与优先级生成</p></div><div class="question-head-actions"><button id="daily-question-shuffle" class="text-action" type="button"><i data-lucide="refresh-cw"></i>换一组</button><button id="daily-question-configure" class="icon-btn" type="button" title="配置每日经营问题" aria-label="配置每日经营问题"><i data-lucide="settings-2"></i></button></div></div>
+              <div id="daily-question-list" class="question-list" aria-live="polite"><div class="question-loading">正在加载经营问题…</div></div>
             </section>
           </div>
 
-          <div class="dashboard-grid dashboard-grid-secondary">
+          <section class="surface kitting-surface dashboard-layout-item">
+            <div class="surface-head"><div><h2>物料齐套中心 · 异常概览</h2><p id="dashboard-kitting-caption">仅展示非 FULL 的齐套结果 · 正在同步</p></div><button id="dashboard-kitting-agent" class="text-action module-agent-action" type="button">交给物料齐套 Agent 分析<i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-kitting-metrics" class="kitting-metric-grid" aria-live="polite"><div class="kitting-metric"><span>齐套异常</span><strong>—</strong><small>正在同步</small></div></div>
+            <div id="dashboard-kitting-table" class="data-table kitting-table">
+              <div class="kitting-row kitting-head"><span>需求对象 / 齐套状态</span><span>需求日期 / 预计齐套</span><span>齐套率 / 缺料项</span><span>影响金额</span><span>责任人</span><span>证据状态</span></div>
+              <div class="dashboard-loading">正在读取物料齐套结果…</div>
+            </div>
+          </section>
+
+          <section class="surface quality-surface dashboard-layout-item">
+            <div class="surface-head"><div><h2>异常与质量中心 · 异常概览</h2><p id="dashboard-quality-caption">仅展示未关闭的质量异常 · 正在同步</p></div><button id="dashboard-quality-agent" class="text-action module-agent-action" type="button">交给异常与质量 Agent 分析<i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-quality-metrics" class="quality-metric-grid" aria-live="polite"><div class="quality-metric"><span>质量异常</span><strong>—</strong><small>正在同步</small></div></div>
+            <div id="dashboard-quality-table" class="data-table quality-table">
+              <div class="quality-row quality-head"><span>异常编号 / 状态</span><span>关联订单 / 产品</span><span>缺陷类型 / 提交部门</span><span>发生时间</span><span>责任人 / 组织</span><span>证据状态</span></div>
+              <div class="dashboard-loading">正在读取异常与质量结果…</div>
+            </div>
+          </section>
+          <section class="surface quality-surface dashboard-layout-item">
+            <div class="surface-head"><div><h2>生产协同中心 · 链路概览</h2><p id="dashboard-production-caption">工单、工序、订单关联、报工与产能 · 正在同步</p></div><button id="dashboard-production-agent" class="text-action module-agent-action" type="button">交给生产协同 Agent 分析<i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-production-metrics" class="quality-metric-grid" aria-live="polite"><div class="quality-metric"><span>生产链路</span><strong>—</strong><small>正在同步</small></div></div>
+            <div id="dashboard-production-table" class="data-table quality-table"><div class="quality-row quality-head"><span>工单号 / 状态</span><span>销售订单 / 产品</span><span>计划完工</span><span>车间</span><span>责任字段</span><span>证据状态</span></div><div class="dashboard-loading">正在读取生产协同数据…</div></div>
+          </section>
+
+          <div class="dashboard-grid dashboard-grid-secondary dashboard-layout-item">
             <section class="surface">
               <div class="surface-head"><div><h2>TOP 决策</h2><p>只呈现需要责任人介入的事项</p></div><button class="text-action nav-action" type="button" data-target="attention">全部事项<i data-lucide="chevron-right"></i></button></div>
-              <div class="decision-list">
-                <button class="decision-row prompt-action" type="button" data-prompt="针对 SO-2610-004 图纸冻结延迟，形成供总经理决策的候选方案、影响、证据和建议。"><span class="severity high">L4</span><div><strong>是否升级 ECN-445 为跨域优先事项</strong><small>影响 ¥210 万订单投料 · Accountable Owner 待确认</small></div><code>80%</code><i data-lucide="chevron-right"></i></button>
-                <button class="decision-row prompt-action" type="button" data-prompt="针对 MO-8821 缺料，比较加急、替代料、拆单三种方案，输出风险与审批建议。"><span class="severity high">L4</span><div><strong>MO-8821 缺料处置路径选择</strong><small>缺口 3,200 件 · 预计影响 8 天</small></div><code>72%</code><i data-lucide="chevron-right"></i></button>
-                <button class="decision-row prompt-action" type="button" data-prompt="评估压铸车间第三周 96% 产能利用率，判断是否需要调整排程或外协。"><span class="severity medium">L3</span><div><strong>第三周产能是否提前重排</strong><small>影响 SO-2609-002 · 需计划与交付共同确认</small></div><code>45%</code><i data-lucide="chevron-right"></i></button>
-              </div>
+              <div id="dashboard-decision-list" class="decision-list"><div class="dashboard-loading">正在计算 TOP 决策…</div></div>
             </section>
 
             <section class="surface capability-pulse">
               <div class="surface-head"><div><h2>能力与治理脉冲</h2><p>共享内核当前试点覆盖</p></div><button class="text-action nav-action" type="button" data-target="registry">Registry<i data-lucide="chevron-right"></i></button></div>
-              <div class="pulse-list">
-                <div><span class="pulse-icon"><i data-lucide="bot"></i></span><span><strong>Agent Runtime</strong><small>会话、推理、工具调用与 Trace</small></span><b class="status-pill ok">运行中</b></div>
-                <div><span class="pulse-icon"><i data-lucide="shield-check"></i></span><span><strong>AEOS Guard</strong><small>审批、只读边界与 Evidence 落库</small></span><b class="status-pill ok">已启用</b></div>
-                <div><span class="pulse-icon"><i data-lucide="database"></i></span><span><strong>Evidence Store</strong><small>JSONL 试点存储 · 后续对接 EDP</small></span><b class="status-pill info">试点</b></div>
-                <div><span class="pulse-icon"><i data-lucide="plug-zap"></i></span><span><strong>demo-ERP Capability</strong><small>订单风险、物料缺口、连接自检</small></span><b class="status-pill ok">3 项</b></div>
-              </div>
+              <div id="dashboard-pulse-list" class="pulse-list"><div class="dashboard-loading">正在同步能力与治理状态…</div></div>
             </section>
           </div>
         </section>
 
         <section id="view-chat" class="view app-view hidden">
-          <div class="page-head compact-head"><div><span class="page-module">自治运行</span><h1>中枢 Agent</h1><p>跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批</p></div><div class="runtime-state"><span class="live-dot"></span><span>Codex Runtime 已连接</span></div></div>
+          <div class="page-head compact-head"><div><span class="page-module">自治运行</span><h1 id="chat-view-title">中枢 Agent</h1><p id="chat-view-desc">跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批</p></div><div class="runtime-state"><span class="live-dot"></span><span>Codex Runtime 已连接</span></div></div>
+          <div class="agent-workbench-strip" aria-label="中枢 Agent 工作台状态">
+            <div><span class="agent-workbench-icon"><i data-lucide="shield-check"></i></span><span><strong>只读经营分析</strong><small>建议权 · Guard 门禁</small></span></div>
+            <div><span class="agent-workbench-icon"><i data-lucide="file-check-2"></i></span><span><strong>Evidence 必填</strong><small>结论需引用 evidence_ref</small></span></div>
+            <div><span class="agent-workbench-icon"><i data-lucide="network"></i></span><span><strong>跨域 Capability</strong><small>仅使用已注册能力</small></span></div>
+          </div>
+          <section id="parallel-task-panel" class="parallel-task-panel hidden" aria-live="polite"><div class="parallel-task-head"><div><strong>并行 Agent 任务</strong><small>不同 Agent 可同时运行，点击任务可回到对应会话</small></div><span id="parallel-task-count" class="status-pill info">0 个运行中</span></div><div id="parallel-task-list" class="parallel-task-list"></div></section>
           <div class="agent-layout">
-            <aside class="conversation-pane"><div class="conversation-head"><span>会话</span><button id="btn-new" class="icon-btn" type="button" title="新建对话" aria-label="新建对话"><i data-lucide="square-pen"></i></button></div><div id="conv-list" class="conv-list"></div></aside>
+            <aside class="conversation-pane"><div class="conversation-head"><span id="conversation-scope-label">中枢会话</span><button id="btn-new" class="icon-btn" type="button" title="新建对话" aria-label="新建对话"><i data-lucide="square-pen"></i></button></div><button id="chat-scope-back" class="chat-scope-back hidden" type="button"><i data-lucide="arrow-left"></i>返回中枢会话</button><div class="conversation-filter"><i data-lucide="search"></i><input id="conv-search" type="search" placeholder="搜索当前会话" aria-label="搜索当前会话" /></div><div id="conv-list" class="conv-list"></div></aside>
             <section id="view-chat-inner" class="chat-pane">
               <div id="messages" class="messages"></div>
-              <div id="empty-state" class="empty-state"><span class="empty-mark"><i data-lucide="message-square"></i></span><h2>开始一次经营分析</h2><p>输入问题，或从常用任务开始。</p><div class="prompt-chips"><button class="chip" type="button" data-p="扫描未来 30 天内的订单风险与物料缺口，输出 TOP 需人关注事项（按 金额影响×概率×时效 排序），所有结论必须引用 evidence_refs。">经营风险扫描<i data-lucide="arrow-up-right"></i></button><button class="chip" type="button" data-p="检查 MO-8821 驱动电源的供应缺口，并给出建议动作。">物料缺口核查<i data-lucide="arrow-up-right"></i></button><button class="chip" type="button" data-p="简要说明你当前能调用哪些业务系统能力。">能力自检<i data-lucide="arrow-up-right"></i></button></div></div>
+              <div id="empty-state" class="empty-state"><span class="empty-mark"><i data-lucide="message-square"></i></span><h2>开始一次经营分析</h2><p>输入问题，或从常用任务开始。</p><div id="capability-prompt-chips" class="prompt-chips"><span class="registry-loading">正在读取当前可用业务能力…</span></div></div>
               <div id="turnbar" class="turnbar hidden"><span class="spinner"></span><span id="turn-status">Agent 执行中...</span><button id="btn-stop" class="btn ghost compact" type="button"><i data-lucide="square"></i>停止</button></div>
               <div class="composer"><div class="model-pick"><span>运行模型</span><select id="model-select" title="切换当前对话的模型"></select></div><div class="composer-input"><textarea id="input" rows="1" placeholder="给中枢 Agent 发消息...（Enter 发送，Shift+Enter 换行）"></textarea><button id="btn-send" class="icon-btn send-btn" type="button" title="发送" aria-label="发送"><i data-lucide="arrow-up"></i></button></div></div>
             </section>
@@ -227,38 +258,31 @@
         </section>
 
         <section id="view-attention" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">自治运行</span><h1>Attention 中心</h1><p>决定谁在什么时候需要知道什么，只升级真正需要人介入的例外</p></div><div class="page-actions"><button class="btn secondary prompt-action" type="button" data-prompt="生成当前 TOP 需人关注事项，最多 5 条，按金额影响×概率×时效排序，并注明责任人与 evidence_refs。"><i data-lucide="refresh-cw"></i>重新研判</button></div></div>
-          <div class="attention-summary"><div><span class="severity high">L4</span><strong>2</strong><small>重要升级</small></div><div><span class="severity medium">L3</span><strong>1</strong><small>责任人处理</small></div><div><span class="severity low">L2</span><strong>0</strong><small>专业中心预警</small></div><div><span class="status-dot running"></span><strong id="guard-pending-count">0</strong><small>实时审批请求</small></div></div>
+          <div class="page-head"><div><span class="page-module">自治运行</span><h1>Attention 中心</h1><p>决定谁在什么时候需要知道什么，只升级真正需要人介入的例外</p></div><div class="page-actions"><button id="btn-attention-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>重新研判</button></div></div>
+          <div class="attention-summary"><div><span class="severity high">L4</span><strong id="attention-l4-count">0</strong><small>重要升级</small></div><div><span class="severity medium">L3</span><strong id="attention-l3-count">0</strong><small>责任人处理</small></div><div><span class="severity low">L2</span><strong id="attention-l2-count">0</strong><small>专业中心预警</small></div><div><span class="status-dot running"></span><strong id="guard-pending-count">0</strong><small>实时审批请求</small></div></div>
           <section class="surface attention-board">
-            <div class="surface-head"><div><h2>需人关注事项</h2><p>金额影响 × 概率 × 时效</p></div><span class="status-pill info">演示数据</span></div>
-            <div class="attention-table">
-              <div class="attention-row attention-head"><span>等级</span><span>事项 / 依据</span><span>责任角色</span><span>时限</span><span>建议动作</span></div>
-              <div class="attention-row"><span><b class="severity high">L4</b></span><span><strong>ECN-445 评审未关闭，影响 ¥210 万订单</strong><small>demo_erp://so/SO-2610-004@2026-09-03</small></span><span>研发 / 交付 Owner</span><span class="mono">今日 17:00</span><button class="btn secondary compact prompt-action" type="button" data-prompt="为 ECN-445 评审未关闭事项形成决策材料，列出方案、影响、风险、Owner 与审批建议。">形成决策材料</button></div>
-              <div class="attention-row"><span><b class="severity high">L4</b></span><span><strong>MO-8821 缺口 3,200 件，影响 8 天</strong><small>demo_erp://po/MO-8821@2026-09-03</small></span><span>采购 / 计划 Owner</span><span class="mono">今日 15:00</span><button class="btn secondary compact prompt-action" type="button" data-prompt="比较 MO-8821 缺料的加急、替代料、拆单方案，并输出需审批事项。">比较处置方案</button></div>
-              <div class="attention-row"><span><b class="severity medium">L3</b></span><span><strong>压铸车间第三周产能利用率预计 96%</strong><small>demo_erp://so/SO-2609-002@2026-09-03</small></span><span>计划 / 生产 Owner</span><span class="mono">09-05</span><button class="btn secondary compact prompt-action" type="button" data-prompt="评估 96% 产能利用率的交付风险，提出重排、加班、外协候选方案。">评估排程</button></div>
-            </div>
+            <div class="surface-head"><div><h2>需人关注事项</h2><p>金额影响 × 概率 × 时效</p></div><span id="attention-data-status" class="status-pill info">正在同步</span></div>
+            <div class="attention-filter-bar"><div class="attention-search"><i data-lucide="search"></i><input id="attention-search" type="search" placeholder="搜索经营事项、证据或 Agent 动作" aria-label="搜索 Attention、Evidence 或 Agent 动作" /></div><label class="attention-live-check" title="开启后按 Enter 才会向中台发起新的只读核查"><input id="attention-live-check" type="checkbox" />实时核查中台</label><span id="attention-search-status" class="attention-search-status">本地搜索</span><select id="attention-source-filter" aria-label="筛选事项来源"><option value="all">全部来源</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">异常与质量</option></select><select id="attention-state-filter" aria-label="筛选事项状态"><option value="all">全部状态</option><option value="new">待研判</option><option value="review">分析中</option><option value="owner">待责任人</option><option value="closed">已闭环</option></select><select id="attention-level-filter" aria-label="筛选风险等级"><option value="all">全部等级</option><option value="L4">L4 · 重要升级</option><option value="L3">L3 · 责任人处理</option><option value="L2">L2 · 专业中心预警</option></select><span id="attention-filter-count" class="attention-filter-count"></span></div>
+            <section id="attention-search-results" class="attention-active-search hidden" aria-live="polite"><div class="attention-active-search-head"><div><strong>搜索结果</strong><small id="attention-search-caption">输入关键词后，聚合显示 Attention、Evidence 与 Agent 动作。</small></div></div><div id="attention-result-attention" class="attention-search-group"></div><div id="attention-result-live" class="attention-search-group"></div><div id="attention-result-history" class="attention-search-group"></div></section>
+            <div id="attention-table" class="attention-kanban"><div class="dashboard-loading">正在读取 MCP 经营风险…</div></div>
           </section>
-          <div class="attention-principle"><i data-lucide="shield-alert"></i><div><strong>责任不因 AI 自动化消失</strong><p>涉及金额、承诺、质量、法律或不可逆影响的事项，保持 Accountable Owner 与 Guard 门禁。</p></div></div>
+          <div class="attention-principle"><i data-lucide="shield-alert"></i><div><strong>责任不因 AI 自动化消失</strong><p>涉及金额、承诺、质量、法律或不可逆影响的事项，保持 Accountable Owner 与 Guard 门禁；中台明确返回 completed / closed / FULL 时自动进入“已闭环”，Agent 研判完成只转“待责任人”，不会替代人工确认。</p></div></div>
         </section>
 
         <section id="view-evidence" class="view app-view hidden">
           <div class="page-head"><div><span class="page-module">治理与证据</span><h1>Evidence 证据中心</h1><p>事实、推理、工具调用、审批与结果的可追溯事件流</p></div><div class="page-actions"><button id="btn-evidence-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
           <div class="evidence-metrics"><div><span>累计证据</span><strong id="evidence-total">0</strong><small>JSONL 事件</small></div><div><span>今日新增</span><strong id="evidence-today">0</strong><small>2026-09-03</small></div><div><span>存储状态</span><strong class="success-text">可用</strong><small>本地试点 · 待接 EDP</small></div><div><span>审计链</span><strong>完整</strong><small>Turn / Tool / Guard</small></div></div>
-          <section class="surface evidence-surface"><div class="surface-head"><div><h2>最近事件</h2><p>按发生时间倒序显示最近 80 条</p></div><span id="evidence-path" class="mono subtle"></span></div><div class="evidence-head"><span>时间</span><span>类型</span><span>摘要</span></div><div id="evidence-list" class="evidence-list"></div></section>
+          <section class="surface evidence-surface"><div class="surface-head"><div><h2>最近事件</h2><p>按发生时间倒序显示最近 80 条；来源标记为后续数据中台对接预留。</p></div><span id="evidence-path" class="mono subtle"></span></div><div class="evidence-filters"><input id="evidence-search" type="search" placeholder="筛选摘要、类型或证据 ID" /><select id="evidence-source-filter"><option value="all">全部来源</option><option value="hub">AEOS Hub</option><option value="runtime">Codex Runtime</option><option value="mcp">MCP / 数据中台</option></select><span id="evidence-filter-count"></span></div><div class="evidence-head"><span>时间</span><span>类型 / 来源</span><span>摘要</span></div><div id="evidence-list" class="evidence-list"></div></section>
         </section>
 
         <section id="view-registry" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">治理与证据</span><h1>Capability Registry</h1><p>按能力寻址，而不是把 Agent 与某个业务接口硬编码绑定</p></div><div class="page-actions"><button class="btn secondary prompt-action" type="button" data-prompt="说明当前可调用的 Capability、输入输出、只读边界和证据要求。"><i data-lucide="scan-search"></i>能力自检</button></div></div>
-          <div class="registry-strip"><i data-lucide="info"></i><span>当前为第一阶段试点 Registry 视图。每项能力需具备 ID、Domain、Owner、版本、契约、授权角色、SLA、风险等级与实现系统。</span></div>
-          <section class="surface registry-systems"><div class="surface-head"><div><h2>System Registry</h2><p>当前已接入运行单元</p></div><span class="status-pill ok">4 个单元</span></div><div class="system-grid"><article><span class="system-icon"><i data-lucide="orbit"></i></span><div><strong>AEOS Hub</strong><small>中枢编排服务</small></div><b class="status-pill ok">在线</b></article><article><span class="system-icon"><i data-lucide="square-terminal"></i></span><div><strong>Codex App Server</strong><small>Agent Runtime</small></div><b class="status-pill ok">隔离运行</b></article><article><span class="system-icon"><i data-lucide="database"></i></span><div><strong>Evidence Store</strong><small>JSONL 试点存储</small></div><b class="status-pill info">试点</b></article><article><span class="system-icon"><i data-lucide="server-cog"></i></span><div><strong>demo-ERP</strong><small>MCP 业务能力源</small></div><b class="status-pill ok">只读</b></article></div></section>
+          <div class="page-head"><div><span class="page-module">治理与证据</span><h1>Capability Registry</h1><p>按能力寻址，而不是把 Agent 与某个业务接口硬编码绑定</p></div><div class="page-actions"><button id="btn-registry-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button class="btn secondary prompt-action" type="button" data-prompt="说明当前可调用的 Capability、输入输出、只读边界和证据要求。"><i data-lucide="scan-search"></i>能力自检</button></div></div>
+          <div id="registry-status" class="registry-strip"><i data-lucide="info"></i><span>正在读取 MCP Runtime 的实时注册状态与 Tool 清单…</span></div>
+          <section class="surface registry-systems"><div class="surface-head"><div><h2>System Registry</h2><p id="registry-system-caption">当前已接入运行单元</p></div><span id="registry-system-count" class="status-pill info">加载中</span></div><div id="registry-system-grid" class="system-grid"><div class="registry-loading">正在加载系统注册表…</div></div></section>
           <section class="surface capability-table-surface">
-            <div class="surface-head"><div><h2>已注册 Capability</h2><p>demo-ERP · version 0.1.0</p></div><span class="status-pill ok">3 项可用</span></div>
-            <div class="capability-table">
-              <div class="cap-row cap-head"><span>Capability ID</span><span>Domain</span><span>输入 / 输出</span><span>风险等级</span><span>状态</span></div>
-              <button class="cap-row prompt-action" type="button" data-prompt="调用 list_order_risks 扫描未来 60 天订单风险，并说明返回契约。"><span><code>list_order_risks</code><small>扫描订单风险</small></span><span>交付 / 经营</span><span><code>window_days, min_probability</code><small>orders + evidence_ref</small></span><span><b class="status-pill info">READ_ONLY</b></span><span><i class="status-dot running"></i>可用</span></button>
-              <button class="cap-row prompt-action" type="button" data-prompt="调用 check_material_shortages 检查全部有缺口物料，并说明返回契约。"><span><code>check_material_shortages</code><small>检查物料供应缺口</small></span><span>采购 / 供应</span><span><code>material_code?</code><small>shortages + evidence_ref</small></span><span><b class="status-pill info">READ_ONLY</b></span><span><i class="status-dot running"></i>可用</span></button>
-              <button class="cap-row prompt-action" type="button" data-prompt="调用 get_system_health 完成 demo-ERP 连接自检。"><span><code>get_system_health</code><small>连接自检</small></span><span>平台 / 运行</span><span><code>{}</code><small>status + capabilities</small></span><span><b class="status-pill info">READ_ONLY</b></span><span><i class="status-dot running"></i>可用</span></button>
-            </div>
+            <div class="surface-head"><div><h2>已注册 Capability</h2><p id="registry-capability-caption">从 MCP tools/list 动态获取</p></div><span id="registry-capability-count" class="status-pill info">加载中</span></div>
+            <div class="registry-filter-bar"><div class="registry-search"><i data-lucide="search"></i><input id="registry-search" type="search" placeholder="搜索能力名称、描述或 Server" aria-label="搜索 Capability" /></div><select id="registry-source-filter" aria-label="筛选 Capability 来源"><option value="all">全部来源</option></select><select id="registry-state-filter" aria-label="筛选 Capability 生命周期"><option value="all">全部状态</option><option value="registered">已登记</option><option value="verified">已验证</option><option value="available">可调用</option><option value="paused">待治理</option></select><span id="registry-filter-count" class="registry-filter-count"></span></div>
+            <div id="registry-capability-table" class="registry-kanban"><div class="registry-loading">正在加载 Capability…</div></div>
           </section>
         </section>
 
@@ -296,9 +320,10 @@
           </div>
 
           <section id="harbor-panel-agents" class="surface harbor-panel">
-            <div class="surface-head"><div><h2>智能体目录</h2><p>智能体身份与执行 Runtime 解耦；每次运行固定 Agent、模型与策略版本</p></div><button class="text-action" type="button" data-harbor-create="agent">新增智能体<i data-lucide="plus"></i></button></div>
+            <div class="surface-head"><div><h2>分级智能体目录</h2><p>创建时直接选择 L0–L3 组织层级；层级与自治等级分开治理。</p></div><button class="text-action" type="button" data-harbor-create="agent">新增智能体<i data-lucide="plus"></i></button></div>
+            <div class="harbor-directory-toolbar"><div class="harbor-search"><i data-lucide="search"></i><input id="harbor-agent-search" type="search" placeholder="搜索 Agent 名称、职责或上级" /></div><select id="harbor-agent-level-filter" aria-label="筛选 Agent 层级"><option value="all">全部层级</option><option value="L0">L0 · 中枢</option><option value="L1">L1 · 编队</option><option value="L2">L2 · 专项</option><option value="L3">L3 · 任务</option></select><select id="harbor-agent-status-filter" aria-label="筛选 Agent 状态"><option value="all">全部状态</option><option value="idle">可调度</option><option value="working">执行中</option><option value="offline">离线</option><option value="draft">草稿</option></select><select id="harbor-agent-squad-filter" aria-label="筛选 Agent 小队"><option value="all">全部小队</option></select><button id="harbor-agent-filter-clear" class="btn ghost compact" type="button">清除筛选</button></div>
             <div class="harbor-table harbor-agent-table">
-              <div class="harbor-row harbor-head"><span>智能体 / 角色</span><span>自治等级</span><span>运行环境</span><span>Skills</span><span>访问范围</span><span>状态</span></div>
+              <div class="harbor-row harbor-head"><span>智能体 / 职责</span><span>自治等级</span><span>运行环境</span><span>Skills / 工具边界</span><span>访问范围</span><span>最近任务 / 产出</span><span>状态</span></div>
               <div id="harbor-agent-list"></div>
             </div>
           </section>
@@ -318,6 +343,46 @@
               <div id="harbor-project-list"></div>
             </div>
           </section>
+        </section>
+
+        <section id="view-cases" class="view app-view hidden">
+          <div class="page-head"><div><span class="page-module">经营闭环</span><h1>经营事项 / 决策单</h1><p>把看板风险沉淀为可追责事项；业务处置始终需要人工确认，不由 AI 自动执行</p></div><div class="page-actions"><button id="btn-cases-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+          <div class="case-metrics"><div><span>未闭环事项</span><strong id="case-open-count">0</strong><small>待人工处理</small></div><div><span>分析中</span><strong id="case-review-count">0</strong><small>已确认只读分析</small></div><div><span>待补充依据</span><strong id="case-approval-count">0</strong><small>数据或审批待确认</small></div><div><span>未读 Inbox</span><strong id="case-inbox-count">0</strong><small>需要查看</small></div></div>
+          <div class="case-layout">
+          <section class="surface case-list-surface"><div class="surface-head"><div><h2>事项台账</h2><p>每条事项必须关联中控 evidence_ref，并保留人工决策记录</p></div><span class="status-pill info">只读分析</span></div><div id="case-list" class="case-list"><div class="dashboard-loading">正在读取经营事项…</div></div></section>
+          </div>
+        </section>
+
+        <section id="view-inbox" class="view app-view hidden">
+          <div class="page-head"><div><span class="page-module">经营闭环</span><h1>Inbox</h1><p>集中处理待确认事项与人工决策留痕</p></div><div class="page-actions"><button id="btn-inbox-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+          <div class="inbox-overview"><section><span>待处理</span><strong id="inbox-unread-metric">0</strong><small>尚未阅读的工作消息</small></section><section><span>需决策</span><strong id="inbox-decision-metric">0</strong><small>涉及人工确认</small></section><section><span>今日更新</span><strong id="inbox-today-metric">0</strong><small>当前工作日新增</small></section></div>
+          <section class="surface inbox-surface"><div class="surface-head"><div><h2>工作消息</h2><p>标记已读只改变个人工作台状态，不改变业务事项或业务数据</p></div><span id="inbox-unread-count" class="status-pill info">加载中</span></div><div class="inbox-toolbar"><div class="inbox-search"><i data-lucide="search"></i><input id="inbox-search" type="search" placeholder="搜索事项、结论或编号" /></div><select id="inbox-filter" aria-label="筛选 Inbox"><option value="all">全部消息</option><option value="unread">仅未读</option><option value="decision_required">需人工决策</option></select><button id="btn-inbox-read-all" class="btn secondary compact" type="button"><i data-lucide="check-check"></i>全部标记已读</button></div><div id="inbox-list" class="inbox-list"><div class="dashboard-loading">正在读取 Inbox…</div></div></section>
+        </section>
+
+        <section id="view-squad" class="view app-view hidden">
+          <div class="page-head squad-page-head">
+            <div><span class="page-module">AI 资源协作</span><h1>Agent 小队</h1><p>中枢 Agent 统筹业务 Agent 小队；每个业务小队与其下辖 Agent 分别保留记忆、动作与协作上下文</p></div>
+            <div class="page-actions"><button id="squad-add-member" class="btn primary" type="button"><i data-lucide="user-round-plus"></i>从港湾加入</button></div>
+          </div>
+
+          <section class="squad-project-link" aria-label="AI 港湾项目关联"><span>协作项目</span><select id="squad-project-select" aria-label="关联 AI 港湾项目"><option value="">未关联项目</option></select><button id="squad-project-save" class="btn secondary compact" type="button"><i data-lucide="link"></i>保存关联</button><small id="squad-project-status">正在读取 AI 港湾项目…</small></section>
+
+          <div class="squad-metrics">
+            <div><span>主 Agent</span><strong id="squad-lead-name">AEOS 中枢 Agent</strong><small id="squad-lead-model">deepseek-chat</small></div>
+            <div><span>子 Agent</span><strong id="squad-member-count">0</strong><small id="squad-working-count">0 个协作中</small></div>
+            <div><span>独立记忆</span><strong id="squad-memory-count">0</strong><small>按 Agent 隔离保存</small></div>
+            <div><span>队内消息</span><strong id="squad-message-count">0</strong><small>可追溯协作记录</small></div>
+          </div>
+
+          <div class="squad-layout">
+            <section class="surface squad-roster">
+              <div class="surface-head"><div><h2>小队层级</h2><p>顶层中枢 → 业务 Agent 小队 → 下辖子 Agent</p></div></div>
+              <div id="squad-member-list" class="squad-member-list"><div class="registry-loading">正在加载 Agent 小队…</div></div>
+            </section>
+            <section class="surface squad-detail">
+              <div id="squad-member-detail" class="squad-member-detail"><div class="harbor-empty"><i data-lucide="users-round"></i><strong>请选择子 Agent</strong><small>查看其独立记忆、最近动作与队内协作消息</small></div></div>
+            </section>
+          </div>
         </section>
 
         <section id="view-config" class="view app-view hidden">
@@ -346,8 +411,45 @@
     </div>
   </div>
 
+  <div id="squad-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="squad-modal-title">
+    <div class="modal-panel squad-modal-panel">
+      <div class="modal-head"><div><span>AGENT 小队</span><h2 id="squad-modal-title">从 AI 港湾加入 Agent</h2><p>身份、模型、Runtime 与能力以 AI 港湾配置为准；小队仅维护协作关系与独立记忆。</p></div><button id="squad-modal-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <form id="squad-member-form"><div class="modal-body harbor-form-grid">
+        <label class="wide"><span>业务 Agent 小队</span><select name="squadId" required><option value="">正在读取业务小队…</option></select><small class="field-note">子 Agent 的独立记忆与动作只归属于自身；业务小队另有独立协作记录。</small></label>
+        <label class="wide"><span>AI 港湾 Agent</span><select name="harborAgentId" required><option value="">正在读取可用 Agent…</option></select><small class="field-note">一个 AI 港湾 Agent 在当前小队中只能绑定一次。</small></label>
+      </div><div class="modal-foot"><span id="squad-form-status"></span><button id="squad-form-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit"><i data-lucide="check"></i><span>加入小队</span></button></div></form>
+    </div>
+  </div>
+
+  <div id="daily-question-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="daily-question-modal-title">
+    <div class="modal-panel daily-question-modal-panel">
+      <div class="modal-head"><div><span>经营首页</span><h2 id="daily-question-modal-title">配置每日经营问题</h2><p>AI 问题与人工问题均可增删；设置角色、优先级和展示数量，留空角色表示所有角色可见。</p></div><button id="daily-question-modal-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <form id="daily-question-form">
+        <div class="daily-question-config-bar"><label for="daily-question-count">首页显示</label><input id="daily-question-count" type="number" min="1" max="12" /><span>问</span><button id="daily-question-add" class="btn secondary compact" type="button"><i data-lucide="plus"></i>添加问题</button></div>
+        <div id="daily-question-editor" class="modal-body daily-question-editor"></div>
+        <div class="modal-foot"><span id="daily-question-form-status"></span><button id="daily-question-form-reload" class="btn secondary hidden" type="button"><i data-lucide="refresh-cw"></i>载入最新版本</button><button id="daily-question-form-cancel" class="btn secondary" type="button">取消</button><button id="daily-question-form-save" class="btn primary" type="submit"><i data-lucide="save"></i><span>保存问题池</span></button></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="dashboard-risk-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="dashboard-risk-modal-title">
+    <section class="modal-panel risk-detail-modal">
+      <div class="modal-head"><div><span>订单风险详情</span><h2 id="dashboard-risk-modal-title">订单风险</h2><p id="dashboard-risk-modal-desc">中台返回字段与 Evidence 依据</p></div><button id="dashboard-risk-modal-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div id="dashboard-risk-modal-body" class="modal-body risk-detail-body"></div>
+      <div class="modal-foot risk-detail-foot"><span id="dashboard-risk-modal-status"></span><button id="dashboard-risk-modal-cancel" class="btn secondary" type="button">关闭</button><button id="dashboard-risk-create-case" class="btn secondary" type="button"><i data-lucide="clipboard-plus"></i><span>纳入经营事项</span></button><button id="dashboard-risk-dispatch" class="btn primary" type="button"><i data-lucide="bot-message-square"></i><span>交给风险交付Agent分析</span></button></div>
+    </section>
+  </div>
+
+  <div id="inbox-detail-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="inbox-detail-title">
+    <section class="modal-panel inbox-detail-modal">
+      <div class="modal-head"><div><span>Inbox 工作消息</span><h2 id="inbox-detail-title">消息详情</h2><p id="inbox-detail-meta">—</p></div><button id="inbox-detail-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div id="inbox-detail-body" class="modal-body inbox-detail-body"></div>
+      <div class="modal-foot"><span id="inbox-detail-status"></span><button id="inbox-detail-cancel" class="btn secondary" type="button">关闭</button><button id="inbox-detail-read" class="btn primary" type="button"><i data-lucide="check"></i><span>标记已读</span></button></div>
+    </section>
+  </div>
+
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js?v=logout-layer-20260930"></script>
 </body>
 </html>

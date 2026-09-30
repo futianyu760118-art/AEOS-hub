@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync, mkdirSync, existsSync } from 'node:fs';
 import { CodexAppServerClient } from './codex-client.ts';
 import { appendEvidence, evidenceFile } from './evidence.ts';
+import { listConfiguredMcpServers } from './mcp-registry.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const codexHome = join(root, '.codex-home');
@@ -25,11 +26,12 @@ if (!existsSync(binary)) {
 const args = process.argv.slice(2);
 const autoApprove = args.includes('--auto-approve');
 const prompt = (args.filter((a) => !a.startsWith('--')).join(' ') ||
-  '扫描未来 30 天内的订单风险与物料缺口，输出 TOP 需人关注事项（按 金额影响×概率×时效 排序），所有结论必须引用 evidence_refs。').trim();
+  '扫描未来 30 天内的订单风险与物料缺口，输出 TOP 需人关注事项（按 金额影响×概率×时效 排序），所有结论必须引用 evidence_refs。仅调用已注册的 MCP 工具核查；不得执行命令或文件扫描；不得把 MCP resources 为空解读为未注册工具。').trim();
 
 const approvals = [];
 const mcpStatuses = [];
 const collected = { agentMessage: '', mcpTools: [], commands: [], itemTypeCounts: {} };
+const READ_ONLY_MCP_SERVERS = new Set(listConfiguredMcpServers());
 
 /** 判断失败是否源于"未配置模型凭证"，若是返回退出码 2 */
 function classifyFailure(text: string): number {
@@ -39,7 +41,7 @@ function classifyFailure(text: string): number {
 async function main(): Promise<number> {
   console.log('=== AEOS Hub 中枢编排演示 ===');
   console.log(`prompt: ${prompt}`);
-  console.log(`审批策略: ${autoApprove ? '自动放行(--auto-approve，仅演示)' : '自动拒绝(试点安全默认，HITL 网关)'}`);
+  console.log(`审批策略: ${autoApprove ? '自动放行(--auto-approve，仅演示)' : '已注册只读 MCP 自动放行；命令与写操作自动拒绝(试点安全默认，HITL 网关)'}`);
   console.log(`evidence 文件: ${evidenceFile}\n`);
 
   const client = await CodexAppServerClient.start({
@@ -58,8 +60,8 @@ async function main(): Promise<number> {
     let decision = 'decline';
 
     if (method === 'mcpServer/elicitation/request') {
-      // MCP 工具调用授权：只读白名单系统自动放行（demo-erp 为试点只读系统），其余拒绝
-      const allowed = autoApprove || params.serverName === 'demo-erp';
+      // MCP 注册清单中的工具均已由元数据校验为 READ_ONLY。
+      const allowed = autoApprove || (typeof params.serverName === 'string' && READ_ONLY_MCP_SERVERS.has(params.serverName));
       decision = allowed ? 'accept' : 'decline';
       console.log(`[Guard] MCP 工具授权 ${params.serverName ?? '?'} -> ${decision}${allowed ? '' : '（非白名单系统，拒绝）'}`);
       client.respond(req.id!, { action: decision, content: null, _meta: null });
