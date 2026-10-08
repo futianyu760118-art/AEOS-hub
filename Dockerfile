@@ -4,8 +4,21 @@ WORKDIR /app
 
 # company-control MCP is launched as a local stdio child process, so the
 # image needs Python in addition to the Node/Codex runtime.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 python3-venv \
+# The optional bookworm-updates suite is not needed for this image. Use the
+# signed Aliyun Debian mirror, which is reachable from this deployment network;
+# base and security repositories remain enabled and apt signature verification
+# stays on. Retry transient package-transfer failures before failing a clean build.
+RUN sed -i -e 's/ bookworm-updates//' \
+      -e 's|http://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' \
+      -e 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' \
+      /etc/apt/sources.list.d/debian.sources \
+  && for attempt in 1 2 3 4 5; do \
+       rm -rf /var/lib/apt/lists/*; \
+       if apt-get update \
+          && apt-get -o Acquire::Retries=5 install -y --no-install-recommends python3 python3-venv; then break; fi; \
+       if [ "$attempt" = 5 ]; then exit 1; fi; \
+       sleep 3; \
+     done \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./

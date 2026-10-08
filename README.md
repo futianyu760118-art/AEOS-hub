@@ -31,7 +31,7 @@ AEOS Hub 是 [AEOS（Autonomous Enterprise Operating System）](../../) 的第�
 | **工具面** | MCP（stdio）——每个业务系统/自治中心 = 一个 MCP server（当前试点：demo-ERP 只读） |
 | **前端** | 原生 HTML/CSS/JS，无构建链；WebSocket 实时事件流 |
 | **数据** | Evidence JSONL + 会话元数据 + AI 港湾快照（后续对接 EDP） |
-| **部署** | 单机 Node.js ≥ 24，可一键切换局域网共享模式（访问口令保护） |
+| **部署** | 单机 Node.js ≥ 24，可一键切换局域网共享模式（服务端账号密码保护） |
 
 ## ✨ 功能特性
 
@@ -41,7 +41,7 @@ AEOS Hub 是 [AEOS（Autonomous Enterprise Operating System）](../../) 的第�
 - **会话管理**：新建 / 切换 / **归档**（可恢复）/ **删除**（同步清理 codex 线程），列表按 Codex 风格排版，悬停浮现操作
 - **Evidence 证据链**：每个 turn 的完整 item 流（消息、推理、工具调用、审批决策、结果）结构化落库，页面内可查看最近条目
 - **AI 港湾**：Agent / Runtime / Project 三类资源的登记与绑定，Runtime 健康验证走真实探针（`POST /api/harbor/runtimes/:id/verify`），不伪装成已连通
-- **局域网共享**：`--lan` 一键开放给同事，内置访问口令 + 分享链接（cookie 记忆），也可 `--no-auth` 关闭
+- **局域网共享**：`--lan` 一键开放给同事，服务端账号密码验证；关闭浏览器或重启服务后需要重新登录
 - **完全隔离**：与机器上其他 Codex 安装（桌面版等）零接触，详见下文
 
 ## 🏗 架构
@@ -70,7 +70,7 @@ AEOS 控制面（本工程）              Runtime 层                        �
 4. **首次运行零配置**：缺失的 `config.toml` 由 `ensureConfigFile()` 自动生成（含 demo-ERP MCP 注册，路径按当前仓库位置计算）；
 5. **Guard 默认安全**：MCP 工具授权按白名单放行、命令/文件写类审批默认拒绝；`--auto-approve` 仅建议在演示环境使用。
 
-> ⚠️ 公开仓库说明：本仓库**不含任何密钥**。`.codex-home/`（凭证/会话）与 `data/`（证据/会话元数据/访问口令）均已忽略，不会入库。
+> ⚠️ 公开仓库说明：本仓库**不含任何密钥**。`.codex-home/`（凭证/会话）、`.env`（部署密码）与 `data/`（证据/会话元数据）均已忽略，不会入库。
 
 ## 🚀 快速开始
 
@@ -87,12 +87,14 @@ CODEX_HOME="$PWD/.codex-home" ./node_modules/.bin/codex login
 npm run test:mcp        # MCP 链路
 npm test                # Harbor 存储 + Runtime 健康 + MCP 全量测试
 
-# 4) 启动 Web 控制台（默认仅本机）
-npm run web             # → http://127.0.0.1:8787   演示账号: demo / demo
+# 4) 设置 Web 登录密码（账号固定为 demo；不要提交或发送该密码）
+#    PowerShell 示例：$env:AEOS_LOGIN_PASSWORD = '请替换为强密码'
 
-# 5) 局域网共享（同事可访问，自动生成带口令的分享链接）
-npm run web:lan         # 启动日志会打印 分享链接: http://<你的IP>:8787/?token=...
-                        # 首次不通请在管理员 PowerShell 放行端口：
+# 5) 启动 Web 控制台（默认仅本机）
+npm run web             # → http://127.0.0.1:8787   账号: demo；密码来自 AEOS_LOGIN_PASSWORD
+
+# 6) 局域网共享（同事仍需输入账号密码）
+npm run web:lan         # 首次不通请在管理员 PowerShell 放行端口：
                         # netsh advfirewall firewall add rule name="AEOS Hub 8787" dir=in action=allow protocol=TCP localport=8787
 ```
 
@@ -110,7 +112,7 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 
 | 区域 | 说明 |
 |---|---|
-| 登录 / 引导 | demo 账号登录后**每次重置引导流程**（姓名 → 角色 → 默认视图），完整重放演示 |
+| 登录 / 引导 | 服务端验证固定账号 `demo` 与部署密码；登录会话只在当前浏览器会话有效，关闭浏览器或重启服务后需重新登录 |
 | 管理者首页 | 目标条、经营指标、System Registry、Runtime 状态 |
 | 中枢 Agent | 会话列表（归档/删除/恢复）、流式对话、工具卡片、Guard 授权条、模型下拉 |
 | Attention 中心 | 需人关注事项（示例数据），一键生成决策材料 |
@@ -130,7 +132,8 @@ hub/
 ├── mcp/demo-erp.mjs          # 业务能力示例：demo-ERP 只读 MCP server
 ├── public/                   # Web 前端（index.html / app.js / style.css，无构建）
 ├── src/
-│   ├── server.ts             # Web 控制台服务端（静态页 + WebSocket + Harbor API + 口令网关）
+│   ├── server.ts             # Web 控制台服务端（静态页 + WebSocket + Harbor API + 登录网关）
+│   ├── web-auth.ts           # demo 账号、密码校验与浏览器会话 Cookie
 │   ├── codex-client.ts       # app-server JSON-RPC 客户端（initialize / thread / turn / 事件流 / 审批应答）
 │   ├── runtime/              # Runtime 中立契约 + Codex Adapter + Supervisor + 健康测试
 │   ├── harbor-store.ts       # AI 港湾快照、关联校验、锁、备份、Runtime 验证状态
@@ -142,7 +145,7 @@ hub/
 ├── scripts/                  # test-mcp / smoke-web / smoke-conversation 冒烟脚本
 ├── test/                     # Harbor 存储测试
 ├── .codex-home/              # 隔离 CODEX_HOME（git 忽略；首次运行自动生成 config.toml）
-└── data/                     # 运行数据（git 忽略；evidence.jsonl / threads.json / access-token.txt）
+└── data/                     # 运行数据（git 忽略；evidence.jsonl / threads.json）
 ```
 
 重新生成协议类型（升级 codex 版本后）：

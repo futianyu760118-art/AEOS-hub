@@ -2,11 +2,11 @@
 // 复用 src/codex-client.ts；codex 运行时仍为项目内固定版本 + 隔离 CODEX_HOME。
 // 启动: npm run web   →   http://127.0.0.1:8787
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, writeFileSync, existsSync, statSync, chmodSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
@@ -52,6 +52,7 @@ import {
   setAgentSquadProject,
 } from './agent-squad-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
+import { BrowserSessionAuth, LOGIN_USERNAME, passwordFromEnvironment } from './web-auth.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -70,41 +71,12 @@ if (!existsSync(join(codexHome, 'auth.json'))) {
   console.warn('       可先执行: cp ~/.codex/auth.json 到 ' + join(codexHome, 'auth.json'));
 }
 
-// ---------- 监听地址与访问口令 ----------
-// --no-auth（或 HUB_NO_AUTH=1）可关闭访问口令。部署到局域网前应由网络边界
-// （例如受信任子网或防火墙）限制访问范围。
+// ---------- 监听地址与浏览器登录 ----------
 const cliArgs = process.argv.slice(2);
 const LAN_MODE = cliArgs.includes('--lan');
-const NO_AUTH = cliArgs.includes('--no-auth') || process.env.HUB_NO_AUTH === '1';
 const LISTEN_HOST = process.env.HOST || (LAN_MODE ? '0.0.0.0' : '127.0.0.1');
-
-let ACCESS_TOKEN = '';
-if (!NO_AUTH) {
-  const tokenFile = join(dataDir, 'access-token.txt');
-  try {
-    if (existsSync(tokenFile)) ACCESS_TOKEN = readFileSync(tokenFile, 'utf-8').trim();
-    if (!ACCESS_TOKEN) {
-      ACCESS_TOKEN = randomUUID().replace(/-/g, '');
-      writeFileSync(tokenFile, ACCESS_TOKEN + '\n', { encoding: 'utf-8', mode: 0o600 });
-    }
-    try { chmodSync(tokenFile, 0o600); } catch { /* Windows ACLs may not expose POSIX modes. */ }
-  } catch (error) {
-    console.error('[FAIL] 无法读写访问口令文件 ' + tokenFile + ': ' + (error as Error).message);
-    process.exit(1);
-  }
-}
-/** 口令 Cookie 的严格形态：由 randomUUID 去连字符生成的 32 位十六进制 */
-const HUB_COOKIE_RE = /(?:^|;\s*)hub_token=([0-9a-f]{32})(?:;|$)/;
+const webAuth = new BrowserSessionAuth(passwordFromEnvironment());
 const SESSION_COOKIE_RE = /(?:^|;\s*)aeos_session=([0-9a-f-]{36})(?:;|$)/;
-/** 恒时比较，避免按字符提前返回造成的时序侧信道 */
-function tokenEquals(candidate: string, expected: string): boolean {
-  if (!/^[0-9a-f]{32}$/.test(candidate) || !/^[0-9a-f]{32}$/.test(expected)) return false;
-  return timingSafeEqual(Buffer.from(candidate), Buffer.from(expected));
-}
-function isAuthorized(cookieVal: string, queryVal: string | null): boolean {
-  if (NO_AUTH) return true;
-  return tokenEquals(cookieVal, ACCESS_TOKEN) || tokenEquals(queryVal ?? '', ACCESS_TOKEN);
-}
 function addCookie(res: ServerResponse, value: string): void {
   const current = res.getHeader('set-cookie');
   const cookies = Array.isArray(current) ? [...current.map(String)] : current ? [String(current)] : [];
@@ -112,9 +84,9 @@ function addCookie(res: ServerResponse, value: string): void {
   res.setHeader('set-cookie', cookies);
 }
 function clearAuthenticationCookies(res: ServerResponse): void {
-  // These attributes must match the issued cookies exactly; otherwise a browser
-  // retains the original HttpOnly credential and a refresh re-enters the Hub.
   const expiry = 'Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  addCookie(res, webAuth.expiredCookie());
+  // Clear the old share-token cookie during migration from the former scheme.
   addCookie(res, `hub_token=; ${expiry}`);
   addCookie(res, `aeos_session=; ${expiry}`);
 }
@@ -122,20 +94,20 @@ function sessionActorFromRequest(req: IncomingMessage, res: ServerResponse): str
   const match = SESSION_COOKIE_RE.exec(req.headers.cookie ?? '');
   if (match?.[1]) return `web-session:${match[1]}`;
   const sessionId = randomUUID();
-  addCookie(res, `aeos_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+  addCookie(res, `aeos_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax`);
   return `web-session:${sessionId}`;
 }
 function sessionActorFromSocket(req: IncomingMessage): string {
   const match = SESSION_COOKIE_RE.exec(req.headers.cookie ?? '');
   return `web-session:${match?.[1] || randomUUID()}`;
 }
-const UNAUTHORIZED_HTML = '<!doctype html><meta charset="utf-8"><title>AEOS Hub · 需要访问口令</title>'
-  + '<body style="font-family:system-ui,-apple-system,\'Microsoft YaHei\',sans-serif;padding:48px;color:#1c2333">'
-  + '<h2>需要访问口令</h2>'
-  + '<p>本服务已启用访问口令保护。请使用管理员提供的<b>分享链接</b>打开（链接形如 <code>http://主机IP:端口/?token=…</code>），'
-  + '打开一次后会记住，无需重复输入。</p>'
-  + '<p style="color:#6b7688;font-size:13px">若你是管理员：口令保存在 hub/data/access-token.txt，启动日志中会打印可分享的完整链接。</p>'
-  + '</body>';
+function isLoginPublicAsset(url: URL, method: string | undefined): boolean {
+  if (method !== 'GET') return false;
+  return url.pathname === '/' || url.pathname === '/index.html'
+    || url.pathname === '/style.css' || url.pathname === '/app.js'
+    || url.pathname === '/daily-questions.js'
+    || url.pathname === '/vendor/lucide.min.js' || url.pathname.startsWith('/brand/');
+}
 
 const codexRuntime = new CodexRuntimeAdapter({
   runtimeInstanceId: CODEX_RUNTIME_ID,
@@ -1185,25 +1157,42 @@ const server = createServer(async (req, res) => {
     sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
-  // 访问口令网关：分享链接（?token=…）通过后写入 cookie，后续请求与 WebSocket 自动携带
-  const queryToken = url.searchParams.get('token');
-  const cookieHit = HUB_COOKIE_RE.exec(req.headers.cookie ?? '');
-  const cookieToken = cookieHit ? cookieHit[1] : '';
-  if (!isAuthorized(cookieToken, queryToken)) {
-    res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(UNAUTHORIZED_HTML);
+  if (url.pathname === '/api/auth/login') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const input = await readJsonBody(req, 4 * 1024);
+      const account = typeof input.account === 'string' ? input.account.trim() : '';
+      const password = typeof input.password === 'string' ? input.password : '';
+      if (!account || !password || account.length > 128 || password.length > 1024) {
+        sendJson(res, 401, { error: '账号或密码错误' }); return;
+      }
+      const sessionId = webAuth.login(account, password);
+      if (!sessionId) { sendJson(res, 401, { error: '账号或密码错误' }); return; }
+      addCookie(res, webAuth.sessionCookie(sessionId));
+      sendJson(res, 200, { ok: true, account: LOGIN_USERNAME });
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
     return;
   }
-  if (!NO_AUTH && queryToken === ACCESS_TOKEN && cookieToken !== ACCESS_TOKEN) {
-    addCookie(res, `hub_token=${ACCESS_TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+  const publicAsset = isLoginPublicAsset(url, req.method);
+  if (!publicAsset && !webAuth.isAuthorized(req.headers.cookie)) {
+    sendJson(res, 401, { error: 'authentication required' });
+    return;
   }
   if (url.pathname === '/api/auth/logout') {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    webAuth.revoke(req.headers.cookie);
     clearAuthenticationCookies(res);
     sendJson(res, 200, { ok: true });
     return;
   }
-  const requestActor = sessionActorFromRequest(req, res);
+  if (url.pathname === '/api/auth/session') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    sendJson(res, 200, { authenticated: true, account: LOGIN_USERNAME });
+    return;
+  }
+  const requestActor = publicAsset ? 'anonymous' : sessionActorFromRequest(req, res);
   let rel: string;
   try {
     rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
@@ -1551,9 +1540,7 @@ const wss = new WebSocketServer({
   maxPayload: 1024 * 1024,
   verifyClient: (info: { req: IncomingMessage }) => {
     try {
-      const wsUrl = new URL(info.req.url ?? '/ws', 'http://127.0.0.1');
-      const wsCookieHit = HUB_COOKIE_RE.exec(info.req.headers.cookie ?? '');
-      return validOrigin(info.req.headers.origin, info.req.headers.host) && isAuthorized(wsCookieHit ? wsCookieHit[1] : '', wsUrl.searchParams.get('token'));
+      return validOrigin(info.req.headers.origin, info.req.headers.host) && webAuth.isAuthorized(info.req.headers.cookie);
     } catch {
       return false;
     }
@@ -1807,7 +1794,7 @@ server.listen(PORT, LISTEN_HOST, () => {
     console.log('   提示: 首次从其他设备访问若不通，请在 Windows 防火墙放行该端口');
     console.log(`         (管理员 PowerShell: netsh advfirewall firewall add rule name="AEOS Hub ${PORT}" dir=in action=allow protocol=TCP localport=${PORT})`);
   }
-  console.log(NO_AUTH ? '   访问口令: 已关闭（访问范围由局域网与主机防火墙控制）' : '   访问口令: 已启用（保存在 data/access-token.txt，不写入日志）');
+  console.log(`   登录保护: 已启用（账号: ${LOGIN_USERNAME}；密码来自 AEOS_LOGIN_PASSWORD）`);
   console.log(`   隔离 CODEX_HOME: ${codexHome}`);
   console.log('   按 Ctrl+C 退出');
   console.log('==============================================');

@@ -47,7 +47,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8787
-      HUB_NO_AUTH: "1"
+      AEOS_LOGIN_PASSWORD: ${AEOS_LOGIN_PASSWORD:?请先在 .env 设置 AEOS_LOGIN_PASSWORD}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:
       # Runtime state only. Neither model credentials nor data are baked into the image.

@@ -1,13 +1,12 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 
-/* AEOS 中枢系统前端：本地认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
+/* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const STORAGE = {
-  session: 'aeos-hub-session-v1',
   profile: 'aeos-hub-profile-v1',
   onboarding: 'aeos-hub-onboarding-v1',
   dailyQuestionRotation: 'aeos-hub-daily-question-rotation-v1',
@@ -109,6 +108,7 @@ const els = {
 
 let ws = null;
 let reconnectTimer = null;
+let authenticated = false;
 let convs = [];
 let curConvId = null;
 let busy = false;
@@ -279,7 +279,7 @@ function beginLoginTransition(next) {
   }, delay);
 }
 
-function handleLogin(event) {
+async function handleLogin(event) {
   event.preventDefault();
   els.loginError.classList.add('hidden');
   const account = els.loginAccount.value.trim();
@@ -289,15 +289,21 @@ function handleLogin(event) {
     return;
   }
   setLoginBusy(true);
-  window.setTimeout(() => {
-    if (account !== 'demo' || password !== 'demo') {
+  try {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ account, password }),
+    });
+    if (!response.ok) {
       setLoginBusy(false);
-      showLoginError('账号或密码错误，演示账号与密码均为 demo');
+      showLoginError('账号或密码错误');
       return;
     }
-    localStorage.setItem(STORAGE.session, JSON.stringify({ account, signedInAt: new Date().toISOString() }));
-    // 演示账号：每次登录重置全部客户端流程状态（引导/档案），保证演示从第一步开始。
-    // 注意：只重置流程状态，不清空会话与证据数据（那些是服务端事实）。
+    authenticated = true;
+    // Remove the old client-only marker so it cannot restore a workspace view.
+    localStorage.removeItem('aeos-hub-session-v1');
     localStorage.removeItem(STORAGE.profile);
     localStorage.removeItem(STORAGE.onboarding);
     els.loginSubmit.innerHTML = '<i data-lucide="check"></i><span>已验证，正在进入</span>';
@@ -306,7 +312,10 @@ function handleLogin(event) {
       setLoginBusy(false);
       showWelcome();
     });
-  }, 260);
+  } catch {
+    setLoginBusy(false);
+    showLoginError('无法连接登录服务，请检查 AEOS 是否正在运行');
+  }
 }
 
 function renderWelcome() {
@@ -475,7 +484,8 @@ function bindKanbanDrag(root, onMove) {
 async function logout() {
   // Exit the browser workspace first. A stalled network request must never
   // make the user appear to remain logged in.
-  localStorage.removeItem(STORAGE.session);
+  authenticated = false;
+  localStorage.removeItem('aeos-hub-session-v1');
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
   if (ws) {
@@ -646,7 +656,7 @@ async function loadDailyQuestions(options = {}) {
 }
 
 function refreshDailyQuestionsOnAudienceChange() {
-  if (!localStorage.getItem(STORAGE.session) || els.app.classList.contains('hidden')) return;
+  if (!authenticated || els.app.classList.contains('hidden')) return;
   const currentKey = dailyQuestionGenerationKey();
   if (currentKey === loadedDailyQuestionAudienceKey) return;
   setDailyQuestionRotation(0);
@@ -3926,9 +3936,56 @@ function connect() {
     }
   });
   ws.addEventListener('close', () => {
-    if (!localStorage.getItem(STORAGE.session)) return;
-    reconnectTimer = window.setTimeout(connect, 3000);
+    if (!authenticated) return;
+    // A Docker restart clears the server's in-memory session. Check it before
+    // reconnecting so a stale page returns to the login screen instead of
+    // retrying WebSocket connections forever.
+    void fetch('/api/auth/session', { credentials: 'same-origin' })
+      .then((response) => {
+        if (!authenticated) return;
+        if (response.ok) reconnectTimer = window.setTimeout(connect, 3000);
+        else showLoginRequired('登录会话已结束，请重新输入账号和密码');
+      })
+      .catch(() => {
+        if (authenticated) reconnectTimer = window.setTimeout(connect, 3000);
+      });
   });
+}
+
+function showLoginRequired(message = '') {
+  authenticated = false;
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (ws) {
+    ws.close(1000, 'Authentication required');
+    ws = null;
+  }
+  els.userMenu.classList.add('hidden');
+  els.app.classList.add('hidden');
+  els.welcomeStage.classList.add('hidden');
+  els.welcomeExit.classList.add('hidden');
+  els.loginTransition.classList.add('hidden');
+  els.loginStage.classList.remove('hidden');
+  els.loginPassword.value = '';
+  window.clearInterval(dashboardLiveRefreshTimer);
+  dashboardLiveRefreshTimer = null;
+  if (message) showLoginError(message);
+  else els.loginError.classList.add('hidden');
+  window.setTimeout(() => els.loginAccount.focus(), 30);
+}
+
+async function bootstrapAuthentication() {
+  try {
+    const response = await fetch('/api/auth/session', { credentials: 'same-origin' });
+    if (response.ok) {
+      authenticated = true;
+      showWorkspace(false);
+      return;
+    }
+  } catch {
+    // The visible login form will surface a precise error if the server stays unavailable.
+  }
+  showLoginRequired();
 }
 
 /* Authentication and profile interactions */
@@ -4241,8 +4298,4 @@ els.evidenceSourceFilter?.addEventListener('change', renderEvidenceRows);
 els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
 
 refreshIcons();
-if (localStorage.getItem(STORAGE.session)) showWorkspace(false);
-else {
-  els.loginStage.classList.remove('hidden');
-  window.setTimeout(() => els.loginAccount.focus(), 30);
-}
+void bootstrapAuthentication();
