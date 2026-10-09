@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
 import { normalizeActorContext, type ActorContext } from './actor-context.ts';
 
@@ -86,11 +86,13 @@ type OidcDiscovery = {
   authorization_endpoint: string;
   token_endpoint: string;
   jwks_uri: string;
+  token_endpoint_auth_methods_supported?: string[];
 };
 
 type LoginTransaction = {
   nonce: string;
   verifier: string;
+  browserBinding: string;
   createdAt: number;
 };
 
@@ -103,6 +105,9 @@ export type M01OidcDependencies = {
 const LOGIN_TRANSACTION_TTL_MS = 5 * 60 * 1000;
 const OIDC_CACHE_TTL_MS = 5 * 60 * 1000;
 const RANDOM_VALUE_BYTES = 32;
+const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_TRANSACTIONS = 1_024;
+const MAX_TRANSACTIONS_PER_BROWSER = 10;
 
 function authenticationFailed(): Error {
   return new Error('M01 authentication failed');
@@ -147,10 +152,26 @@ function validState(value: unknown): value is string {
     && /^[A-Za-z0-9_-]{16,512}$/.test(value);
 }
 
+function validBrowserBinding(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length >= 1
+    && value.length <= 512
+    && /^[\x21-\x7e]+$/.test(value);
+}
+
+function equalBrowserBindings(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
 function isOidcDiscovery(value: unknown, issuer: string): value is OidcDiscovery {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const document = value as Record<string, unknown>;
   if (document.issuer !== issuer) return false;
+  if (document.token_endpoint_auth_methods_supported !== undefined
+    && (!Array.isArray(document.token_endpoint_auth_methods_supported)
+      || document.token_endpoint_auth_methods_supported.some((method) => typeof method !== 'string'))) return false;
   try {
     secureOidcUrl(document.authorization_endpoint);
     secureOidcUrl(document.token_endpoint);
@@ -178,10 +199,11 @@ export class M01OidcAuth {
   private readonly clock: () => number;
   private readonly entropy: (size: number) => Uint8Array;
   private readonly transactions = new Map<string, LoginTransaction>();
+  private cleanupTimer?: ReturnType<typeof setInterval>;
   private discoveryCache?: { value: OidcDiscovery; expiresAt: number };
   private discoveryInFlight?: Promise<OidcDiscovery>;
   private jwksCache?: { uri: string; value: ReturnType<typeof createLocalJWKSet>; expiresAt: number };
-  private jwksInFlight?: Promise<ReturnType<typeof createLocalJWKSet>>;
+  private readonly jwksInFlight = new Map<string, Promise<ReturnType<typeof createLocalJWKSet>>>();
 
   constructor(config: M01Config, dependencies: M01OidcDependencies = {}) {
     if (config.authMode !== 'm01') throw authenticationFailed();
@@ -192,15 +214,19 @@ export class M01OidcAuth {
     this.entropy = dependencies.randomBytes ?? randomBytes;
   }
 
-  async beginLogin(): Promise<{ redirectUrl: string }> {
+  /** browserBinding must come from a server-trusted, HttpOnly browser cookie. */
+  async beginLogin(input: { browserBinding: string }): Promise<{ redirectUrl: string }> {
     try {
+      if (!validBrowserBinding(input?.browserBinding)) throw authenticationFailed();
       const discovery = await this.getDiscovery();
-      this.removeExpiredTransactions();
+      this.pruneExpiredTransactions();
+      this.assertTransactionCapacity(input.browserBinding);
       const state = this.randomValue();
       const nonce = this.randomValue();
       const verifier = this.randomValue();
       const challenge = createHash('sha256').update(verifier).digest('base64url');
-      this.transactions.set(state, { nonce, verifier, createdAt: this.clock() });
+      this.transactions.set(state, { nonce, verifier, browserBinding: input.browserBinding, createdAt: this.clock() });
+      this.ensureCleanupTimer();
 
       const redirect = new URL(discovery.authorization_endpoint);
       redirect.searchParams.set('response_type', 'code');
@@ -217,42 +243,74 @@ export class M01OidcAuth {
     }
   }
 
-  async completeLogin(input: { code: string; state: string }): Promise<ActorContext> {
+  async completeLogin(input: { code: string; state: string; browserBinding: string }): Promise<ActorContext> {
     try {
-      if (!validAuthorizationCode(input?.code) || !validState(input?.state)) {
+      if (!validAuthorizationCode(input?.code) || !validState(input?.state) || !validBrowserBinding(input?.browserBinding)) {
         throw authenticationFailed();
       }
+      this.pruneExpiredTransactions();
       const transaction = this.consumeTransaction(input.state);
+      if (!equalBrowserBindings(transaction.browserBinding, input.browserBinding)) throw authenticationFailed();
       const discovery = await this.getDiscovery();
-      const idToken = await this.exchangeCode(discovery.token_endpoint, input.code, transaction.verifier);
+      const idToken = await this.exchangeCode(discovery, input.code, transaction.verifier);
       const jwks = await this.getJwks(discovery.jwks_uri);
       const { payload } = await jwtVerify(idToken, jwks, {
         issuer: this.config.issuer,
-        audience: this.config.audience,
         currentDate: new Date(this.clock()),
       });
-      if (typeof payload.exp !== 'number' || payload.nonce !== transaction.nonce) throw authenticationFailed();
+      if (typeof payload.exp !== 'number' || payload.nonce !== transaction.nonce || !this.hasRequiredAudience(payload)) {
+        throw authenticationFailed();
+      }
       return normalizeActorContext(payload, 'm01');
     } catch {
       throw authenticationFailed();
     }
   }
 
+  dispose(): void {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
+    this.transactions.clear();
+  }
+
   private randomValue(): string {
     return base64Url(this.entropy(RANDOM_VALUE_BYTES));
   }
 
-  private removeExpiredTransactions(): void {
+  private pruneExpiredTransactions(): void {
     const now = this.clock();
     for (const [state, transaction] of this.transactions) {
       if (now - transaction.createdAt >= LOGIN_TRANSACTION_TTL_MS) this.transactions.delete(state);
     }
+    if (this.transactions.size === 0 && this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+  }
+
+  private ensureCleanupTimer(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => this.pruneExpiredTransactions(), LOGIN_TRANSACTION_TTL_MS);
+    this.cleanupTimer.unref();
+  }
+
+  private assertTransactionCapacity(browserBinding: string): void {
+    if (this.transactions.size >= MAX_TRANSACTIONS) throw authenticationFailed();
+    let bindingTransactions = 0;
+    for (const transaction of this.transactions.values()) {
+      if (equalBrowserBindings(transaction.browserBinding, browserBinding)) bindingTransactions += 1;
+    }
+    if (bindingTransactions >= MAX_TRANSACTIONS_PER_BROWSER) throw authenticationFailed();
   }
 
   private consumeTransaction(state: string): LoginTransaction {
     const transaction = this.transactions.get(state);
     if (!transaction) throw authenticationFailed();
     this.transactions.delete(state);
+    if (this.transactions.size === 0 && this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
     if (this.clock() - transaction.createdAt >= LOGIN_TRANSACTION_TTL_MS) throw authenticationFailed();
     return transaction;
   }
@@ -266,32 +324,39 @@ export class M01OidcAuth {
 
   private async fetchDiscovery(): Promise<OidcDiscovery> {
     const issuer = configuredIssuer(this.config.issuer);
-    const response = await this.fetcher(discoveryUrl(issuer));
+    const response = await this.fetchWithSecurity(discoveryUrl(issuer));
     if (!response.ok) throw authenticationFailed();
     const document: unknown = await response.json();
     if (!isOidcDiscovery(document, this.config.issuer)) throw authenticationFailed();
+    if (document.token_endpoint_auth_methods_supported
+      && !document.token_endpoint_auth_methods_supported.includes('client_secret_basic')) throw authenticationFailed();
     const value: OidcDiscovery = {
       issuer: document.issuer,
       authorization_endpoint: secureOidcUrl(document.authorization_endpoint),
       token_endpoint: secureOidcUrl(document.token_endpoint),
       jwks_uri: secureOidcUrl(document.jwks_uri),
+      ...(document.token_endpoint_auth_methods_supported === undefined
+        ? {} : { token_endpoint_auth_methods_supported: document.token_endpoint_auth_methods_supported }),
     };
     this.discoveryCache = { value, expiresAt: this.clock() + OIDC_CACHE_TTL_MS };
     return value;
   }
 
-  private async exchangeCode(tokenEndpoint: string, code: string, verifier: string): Promise<string> {
+  private async exchangeCode(discovery: OidcDiscovery, code: string, verifier: string): Promise<string> {
+    if (discovery.token_endpoint_auth_methods_supported
+      && !discovery.token_endpoint_auth_methods_supported.includes('client_secret_basic')) throw authenticationFailed();
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: this.config.redirectUri,
-      client_id: this.config.clientId,
-      client_secret: this.config.clientSecret,
       code_verifier: verifier,
     });
-    const response = await this.fetcher(tokenEndpoint, {
+    const basicCredentials = Buffer.from(`${this.config.clientId}:${this.config.clientSecret}`).toString('base64');
+    const response = await this.fetchWithSecurity(discovery.token_endpoint, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', authorization: `Basic ${basicCredentials}`,
+      },
       body: body.toString(),
     });
     if (!response.ok) throw authenticationFailed();
@@ -306,18 +371,35 @@ export class M01OidcAuth {
     if (this.jwksCache && this.jwksCache.uri === uri && this.jwksCache.expiresAt > this.clock()) {
       return this.jwksCache.value;
     }
-    if (this.jwksInFlight) return this.jwksInFlight;
-    this.jwksInFlight = this.fetchJwks(uri).finally(() => { this.jwksInFlight = undefined; });
-    return this.jwksInFlight;
+    const inFlight = this.jwksInFlight.get(uri);
+    if (inFlight) return inFlight;
+    const request = this.fetchJwks(uri).finally(() => { this.jwksInFlight.delete(uri); });
+    this.jwksInFlight.set(uri, request);
+    return request;
   }
 
   private async fetchJwks(uri: string): Promise<ReturnType<typeof createLocalJWKSet>> {
-    const response = await this.fetcher(uri);
+    const response = await this.fetchWithSecurity(uri);
     if (!response.ok) throw authenticationFailed();
     const document: unknown = await response.json();
     if (!isJwks(document)) throw authenticationFailed();
     const value = createLocalJWKSet(document);
     this.jwksCache = { uri, value, expiresAt: this.clock() + OIDC_CACHE_TTL_MS };
     return value;
+  }
+
+  private async fetchWithSecurity(url: string, init: RequestInit = {}): Promise<Response> {
+    return this.fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  }
+
+  private hasRequiredAudience(payload: { aud?: unknown; azp?: unknown }): boolean {
+    const audiences = typeof payload.aud === 'string'
+      ? [payload.aud]
+      : Array.isArray(payload.aud) && payload.aud.every((audience) => typeof audience === 'string')
+        ? payload.aud : [];
+    const requiredAudiences = new Set([this.config.clientId, this.config.audience]);
+    if (!Array.from(requiredAudiences).every((audience) => audiences.includes(audience))) return false;
+    if (payload.azp !== undefined && payload.azp !== this.config.clientId) return false;
+    return audiences.length === 1 || payload.azp === this.config.clientId;
   }
 }

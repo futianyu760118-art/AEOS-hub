@@ -20,18 +20,20 @@ const oidcConfig = {
   clientId: 'aeos-hub',
   clientSecret: 'not-a-real-secret',
   redirectUri: 'http://localhost:3000/auth/callback',
-  audience: 'aeos-api',
+  audience: 'aeos-hub',
 };
 const authorizationEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/auth';
 const tokenEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/token';
 const jwksUri = 'https://login.example.test/realms/aeos/protocol/openid-connect/certs';
+const browserBinding = 'browser-binding-a';
 const signingKey = await generateKeyPair('RS256');
 const publicJwk = await exportJWK(signingKey.publicKey);
 Object.assign(publicJwk, { kid: 'm01-test-key', use: 'sig', alg: 'RS256' });
 
 type IdTokenOptions = {
   issuer?: string;
-  audience?: string;
+  audience?: string | string[];
+  azp?: string | null;
   expiresAt?: number;
   notBefore?: number;
   nonce?: string;
@@ -40,11 +42,13 @@ type IdTokenOptions = {
 };
 
 async function createIdToken(nonce: string, options: IdTokenOptions = {}): Promise<string> {
-  return new SignJWT({
+  const claims: Record<string, unknown> = {
     tenant_id: options.tenantId === undefined ? 'tenant-a' : options.tenantId,
     roles: ['manager'],
     nonce: options.nonce === undefined ? nonce : options.nonce,
-  })
+  };
+  if (options.azp !== undefined) claims.azp = options.azp;
+  return new SignJWT(claims)
     .setProtectedHeader({ alg: 'RS256', kid: 'm01-test-key' })
     .setIssuer(options.issuer ?? oidcConfig.issuer)
     .setAudience(options.audience ?? oidcConfig.audience)
@@ -59,17 +63,20 @@ function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 }
 
-function createOidcFixture(options: { now?: () => number; discovery?: Record<string, unknown>; idToken?: string } = {}) {
+function createOidcFixture(options: {
+  now?: () => number; discovery?: Record<string, unknown>; idToken?: string; config?: typeof oidcConfig;
+} = {}) {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   let token = options.idToken;
-  const auth = new M01OidcAuth(oidcConfig, {
+  const config = options.config ?? oidcConfig;
+  const auth = new M01OidcAuth(config, {
     now: options.now,
     fetch: async (input, init) => {
       const url = String(input);
       requests.push({ url, init });
       if (url.endsWith('/.well-known/openid-configuration')) {
         return jsonResponse(options.discovery ?? {
-          issuer: oidcConfig.issuer,
+          issuer: config.issuer,
           authorization_endpoint: authorizationEndpoint,
           token_endpoint: tokenEndpoint,
           jwks_uri: jwksUri,
@@ -80,12 +87,12 @@ function createOidcFixture(options: { now?: () => number; discovery?: Record<str
       return jsonResponse({}, 404);
     },
   });
-  return { auth, requests, setIdToken: (value: string) => { token = value; } };
+  return { auth, config, requests, setIdToken: (value: string) => { token = value; } };
 }
 
 test('M01 OIDC authorization URL carries PKCE and exact callback parameters', async () => {
   const { auth, requests, setIdToken } = createOidcFixture();
-  const { redirectUrl } = await auth.beginLogin();
+  const { redirectUrl } = await auth.beginLogin({ browserBinding });
   const url = new URL(redirectUrl);
   assert.equal(url.origin + url.pathname, authorizationEndpoint);
   assert.equal(url.searchParams.get('response_type'), 'code');
@@ -97,26 +104,31 @@ test('M01 OIDC authorization URL carries PKCE and exact callback parameters', as
   assert.match(url.searchParams.get('nonce') ?? '', /^[A-Za-z0-9_-]{32,}$/);
 
   setIdToken(await createIdToken(url.searchParams.get('nonce')!));
-  await auth.completeLogin({ code: 'authorization-code', state: url.searchParams.get('state')! });
+  await auth.completeLogin({ code: 'authorization-code', state: url.searchParams.get('state')!, browserBinding });
   const tokenRequest = requests.find((request) => request.url === tokenEndpoint)!;
   const body = new URLSearchParams(String(tokenRequest.init?.body));
   assert.equal(body.get('grant_type'), 'authorization_code');
   assert.equal(body.get('redirect_uri'), oidcConfig.redirectUri);
-  assert.equal(body.get('client_id'), oidcConfig.clientId);
-  assert.equal(body.get('client_secret'), oidcConfig.clientSecret);
+  assert.equal(body.get('client_id'), null);
+  assert.equal(body.get('client_secret'), null);
   assert.equal(body.get('code'), 'authorization-code');
+  assert.equal((tokenRequest.init?.headers as Record<string, string>).authorization, `Basic ${Buffer.from(`${oidcConfig.clientId}:${oidcConfig.clientSecret}`).toString('base64')}`);
   assert.equal(
     createHash('sha256').update(body.get('code_verifier')!).digest('base64url'),
     url.searchParams.get('code_challenge'),
   );
+  for (const request of requests) {
+    assert.equal(request.init?.redirect, 'error');
+    assert.ok(request.init?.signal instanceof AbortSignal);
+  }
 });
 
 test('M01 OIDC completes a valid signed token into an actor context', async () => {
   const { auth, setIdToken } = createOidcFixture();
-  const { redirectUrl } = await auth.beginLogin();
+  const { redirectUrl } = await auth.beginLogin({ browserBinding });
   const parameters = new URL(redirectUrl).searchParams;
   setIdToken(await createIdToken(parameters.get('nonce')!));
-  assert.deepEqual(await auth.completeLogin({ code: 'code-123', state: parameters.get('state')! }), {
+  assert.deepEqual(await auth.completeLogin({ code: 'code-123', state: parameters.get('state')!, browserBinding }), {
     actorId: 'm01:user:user-123', actorType: 'human', tenantId: 'tenant-a', roles: ['manager'], authSource: 'm01',
   });
 });
@@ -130,31 +142,31 @@ test('M01 OIDC discovery requires the configured issuer and safe HTTPS endpoints
   ];
   for (const discovery of invalidDocuments) {
     const { auth } = createOidcFixture({ discovery });
-    await assert.rejects(auth.beginLogin(), /authentication failed/i);
+    await assert.rejects(auth.beginLogin({ browserBinding }), /authentication failed/i);
   }
 });
 
 test('M01 OIDC rejects missing, mismatched, expired, and reused states', async () => {
   let time = Date.now();
   const { auth, setIdToken } = createOidcFixture({ now: () => time });
-  await assert.rejects(auth.completeLogin({ code: 'code', state: 'missing-state-value' }), /authentication failed/i);
-  const { redirectUrl } = await auth.beginLogin();
+  await assert.rejects(auth.completeLogin({ code: 'code', state: 'missing-state-value', browserBinding }), /authentication failed/i);
+  const { redirectUrl } = await auth.beginLogin({ browserBinding });
   const parameters = new URL(redirectUrl).searchParams;
-  await assert.rejects(auth.completeLogin({ code: 'code', state: 'different-state-value' }), /authentication failed/i);
+  await assert.rejects(auth.completeLogin({ code: 'code', state: 'different-state-value', browserBinding }), /authentication failed/i);
   time += 300_001;
-  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i);
+  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')!, browserBinding }), /authentication failed/i);
 
-  const second = new URL((await auth.beginLogin()).redirectUrl).searchParams;
+  const second = new URL((await auth.beginLogin({ browserBinding })).redirectUrl).searchParams;
   setIdToken(await createIdToken(second.get('nonce')!, { expiresAt: Math.floor(Date.now() / 1000) + 900 }));
-  await auth.completeLogin({ code: 'code', state: second.get('state')! });
-  await assert.rejects(auth.completeLogin({ code: 'code', state: second.get('state')! }), /authentication failed/i);
+  await auth.completeLogin({ code: 'code', state: second.get('state')!, browserBinding });
+  await assert.rejects(auth.completeLogin({ code: 'code', state: second.get('state')!, browserBinding }), /authentication failed/i);
 });
 
 test('M01 OIDC consumes state before a failed token exchange', async () => {
   const { auth } = createOidcFixture({ idToken: undefined });
-  const parameters = new URL((await auth.beginLogin()).redirectUrl).searchParams;
-  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i);
-  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i);
+  const parameters = new URL((await auth.beginLogin({ browserBinding })).redirectUrl).searchParams;
+  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')!, browserBinding }), /authentication failed/i);
+  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')!, browserBinding }), /authentication failed/i);
 });
 
 test('M01 OIDC performs actual JWT/JWKS verification and rejects invalid claims', async () => {
@@ -169,16 +181,75 @@ test('M01 OIDC performs actual JWT/JWKS verification and rejects invalid claims'
   ];
   for (const [name, options] of cases) {
     const { auth, setIdToken } = createOidcFixture();
-    const parameters = new URL((await auth.beginLogin()).redirectUrl).searchParams;
+    const parameters = new URL((await auth.beginLogin({ browserBinding })).redirectUrl).searchParams;
     setIdToken(await createIdToken(parameters.get('nonce')!, options));
-    await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i, name);
+    await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')!, browserBinding }), /authentication failed/i, name);
   }
 });
 
 test('M01 OIDC gives concurrent login attempts distinct states', async () => {
   const { auth } = createOidcFixture();
-  const logins = await Promise.all(Array.from({ length: 8 }, () => auth.beginLogin()));
+  const logins = await Promise.all(Array.from({ length: 8 }, () => auth.beginLogin({ browserBinding })));
   assert.equal(new Set(logins.map(({ redirectUrl }) => new URL(redirectUrl).searchParams.get('state'))).size, logins.length);
+});
+
+test('M01 OIDC binds a state to its initiating browser binding and consumes it on mismatch', async () => {
+  const { auth, setIdToken } = createOidcFixture();
+  const parameters = new URL((await auth.beginLogin({ browserBinding })).redirectUrl).searchParams;
+  const state = parameters.get('state')!;
+  setIdToken(await createIdToken(parameters.get('nonce')!));
+  await assert.rejects(auth.completeLogin({ code: 'code', state, browserBinding: 'browser-binding-b' }), /authentication failed/i);
+  await assert.rejects(auth.completeLogin({ code: 'code', state, browserBinding }), /authentication failed/i);
+});
+
+test('M01 OIDC prunes expired transactions and rejects browser-binding capacity overflow', async () => {
+  let time = Date.now();
+  const { auth } = createOidcFixture({ now: () => time });
+  await Promise.all(Array.from({ length: 10 }, () => auth.beginLogin({ browserBinding })));
+  await assert.rejects(auth.beginLogin({ browserBinding }), /authentication failed/i);
+  time += 300_000;
+  await auth.beginLogin({ browserBinding });
+  auth.dispose();
+});
+
+test('M01 OIDC enforces a global transaction cap', async () => {
+  const { auth } = createOidcFixture();
+  for (let index = 0; index < 1_024; index += 1) {
+    await auth.beginLogin({ browserBinding: `browser-binding-${index}` });
+  }
+  await assert.rejects(auth.beginLogin({ browserBinding: 'browser-binding-overflow' }), /authentication failed/i);
+  auth.dispose();
+});
+
+test('M01 OIDC rejects a token that lacks the client audience or valid multi-audience azp', async () => {
+  const onlyBusiness = createOidcFixture();
+  const businessParameters = new URL((await onlyBusiness.auth.beginLogin({ browserBinding })).redirectUrl).searchParams;
+  onlyBusiness.setIdToken(await createIdToken(businessParameters.get('nonce')!, { audience: 'aeos-api' }));
+  await assert.rejects(onlyBusiness.auth.completeLogin({ code: 'code', state: businessParameters.get('state')!, browserBinding }), /authentication failed/i);
+
+  const multiAudienceConfig = { ...oidcConfig, audience: 'aeos-api' };
+  for (const azp of [undefined, 'other-client']) {
+    const fixture = createOidcFixture({ config: multiAudienceConfig });
+    const parameters = new URL((await fixture.auth.beginLogin({ browserBinding })).redirectUrl).searchParams;
+    fixture.setIdToken(await createIdToken(parameters.get('nonce')!, { audience: [oidcConfig.clientId, 'aeos-api'], azp }));
+    await assert.rejects(fixture.auth.completeLogin({ code: 'code', state: parameters.get('state')!, browserBinding }), /authentication failed/i);
+  }
+});
+
+test('M01 OIDC rejects incompatible token endpoint authentication and sanitizes fetch failures', async () => {
+  const unsupported = createOidcFixture({ discovery: {
+    issuer: oidcConfig.issuer, authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, jwks_uri: jwksUri,
+    token_endpoint_auth_methods_supported: ['none'],
+  } });
+  await assert.rejects(unsupported.auth.beginLogin({ browserBinding }), /authentication failed/i);
+
+  const auth = new M01OidcAuth(oidcConfig, {
+    fetch: async () => { throw new Error(`timeout ${oidcConfig.clientSecret} authorization-code`); },
+  });
+  await assert.rejects(auth.beginLogin({ browserBinding }), (error: Error) => {
+    assert.equal(error.message, 'M01 authentication failed');
+    return true;
+  });
 });
 
 test('M01 configuration reports every missing required setting without exposing values', () => {
