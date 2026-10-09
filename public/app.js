@@ -15,7 +15,8 @@ const STORAGE = {
 const els = {
   loginStage: $('#login-stage'), loginForm: $('#login-form'), loginAccount: $('#login-account'),
   loginPassword: $('#login-password'), loginError: $('#login-error'), loginSubmit: $('#login-submit'),
-  togglePassword: $('#toggle-password'), loginTransition: $('#login-transition'),
+  togglePassword: $('#toggle-password'), loginTransition: $('#login-transition'), localLoginFields: $('#local-login-fields'),
+  m01LoginAction: $('#m01-login-action'), m01LoginSubmit: $('#m01-login-submit'), loginMethodNote: $('#login-method-note'), loginFootNote: $('#login-foot-note'),
   welcomeStage: $('#welcome-stage'), welcomeStep: $('#welcome-step'), welcomeBack: $('#welcome-back'),
   welcomeExit: $('#welcome-exit'), app: $('#app'), workspaceContent: $('#workspace-content'),
   breadcrumb: $('#breadcrumb-current'), userMenu: $('#user-menu'), logout: $('#logout'),
@@ -198,6 +199,7 @@ function createTurnState(scope = {}) {
 
 let turn = createTurnState();
 let lastRuntimeSequence = 0;
+let authMode = 'local-dev';
 const MAX_STREAM_OUTPUT = 4 * 1024 * 1024;
 const MAX_IMAGE_BASE64 = 16 * 1024 * 1024;
 
@@ -253,6 +255,7 @@ function toast(message, isError = false) {
 }
 
 function setLoginBusy(state) {
+  if (authMode === 'm01') return;
   els.loginAccount.disabled = state;
   els.loginPassword.disabled = state;
   els.loginSubmit.disabled = state;
@@ -262,6 +265,16 @@ function setLoginBusy(state) {
   refreshIcons(els.loginSubmit);
   const loader = $('svg', els.loginSubmit);
   if (state && loader) loader.style.animation = 'spin .75s linear infinite';
+}
+
+function setLoginMode(mode) {
+  authMode = mode === 'm01' ? 'm01' : 'local-dev';
+  const m01 = authMode === 'm01';
+  els.localLoginFields.classList.toggle('hidden', m01);
+  els.m01LoginAction.classList.toggle('hidden', !m01);
+  els.loginMethodNote.textContent = m01 ? '通过企业统一身份认证继续' : '使用你的账号继续';
+  els.loginFootNote.textContent = m01 ? '统一登录由企业身份平台提供' : '账号与密码由管理员配置';
+  els.loginForm.noValidate = true;
 }
 
 function showLoginError(message) {
@@ -282,6 +295,7 @@ function beginLoginTransition(next) {
 
 async function handleLogin(event) {
   event.preventDefault();
+  if (authMode === 'm01') return;
   els.loginError.classList.add('hidden');
   const account = els.loginAccount.value.trim();
   const password = els.loginPassword.value;
@@ -505,7 +519,7 @@ async function logout() {
   window.clearInterval(dashboardLiveRefreshTimer);
   dashboardLiveRefreshTimer = null;
   history.replaceState(null, '', location.pathname);
-  window.setTimeout(() => els.loginAccount.focus(), 30);
+  window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 
   try {
     const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
@@ -3990,13 +4004,16 @@ function showLoginRequired(message = '') {
   dashboardLiveRefreshTimer = null;
   if (message) showLoginError(message);
   else els.loginError.classList.add('hidden');
-  window.setTimeout(() => els.loginAccount.focus(), 30);
+  window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 }
 
 async function bootstrapAuthentication() {
+  const loginError = new URLSearchParams(location.search).get('auth_error') === '1';
   try {
     const response = await fetch('/api/auth/session', { credentials: 'same-origin' });
-    if (response.ok) {
+    const session = response.ok ? await response.json() : null;
+    setLoginMode(session?.authMode);
+    if (session?.authenticated === true) {
       authenticated = true;
       showWorkspace(false);
       return;
@@ -4004,11 +4021,13 @@ async function bootstrapAuthentication() {
   } catch {
     // The visible login form will surface a precise error if the server stays unavailable.
   }
-  showLoginRequired();
+  if (loginError) history.replaceState(null, '', `${location.pathname}${location.hash}`);
+  showLoginRequired(loginError ? '统一登录未完成，请重新登录。' : '');
 }
 
 /* Authentication and profile interactions */
 els.loginForm.addEventListener('submit', handleLogin);
+els.m01LoginSubmit.addEventListener('click', () => { window.location.assign('/api/auth/login'); });
 els.loginAccount.addEventListener('input', () => els.loginError.classList.add('hidden'));
 els.loginPassword.addEventListener('input', () => els.loginError.classList.add('hidden'));
 els.togglePassword.addEventListener('click', () => {
