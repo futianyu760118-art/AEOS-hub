@@ -5,22 +5,19 @@ import { open } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateEvidenceEntry, type EvidenceEntryContract } from './evidence-contract.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const dataDir = join(here, '..', 'data');
 export const evidenceFile = join(dataDir, 'evidence.jsonl');
 
-export interface EvidenceEntry {
-  event_id: string;
-  occurred_at: string; // ISO 8601
-  kind: string; // notification | turn_result | approval_decision | app_event
-  method?: string; // JSON-RPC 通知方法名，如 item/completed
-  thread_id?: string;
-  turn_id?: string;
-  item_type?: string; // agentMessage | mcpToolCall | ...
-  summary?: string;
-  payload?: unknown; // 原始载荷（通知 params / 决策结果等）
-}
+export type EvidenceEntry = EvidenceEntryContract;
+
+/** Callers may omit pilot defaults, but persisted records always satisfy EvidenceEntryContract. */
+export type EvidenceInput = Omit<
+  EvidenceEntry,
+  'event_id' | 'occurred_at' | 'tenant_id' | 'object_ref' | 'source_system' | 'correlation_id' | 'version' | 'evidence_refs' | 'payload_hash'
+> & Partial<Pick<EvidenceEntry, 'tenant_id' | 'object_ref' | 'source_system' | 'correlation_id' | 'version' | 'evidence_refs'>>;
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 let writeFailure: string | null = null;
@@ -30,23 +27,64 @@ export function ensureDataDir(): void {
   mkdirSync(dataDir, { recursive: true });
 }
 
-export function appendEvidence(partial: Omit<EvidenceEntry, 'event_id' | 'occurred_at'>, file = evidenceFile): EvidenceEntry {
-  const entry: EvidenceEntry = {
-    event_id: randomUUID(),
-    occurred_at: new Date().toISOString(),
+function tenantId(): string {
+  return process.env.AEOS_TENANT_ID?.trim() || 'pilot-default';
+}
+
+function hubRuntimeObjectRef(partial: EvidenceInput): string {
+  const identifier = partial.thread_id ?? partial.turn_id ?? 'system';
+  return `hub://runtime/${encodeURIComponent(identifier)}`;
+}
+
+function payloadJson(payload: unknown): string {
+  const json = JSON.stringify(payload ?? null);
+  if (typeof json !== 'string') throw new Error('Evidence payload 无法序列化');
+  return json;
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeStoredEvidence(value: unknown): EvidenceEntry {
+  const legacy = value !== null && typeof value === 'object' ? value as Partial<EvidenceEntry> : {};
+  return validateEvidenceEntry({
+    ...legacy,
+    tenant_id: legacy.tenant_id ?? tenantId(),
+    object_ref: legacy.object_ref ?? hubRuntimeObjectRef(legacy as EvidenceInput),
+    source_system: legacy.source_system ?? 'aeos-hub',
+    correlation_id: legacy.correlation_id ?? legacy.thread_id ?? legacy.turn_id ?? legacy.event_id,
+    version: legacy.version ?? '1.0',
+    evidence_refs: legacy.evidence_refs ?? [],
+    payload_hash: legacy.payload_hash ?? sha256(payloadJson(legacy.payload)),
+  });
+}
+
+export function appendEvidence(partial: EvidenceInput, file = evidenceFile): EvidenceEntry {
+  const eventId = randomUUID();
+  const payload = payloadJson(partial.payload);
+  const entry = validateEvidenceEntry({
     ...partial,
-  };
+    event_id: eventId,
+    occurred_at: new Date().toISOString(),
+    tenant_id: partial.tenant_id ?? tenantId(),
+    object_ref: partial.object_ref ?? hubRuntimeObjectRef(partial),
+    source_system: partial.source_system ?? 'aeos-hub',
+    correlation_id: partial.correlation_id ?? partial.thread_id ?? partial.turn_id ?? eventId,
+    version: partial.version ?? '1.0',
+    evidence_refs: partial.evidence_refs ?? [],
+    payload_hash: sha256(payload),
+  });
   try {
     mkdirSync(dirname(file), { recursive: true });
     if (entry.payload !== undefined) {
-      const json = JSON.stringify(entry.payload);
-      if (Buffer.byteLength(json) > 100_000) {
-        const hash = createHash('sha256').update(json).digest('hex');
+      if (Buffer.byteLength(payload) > 100_000) {
+        const hash = entry.payload_hash;
         const directory = join(dirname(file), 'evidence-payloads');
         mkdirSync(directory, { recursive: true });
         const payloadFile = join(directory, `${hash}.json`);
-        if (!existsSync(payloadFile)) writeFileSync(payloadFile, json, { mode: 0o600 });
-        entry.payload = { archived: true, sha256: hash, bytes: Buffer.byteLength(json), file: `evidence-payloads/${hash}.json` };
+        if (!existsSync(payloadFile)) writeFileSync(payloadFile, payload, { mode: 0o600 });
+        entry.payload = { archived: true, sha256: hash, bytes: Buffer.byteLength(payload), file: `evidence-payloads/${hash}.json` };
       }
     }
     if (existsSync(file) && statSync(file).size >= MAX_FILE_BYTES) {
@@ -89,7 +127,7 @@ export async function readRecentEvidence(limit: number, file = evidenceFile): Pr
         suffix = position > 0 ? buffer.subarray(0, firstNewline + 1) : Buffer.alloc(0);
         for (const line of complete.toString('utf8').split('\n').reverse()) {
           if (!line.trim()) continue;
-          try { rows.push(JSON.parse(line)); } catch { /* Skip partial/corrupt tail. */ }
+          try { rows.push(normalizeStoredEvidence(JSON.parse(line))); } catch { /* Skip partial or corrupt tail. */ }
           if (rows.length >= limit) break;
         }
       }

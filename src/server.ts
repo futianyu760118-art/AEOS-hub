@@ -13,6 +13,7 @@ import { loadConversations, saveConversations, upsertConversation, dataDir, conv
 import { codexHome, configFile, readConfig, saveModelConfig, listEnvKeys, setEnvKey, loadModelPresets, saveModelPresets, ensureConfigFile } from './hub-config.ts';
 import { appendEvidence, evidenceFile, readRecentEvidence, evidenceHealth } from './evidence.ts';
 import { collectMcpPages, payloadOf } from './mcp-pagination.ts';
+import { dashboardReadPlan } from './dashboard-read-plan.ts';
 import { serveRuntimeImage, validOrigin, boundedLimit } from './http-security.ts';
 import {
   DailyQuestionConflictError,
@@ -52,7 +53,7 @@ import {
   setAgentSquadProject,
 } from './agent-squad-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
-import { BrowserSessionAuth, LOGIN_USERNAME, passwordFromEnvironment } from './web-auth.ts';
+import { BrowserSessionAuth, passwordFromEnvironment, usernameFromEnvironment } from './web-auth.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -75,7 +76,8 @@ if (!existsSync(join(codexHome, 'auth.json'))) {
 const cliArgs = process.argv.slice(2);
 const LAN_MODE = cliArgs.includes('--lan');
 const LISTEN_HOST = process.env.HOST || (LAN_MODE ? '0.0.0.0' : '127.0.0.1');
-const webAuth = new BrowserSessionAuth(passwordFromEnvironment());
+const LOGIN_USERNAME = usernameFromEnvironment();
+const webAuth = new BrowserSessionAuth(LOGIN_USERNAME, passwordFromEnvironment());
 const SESSION_COOKIE_RE = /(?:^|;\s*)aeos_session=([0-9a-f-]{36})(?:;|$)/;
 function addCookie(res: ServerResponse, value: string): void {
   const current = res.getHeader('set-cookie');
@@ -848,11 +850,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
       });
       sessionId = session.id;
       if (useCompanyControl) {
-        const today = new Date();
-        const from = new Date(today);
-        const to = new Date(today);
-        from.setUTCDate(from.getUTCDate() - 30);
-        to.setUTCDate(to.getUTCDate() + 60);
+        const readPlan = dashboardReadPlan(new Date());
         const [orders, shortages, kitting, quality, workOrders, capacity] = await Promise.allSettled([
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
@@ -861,7 +859,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-order-risk',
             runtimeInventory,
-          }), { date_from: from.toISOString().slice(0, 10), date_to: to.toISOString().slice(0, 10) }),
+          }), readPlan.orders),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -877,7 +875,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-material-kitting',
             runtimeInventory,
-          }), { required_date_start: from.toISOString().slice(0, 10), required_date_end: to.toISOString().slice(0, 10) }),
+          }), readPlan.kitting),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -895,7 +893,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id, server: 'company-control', tool: 'production_capacity_list',
             args: pageArgs, purpose: 'manager-dashboard-production-capacity', runtimeInventory,
-          }), { date_from: from.toISOString().slice(0, 10), date_to: to.toISOString().slice(0, 10) }),
+          }), readPlan.capacity),
         ]);
         if (orders.status === 'fulfilled') orderRiskResponse = orders.value;
         else warnings.push(`中控平台订单数据读取失败：${orders.reason instanceof Error ? orders.reason.message : String(orders.reason)}`);
@@ -1383,10 +1381,10 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const input = AttentionSearchRequestSchema.parse(await readJsonBody(req));
-      // 此接口只在用户显式开启“实时核查中台”并按 Enter 后调用。快照加载
-      // 通过既有 McpAccessGateway 的只读路径完成；不会写入业务系统或 Evidence。
+      // 该接口由用户显式点击“核查中台”（或按 Enter）调用。快照加载通过既有
+      // McpAccessGateway 的只读路径完成；不会写入业务系统或 Evidence。
       const snapshot = await loadDashboardSnapshot(true);
-      sendJson(res, 200, { query: input.query, live: searchLiveDashboard(input.query, snapshot) });
+      sendJson(res, 200, { query: input.query, source: input.source, live: searchLiveDashboard(input, snapshot) });
     } catch (error) {
       const status = error instanceof ZodError ? 400 : 503;
       sendJson(res, status, { error: (error as Error).message });

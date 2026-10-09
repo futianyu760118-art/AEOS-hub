@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
-export const LOGIN_USERNAME = 'demo';
+export const DEFAULT_LOGIN_USERNAME = 'demo';
 export const AUTH_COOKIE_NAME = 'aeos_auth';
 const AUTH_COOKIE_RE = /(?:^|;\s*)aeos_auth=([0-9a-f-]{36})(?:;|$)/;
 
@@ -9,9 +9,13 @@ function digest(value: string): Buffer {
 }
 
 /** Compare fixed-length hashes so authentication does not leak a password prefix by timing. */
-export function credentialsMatch(account: string, password: string, expectedPassword: string): boolean {
-  return timingSafeEqual(digest(account), digest(LOGIN_USERNAME))
+export function credentialsMatch(account: string, password: string, expectedUsername: string, expectedPassword: string): boolean {
+  return timingSafeEqual(digest(account), digest(expectedUsername))
     && timingSafeEqual(digest(password), digest(expectedPassword));
+}
+
+export function usernameFromEnvironment(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.AEOS_LOGIN_USERNAME ?? DEFAULT_LOGIN_USERNAME).trim() || DEFAULT_LOGIN_USERNAME;
 }
 
 export function passwordFromEnvironment(env: NodeJS.ProcessEnv = process.env): string {
@@ -22,14 +26,16 @@ export function passwordFromEnvironment(env: NodeJS.ProcessEnv = process.env): s
 
 export class BrowserSessionAuth {
   private readonly sessions = new Set<string>();
+  private readonly username: string;
   private readonly password: string;
 
-  constructor(password: string) {
+  constructor(username: string, password: string) {
+    this.username = username;
     this.password = password;
   }
 
   login(account: string, password: string): string | null {
-    if (!credentialsMatch(account, password, this.password)) return null;
+    if (!credentialsMatch(account, password, this.username, this.password)) return null;
     const sessionId = randomUUID();
     this.sessions.add(sessionId);
     return sessionId;

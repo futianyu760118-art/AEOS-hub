@@ -13,9 +13,9 @@ export function payloadOf(response: unknown): Row {
   return envelope;
 }
 
-/** Bounded sequential pages; never silently present a partial result as complete. */
+/** Bounded cursor-aware pages; never silently present a partial result as complete. */
 export async function collectMcpPages(
-  call: (args: Row) => Promise<unknown>, args: Row, maxPages = 20,
+  call: (args: Row) => Promise<unknown>, args: Row, maxPages = 20, pageSize = 100,
 ): Promise<unknown> {
   const rows: unknown[] = [];
   const refs = new Set<string>();
@@ -26,18 +26,25 @@ export async function collectMcpPages(
   let asOf = '';
   let confidence = 'high';
   const seenPages = new Set<string>();
-  for (let page = 1; page <= maxPages; page++) {
-    let payload: Row;
-    try { payload = payloadOf(await call({ ...args, page, page_size: 50 })); }
-    catch (error) {
-      if (page === 1) throw error;
-      warnings.push(`第 ${page} 页读取失败：${(error as Error).message}`);
+  let requestPage = 1;
+  const visitedPages = new Set<number>();
+  for (let attempt = 1; attempt <= maxPages; attempt++) {
+    if (visitedPages.has(requestPage)) {
+      warnings.push(`分页游标重复指向第 ${requestPage} 页，已停止翻页`);
       break;
     }
-    if (page === 1) first = payload;
+    visitedPages.add(requestPage);
+    let payload: Row;
+    try { payload = payloadOf(await call({ ...args, page: requestPage, page_size: pageSize })); }
+    catch (error) {
+      if (attempt === 1) throw error;
+      warnings.push(`第 ${requestPage} 页读取失败：${(error as Error).message}`);
+      break;
+    }
+    if (attempt === 1) first = payload;
     if (payload.error) {
-      if (page === 1) return { structuredContent: payload };
-      warnings.push(`第 ${page} 页不可用：${JSON.stringify(payload.error)}`);
+      if (attempt === 1) return { structuredContent: payload };
+      warnings.push(`第 ${requestPage} 页不可用：${JSON.stringify(payload.error)}`);
       break;
     }
     if (!Array.isArray(payload.data)) { warnings.push('未返回可解析的数据数组'); break; }
@@ -51,7 +58,7 @@ export async function collectMcpPages(
     }
     const stamp = typeof payload.data_as_of === 'string' ? payload.data_as_of : '';
     if (stamp && (!asOf || stamp < asOf)) asOf = stamp;
-    if (!stamp) warnings.push(`第 ${page} 页未返回数据时间`);
+    if (!stamp) warnings.push(`第 ${requestPage} 页未返回数据时间`);
     const level = payload.data_confidence;
     if (level === 'low') confidence = 'low';
     else if (level === 'medium' && confidence === 'high') confidence = 'medium';
@@ -59,8 +66,19 @@ export async function collectMcpPages(
     const meta = (payload.page ?? {}) as Row;
     if (typeof meta.total === 'number' && Number.isFinite(meta.total)) total = meta.total;
     const hasMore = meta.truncated === true || Boolean(meta.next_cursor) || (total !== null && rows.length < total);
-    if (!hasMore && (meta.truncated === false || total !== null || batch.length < 50)) { complete = true; break; }
+    const upstreamPageSize = typeof meta.page_size === 'number' && Number.isFinite(meta.page_size) && meta.page_size > 0 ? meta.page_size : pageSize;
+    if (!hasMore && (meta.truncated === false || total !== null || batch.length < upstreamPageSize)) { complete = true; break; }
     if (!batch.length) { warnings.push('分页尚未完成但上游返回空页'); break; }
+    if (typeof meta.next_cursor === 'string' && meta.next_cursor.trim()) {
+      const nextPage = Number(meta.next_cursor.trim());
+      if (!Number.isInteger(nextPage) || nextPage < 1) {
+        warnings.push('部分数据：中台返回的分页游标无法解析，统计不代表全部业务数据');
+        break;
+      }
+      requestPage = nextPage;
+    } else {
+      requestPage += 1;
+    }
   }
   if (!complete) warnings.push('部分数据：分页未完成，统计不代表全部业务数据');
   return { structuredContent: {

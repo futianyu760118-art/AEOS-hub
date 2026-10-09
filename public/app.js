@@ -27,7 +27,7 @@ const els = {
   navAttentionCount: $('#nav-attention-count'), btnAttentionRefresh: $('#btn-attention-refresh'),
   attentionL4Count: $('#attention-l4-count'), attentionL3Count: $('#attention-l3-count'),
   attentionL2Count: $('#attention-l2-count'), attentionDataStatus: $('#attention-data-status'),
-  attentionTable: $('#attention-table'), attentionSearch: $('#attention-search'), attentionLiveCheck: $('#attention-live-check'), attentionSearchStatus: $('#attention-search-status'), attentionSearchResults: $('#attention-search-results'), attentionSearchCaption: $('#attention-search-caption'), attentionResultAttention: $('#attention-result-attention'), attentionResultLive: $('#attention-result-live'), attentionResultHistory: $('#attention-result-history'), attentionSourceFilter: $('#attention-source-filter'),
+  attentionTable: $('#attention-table'), attentionSearch: $('#attention-search'), attentionLiveQuery: $('#attention-live-query'), attentionSearchStatus: $('#attention-search-status'), attentionSearchResults: $('#attention-search-results'), attentionSearchClose: $('#attention-search-close'), attentionSearchCaption: $('#attention-search-caption'), attentionResultAttention: $('#attention-result-attention'), attentionResultLive: $('#attention-result-live'), attentionResultHistory: $('#attention-result-history'), attentionSourceFilter: $('#attention-source-filter'),
   attentionStateFilter: $('#attention-state-filter'), attentionLevelFilter: $('#attention-level-filter'), attentionFilterCount: $('#attention-filter-count'),
   navInboxCount: $('#nav-inbox-count'), caseOpenCount: $('#case-open-count'), caseReviewCount: $('#case-review-count'),
   caseApprovalCount: $('#case-approval-count'), caseInboxCount: $('#case-inbox-count'), caseList: $('#case-list'),
@@ -136,6 +136,7 @@ let conversationQuery = '';
 let attentionFilter = { query: '', source: 'all', state: 'all', level: 'all' };
 let attentionLiveResult = null;
 let attentionLiveSearchBusy = false;
+let attentionResultsDismissed = false;
 let registryFilter = { query: '', source: 'all', state: 'all' };
 // AI 港湾仅改变浏览层级；子 Agent 的身份、记忆、动作和绑定关系仍各自独立。
 const expandedHarborBusinessSquadIds = new Set();
@@ -2327,11 +2328,13 @@ function attentionSearchRiskRows(snapshot) {
   return [...active.slice(0, 50), ...closed.filter((risk) => !activeIds.has(attentionCardId(risk))).slice(0, 50)];
 }
 
-function attentionSearchGroup(title, caption, items, emptyText) {
-  return `<section class="attention-search-result-section"><header><div><strong>${esc(title)}</strong><small>${esc(caption)}</small></div><b>${items.length}</b></header>${items.length ? `<div class="attention-search-result-list">${items.join('')}</div>` : `<p class="attention-search-empty">${esc(emptyText)}</p>`}</section>`;
+function attentionSearchGroup(title, caption, items, emptyText, notices = []) {
+  const warningList = notices.length ? `<details class="attention-query-notices"><summary>数据提示（${notices.length}）</summary><ul>${notices.map((notice) => `<li>${esc(notice)}</li>`).join('')}</ul></details>` : '';
+  return `<section class="attention-search-result-section"><header><div><strong>${esc(title)}</strong><small>${esc(caption)}</small></div><b>${items.length}</b></header>${warningList}${items.length ? `<div class="attention-search-result-list">${items.join('')}</div>` : `<p class="attention-search-empty">${esc(emptyText)}</p>`}</section>`;
 }
 
 function attentionLiveCompletionLabel(item) {
+  if (!item?.risk) return '<span class="status-pill neutral">中台概览</span>';
   const status = String(item?.risk?.orderStatus || '').trim();
   if (!status) return '<span class="status-pill warn">状态待回传</span>';
   return attentionShouldAutoClose(item.risk)
@@ -2357,19 +2360,28 @@ function bindAttentionExpandableEntries(scope) {
 function renderAttentionSearchResults(snapshot) {
   const query = String(attentionFilter.query || '').trim();
   if (!els.attentionSearchResults || !els.attentionResultAttention || !els.attentionResultLive || !els.attentionResultHistory) return;
-  if (!query) {
+  if (attentionResultsDismissed) {
     els.attentionSearchResults.classList.add('hidden');
-    els.attentionSearchStatus.textContent = '本地搜索';
+    return;
+  }
+  const live = attentionLiveResult?.live;
+  if (!query && !live) {
+    els.attentionSearchResults.classList.add('hidden');
+    if (!attentionLiveSearchBusy) els.attentionSearchStatus.textContent = '本地筛选 · 尚未核查中台';
     return;
   }
   const risks = attentionSearchRiskRows(snapshot).filter((risk) => attentionSearchMatch(query, risk.orderNo, risk.issueNo, risk.summary, risk.owner, risk.customer, risk.product, risk.evidenceRef, risk.orderStatus));
   const riskCards = risks.slice(0, 20).map((risk, index) => `<article class="attention-search-result-card"><span class="status-pill ${attentionShouldAutoClose(risk) ? 'ok' : 'info'}">${esc(risk.source === 'kitting' ? '物料齐套' : risk.source === 'quality' ? '异常与质量' : '订单交付')}</span><strong>${esc(risk.issueNo || risk.orderNo)} · ${esc(risk.summary)}</strong><small>${esc(risk.orderStatus || '状态待回传')} · ${esc(evidenceStatus(risk.evidenceRef))}</small><button type="button" class="btn ghost compact" data-attention-search-risk-index="${index}">查看详情</button></article>`);
-  els.attentionResultAttention.innerHTML = attentionSearchGroup('已关注事项', '当前 Attention 队列及中台已回传的近期闭环事项', riskCards, '没有匹配的 Attention 事项');
+  els.attentionResultAttention.innerHTML = query ? attentionSearchGroup('本地筛选结果', '当前 Attention 队列及中台已回传的近期闭环事项', riskCards, '没有匹配的 Attention 事项') : '';
 
-  const live = attentionLiveResult?.live;
-  const liveCards = Array.isArray(live?.items) ? live.items.map((item, index) => `<article class="attention-search-result-card"><div class="attention-live-result-tags"><span class="status-pill ${item.confidence === 'high' ? 'ok' : 'warn'}">${esc(item.source === 'kitting' ? '物料齐套' : item.source === 'quality' ? '异常与质量' : item.source === 'production' ? '生产协同' : '订单交付')} · ${esc(item.confidence || 'unknown')}</span>${attentionLiveCompletionLabel(item)}</div><strong>${esc(item.title)}</strong><small>${esc(item.summary)}${item.evidenceRefs?.length ? ` · ${esc(item.evidenceRefs.join('、'))}` : ' · 证据待补'}</small><button type="button" class="btn ghost compact" data-attention-live-risk-index="${index}">查看详情</button></article>`) : [];
-  const liveCaption = live ? (live.status === 'complete' ? '本次读取完成' : live.status === 'partial' ? `部分完成：${(live.warnings || []).join('；')}` : `暂不可用：${(live.warnings || []).join('；')}`) : '打开“实时核查中台”后按 Enter 发起新的只读查询';
-  els.attentionResultLive.innerHTML = attentionSearchGroup('实时中台核查', liveCaption, liveCards, live ? '本次核查未命中；这不代表中台没有其它数据，请调整关键词或查询范围。' : '尚未发起实时核查');
+  const liveCards = Array.isArray(live?.items) ? live.items.map((item, index) => {
+    const refs = Array.isArray(item.evidenceRefs) ? item.evidenceRefs : [];
+    const evidence = refs.length ? ` · ${refs.length} 条证据${refs.length <= 2 ? `：${refs.join('、')}` : ` · 示例：${refs.slice(0, 2).join('、')}`}` : ' · 证据待补';
+    return `<article class="attention-search-result-card"><div class="attention-live-result-tags"><span class="status-pill ${item.confidence === 'high' ? 'ok' : 'warn'}">${esc(item.source === 'kitting' ? '物料齐套' : item.source === 'quality' ? '异常与质量' : item.source === 'production' ? '生产协同' : '订单交付')} · ${esc(item.confidence || 'unknown')}</span>${attentionLiveCompletionLabel(item)}</div><strong>${esc(item.title)}</strong><small>${esc(item.summary)}${esc(evidence)}</small>${item.risk ? `<button type="button" class="btn ghost compact" data-attention-live-risk-index="${index}">查看详情</button>` : ''}</article>`;
+  }) : [];
+  const liveSources = Array.isArray(live?.sources) ? live.sources.map((source) => `${source.source === 'kitting' ? '齐套' : source.source === 'quality' ? '质量' : source.source === 'production' ? '生产' : '订单'}：${source.loaded}/${source.total ?? '未知'} 条 · ${source.dataAsOf || '时间未知'}${source.partial ? ' · 部分数据' : ''}`).join('；') : '';
+  const liveCaption = live ? (live.status === 'complete' ? `本次读取完成${liveSources ? `；${liveSources}` : ''}` : live.status === 'partial' ? `已返回部分数据${liveSources ? `；${liveSources}` : ''}` : `当前范围暂不可用${liveSources ? `；${liveSources}` : ''}`) : '尚未发起中台核查';
+  els.attentionResultLive.innerHTML = live ? attentionSearchGroup('实时中台核查', liveCaption, liveCards, live.status === 'complete' ? '本次读取完成，但该范围内没有匹配事项。' : '当前无法据此得出“没有数据”的结论，请查看数据提示后调整范围或稍后重试。', live.warnings || []) : '';
 
   const historyRows = [
     ...(evidenceRows || []).map((row) => ({ type: 'Evidence', title: row.summary || row.kind || '证据事件', detail: `${row.occurred_at || ''} ${row.item_type || ''}`, action: 'evidence' })),
@@ -2379,8 +2391,8 @@ function renderAttentionSearchResults(snapshot) {
     ...(squad.memories || []).map((row) => ({ type: 'Agent 记忆', title: row.content, detail: row.createdAt || '', action: 'squad' })),
   ].filter((row) => attentionSearchMatch(query, row.type, row.title, row.detail)).slice(0, 30);
   const historyCards = historyRows.map((row) => `<article class="attention-search-result-card"><span class="status-pill info">${esc(row.type)}</span>${attentionExpandableText(row.title)}<small>${esc(row.detail)}</small><button type="button" class="btn ghost compact" data-attention-search-target="${esc(row.action)}">查看来源</button></article>`);
-  els.attentionResultHistory.innerHTML = attentionSearchGroup('Evidence 与 Agent 动作', '最近证据、专业小队活动与独立记忆', historyCards, '没有匹配的 Evidence 或 Agent 动作');
-  els.attentionSearchCaption.textContent = `“${query}”的聚合结果；实时核查仅在手动开启后按 Enter 执行。`;
+  els.attentionResultHistory.innerHTML = query ? attentionSearchGroup('Evidence 与 Agent 动作', '最近证据、专业小队活动与独立记忆', historyCards, '没有匹配的 Evidence 或 Agent 动作') : '';
+  els.attentionSearchCaption.textContent = live ? `${query ? `“${query}”的` : '当前范围的'}本地筛选与最近一次只读中台核查结果。` : `“${query}”的本地筛选结果；点击“核查中台”可获取中台最新只读数据。`;
   els.attentionSearchResults.classList.remove('hidden');
 
   $$('[data-attention-search-risk-index]', els.attentionResultAttention).forEach((button) => button.addEventListener('click', () => openDashboardRiskDetail(risks[Number(button.dataset.attentionSearchRiskIndex)])));
@@ -3010,7 +3022,12 @@ function harborAgentActivity(agent) {
 function renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, hierarchy = {}) {
   const runtime = agent.runtimeId ? runtimeById.get(agent.runtimeId) : null;
   const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
-  const recent = harborAgentActivity(agent);
+  const isRoot = hierarchy.root === true;
+  // The root is an orchestrator, not a squad member.  Do not surface legacy
+  // child-member activity (which can contain retired records) in its row.
+  const recent = isRoot
+    ? { title: '顶层编排节点', detail: '仅负责跨小队路由与治理，不归属任何业务小队' }
+    : harborAgentActivity(agent);
   const hierarchyLabels = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
   const tier = hierarchy.tier || `${agent.hierarchyLevel || 'L2'} · ${hierarchyLabels[agent.hierarchyLevel] || '专项执行'}`;
   const parent = hierarchy.parent || (agent.parentAgentId ? `上级：${(harbor.agents || []).find((item) => item.id === agent.parentAgentId)?.name || '未找到'}` : (linkedMember ? '已关联业务小队' : '待关联业务小队'));
@@ -3021,9 +3038,11 @@ function renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, 
     <span>${harborTags(agent.skills, '尚未配置 Skill')}</span>
     <span>${esc(accessLabels[agent.access] || agent.access)}</span>
     <span class="harbor-cell harbor-agent-recent"><strong>${esc(recent.title)}</strong><small title="${esc(recent.detail)}">${esc(recent.detail)}</small></span>
-    <span class="harbor-agent-actions">${statusPill('agent', agent.status)}${linkedMember
-      ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
-      : `<button class="btn secondary compact harbor-add-to-squad" type="button" data-harbor-agent-id="${esc(agent.id)}">加入小队</button>`}<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button></span>
+    <span class="harbor-agent-actions">${statusPill('agent', agent.status)}${isRoot
+      ? '<span class="harbor-root-locked">根节点 · 不加入小队</span>'
+      : `${linkedMember
+        ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
+        : `<button class="btn secondary compact harbor-add-to-squad" type="button" data-harbor-agent-id="${esc(agent.id)}">加入小队</button>`}<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`}</span>
   </div>`;
 }
 
@@ -3031,7 +3050,7 @@ function renderHarborRootAgent(agent, runtimeById, autonomyLabels, accessLabels)
   if (!agent) return '';
   return `<section class="harbor-agent-root">
     <div class="harbor-agent-root-head"><span class="harbor-agent-root-icon"><i data-lucide="crown"></i></span><span><strong>L0 · 中枢 Agent</strong><small>负责跨小队编排、任务路由与治理门禁</small></span><b class="status-pill ok">根节点</b></div>
-    <div class="harbor-agent-root-member">${renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L0 · 中枢 Agent', parent: 'AI 港湾根节点' })}</div>
+    <div class="harbor-agent-root-member">${renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L0 · 中枢 Agent', parent: 'AI 港湾根节点', root: true })}</div>
   </section>`;
 }
 
@@ -4017,7 +4036,26 @@ document.addEventListener('click', (event) => {
   if (!els.userMenu.classList.contains('hidden') && !els.userMenu.contains(event.target) && !els.headerAvatar.contains(event.target) && !els.sidebarUser.contains(event.target)) els.userMenu.classList.add('hidden');
 });
 
+function bindDashboardModuleToggles() {
+  $$('.dashboard-module-toggle').forEach((button) => button.addEventListener('click', () => {
+    const module = button.closest('.dashboard-module');
+    const contentId = button.getAttribute('aria-controls');
+    const content = contentId ? document.getElementById(contentId) : null;
+    if (!module || !(content instanceof HTMLElement)) return;
+
+    const collapsed = module.classList.toggle('is-collapsed');
+    content.hidden = collapsed;
+    button.setAttribute('aria-expanded', String(!collapsed));
+    const label = $('[data-dashboard-toggle-label]', button);
+    if (label) {
+      const suffix = module.classList.contains('dashboard-platform-chain') ? '链路' : '';
+      label.textContent = `${collapsed ? '展开' : '收起'}${suffix}`;
+    }
+  }));
+}
+
 /* Navigation and command center */
+bindDashboardModuleToggles();
 $$('.nav-item').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
 $$('.nav-action, [data-target].metric').forEach((button) => button.addEventListener('click', (event) => { event.preventDefault(); showView(button.dataset.target); }));
 $$('.prompt-action').forEach((button) => button.addEventListener('click', () => openPrompt(button.dataset.prompt)));
@@ -4168,39 +4206,50 @@ els.headerAttention.addEventListener('click', () => showView('attention'));
 els.btnAttentionRefresh.addEventListener('click', () => loadDashboard({ force: true }));
 els.attentionSearch?.addEventListener('input', () => {
   attentionFilter.query = els.attentionSearch.value;
-  attentionLiveResult = null;
+  attentionResultsDismissed = false;
   if (dashboardSnapshot) renderAttention(dashboardSnapshot);
 });
-els.attentionSearch?.addEventListener('keydown', async (event) => {
-  if (event.key !== 'Enter' || !els.attentionLiveCheck?.checked) return;
-  event.preventDefault();
-  const query = String(els.attentionSearch.value || '').trim();
-  if (!query || attentionLiveSearchBusy) return;
+async function runAttentionLiveQuery() {
+  if (attentionLiveSearchBusy) return;
+  const query = String(els.attentionSearch?.value || '').trim();
+  const source = String(els.attentionSourceFilter?.value || 'all');
+  attentionResultsDismissed = false;
   attentionLiveSearchBusy = true;
-  els.attentionSearchStatus.textContent = '正在读取中台…';
+  if (els.attentionLiveQuery) {
+    els.attentionLiveQuery.disabled = true;
+    els.attentionLiveQuery.setAttribute('aria-busy', 'true');
+  }
+  els.attentionSearchStatus.textContent = '正在只读核查中台…';
   try {
     const response = await fetch('/api/attention/search', {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ query, live: true }),
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ query, source, live: true }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    // Only retain the response if it still belongs to the visible query.
-    if (String(els.attentionSearch.value || '').trim() === query) {
-      attentionLiveResult = data;
-      els.attentionSearchStatus.textContent = data.live?.status === 'complete' ? '中台核查完成' : data.live?.status === 'partial' ? '中台部分返回' : '中台暂不可用';
-      if (dashboardSnapshot) renderAttention(dashboardSnapshot);
-    }
+    attentionLiveResult = data;
+    els.attentionSearchStatus.textContent = data.live?.status === 'complete' ? '中台核查完成' : data.live?.status === 'partial' ? '中台部分返回 · 请查看数据提示' : '中台暂不可用 · 未得出无数据结论';
   } catch (error) {
-    attentionLiveResult = { live: { status: 'unavailable', items: [], warnings: [(error && error.message) || '中台核查失败'] } };
-    els.attentionSearchStatus.textContent = '中台核查失败';
-    if (dashboardSnapshot) renderAttention(dashboardSnapshot);
+    attentionLiveResult = { query, source, live: { status: 'unavailable', items: [], sources: [], warnings: [(error && error.message) || '中台核查失败'] } };
+    els.attentionSearchStatus.textContent = '中台核查失败 · 请稍后重试';
   } finally {
     attentionLiveSearchBusy = false;
+    if (els.attentionLiveQuery) {
+      els.attentionLiveQuery.disabled = false;
+      els.attentionLiveQuery.removeAttribute('aria-busy');
+    }
+    if (dashboardSnapshot) renderAttention(dashboardSnapshot);
   }
+}
+els.attentionSearch?.addEventListener('keydown', async (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  await runAttentionLiveQuery();
 });
-els.attentionLiveCheck?.addEventListener('change', () => {
+els.attentionLiveQuery?.addEventListener('click', runAttentionLiveQuery);
+els.attentionSearchClose?.addEventListener('click', () => {
+  attentionResultsDismissed = true;
   attentionLiveResult = null;
-  els.attentionSearchStatus.textContent = els.attentionLiveCheck.checked ? '按 Enter 核查中台' : '本地搜索';
+  els.attentionSearchStatus.textContent = '本地筛选 · 已收起核查结果';
   if (dashboardSnapshot) renderAttention(dashboardSnapshot);
 });
 els.attentionSourceFilter?.addEventListener('change', () => { attentionFilter.source = els.attentionSourceFilter.value; if (dashboardSnapshot) renderAttention(dashboardSnapshot); });

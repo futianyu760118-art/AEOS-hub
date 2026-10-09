@@ -47,6 +47,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8787
+      AEOS_LOGIN_USERNAME: ${AEOS_LOGIN_USERNAME:-demo}
       AEOS_LOGIN_PASSWORD: ${AEOS_LOGIN_PASSWORD:?请先在 .env 设置 AEOS_LOGIN_PASSWORD}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:

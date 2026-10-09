@@ -87,11 +87,11 @@ CODEX_HOME="$PWD/.codex-home" ./node_modules/.bin/codex login
 npm run test:mcp        # MCP 链路
 npm test                # Harbor 存储 + Runtime 健康 + MCP 全量测试
 
-# 4) 设置 Web 登录密码（账号固定为 demo；不要提交或发送该密码）
-#    PowerShell 示例：$env:AEOS_LOGIN_PASSWORD = '请替换为强密码'
+# 4) 设置 Web 登录账号与密码（不要提交或发送这些值）
+#    PowerShell 示例：$env:AEOS_LOGIN_USERNAME = 'manager'; $env:AEOS_LOGIN_PASSWORD = '请替换为强密码'
 
 # 5) 启动 Web 控制台（默认仅本机）
-npm run web             # → http://127.0.0.1:8787   账号: demo；密码来自 AEOS_LOGIN_PASSWORD
+npm run web             # → http://127.0.0.1:8787   账号/密码来自 AEOS_LOGIN_USERNAME / AEOS_LOGIN_PASSWORD
 
 # 6) 局域网共享（同事仍需输入账号密码）
 npm run web:lan         # 首次不通请在管理员 PowerShell 放行端口：

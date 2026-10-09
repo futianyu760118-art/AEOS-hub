@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=modal-system-20260930" />
+  <link rel="stylesheet" href="/style.css?v=dashboard-chain-layout-20261009" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -60,7 +60,7 @@
             </div>
           </form>
         </div>
-        <div class="login-foot"><i data-lucide="shield-check" aria-hidden="true"></i><span>登录账号：demo · 密码由管理员配置</span></div>
+        <div class="login-foot"><i data-lucide="shield-check" aria-hidden="true"></i><span>账号与密码由管理员配置</span></div>
       </div>
     </div>
   </section>
@@ -177,65 +177,76 @@
           </div>
           </section>
 
-          <section class="surface future-window-surface dashboard-layout-item">
-            <div class="surface-head"><div><h2>未来窗口 · 经营风险</h2><p id="dashboard-future-caption">订单交付、物料齐套与质量异常 · 正在同步</p></div><button class="text-action nav-action" type="button" data-target="attention">全部待关注事项<i data-lucide="chevron-right"></i></button></div>
-            <div id="dashboard-future-table" class="data-table future-window-table">
+          <section class="surface dashboard-platform-chain dashboard-layout-item dashboard-module is-collapsed">
+            <div class="dashboard-platform-chain-head">
+              <button class="dashboard-platform-chain-toggle dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-platform-chain-content">
+                <span class="dashboard-platform-chain-title"><span class="dashboard-platform-chain-icon"><i data-lucide="network"></i></span><span><small>经营总览 · 中台协同</small><strong>中台链路</strong><em>订单、物料、质量、生产与决策治理的只读协同链路</em></span></span>
+                <span class="dashboard-platform-chain-control"><span data-dashboard-toggle-label>展开链路</span><i data-lucide="chevron-right"></i></span>
+              </button>
+            </div>
+            <div id="dashboard-platform-chain-content" class="dashboard-module-content" hidden>
+              <div class="dashboard-platform-chain-route" aria-label="中台链路阶段"><span><i data-lucide="database"></i>中台事实</span><i data-lucide="arrow-right"></i><span><i data-lucide="scan-search"></i>风险识别</span><i data-lucide="arrow-right"></i><span><i data-lucide="bot"></i>只读分析</span><i data-lucide="arrow-right"></i><span><i data-lucide="clipboard-check"></i>人工决策</span><i data-lucide="arrow-right"></i><span><i data-lucide="file-check-2"></i>证据留痕</span></div>
+          <section class="surface future-window-surface dashboard-layout-item dashboard-module is-collapsed">
+            <div class="surface-head"><div><h2>未来窗口 · 经营风险</h2><p id="dashboard-future-caption">订单交付、物料齐套与质量异常 · 正在同步</p></div><button class="text-action nav-action" type="button" data-target="attention">全部待关注事项<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-future-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-future-content" class="dashboard-module-content" hidden><div id="dashboard-future-table" class="data-table future-window-table">
               <div class="future-window-row future-window-head"><span>来源 / 风险事项</span><span>需求对象</span><span>影响金额</span><span>风险信号</span><span>交期 / 需求日期</span><span>责任人</span></div>
               <div class="dashboard-loading">正在读取未来窗口风险…</div>
-            </div>
+            </div></div>
           </section>
 
-          <div class="dashboard-grid dashboard-grid-main dashboard-layout-item">
-            <section class="surface risk-surface">
-              <div class="surface-head"><div><h2>订单交付风险 · 异常概览</h2><p id="dashboard-risk-caption">未来 60 天 · 仅展示订单交付风险 · 正在同步</p></div><button id="dashboard-order-agent" class="text-action module-agent-action" type="button">交给风险交付 Agent 分析<i data-lucide="chevron-right"></i></button></div>
-              <div id="dashboard-order-metrics" class="order-risk-metric-grid" aria-live="polite"><div class="order-risk-metric"><span>订单风险</span><strong>—</strong><small>正在同步</small></div></div>
+          <div class="dashboard-grid dashboard-grid-main dashboard-platform-chain-grid">
+            <section class="surface risk-surface dashboard-module is-collapsed">
+              <div class="surface-head"><div><h2>订单交付风险 · 异常概览</h2><p id="dashboard-risk-caption">未来 60 天 · 仅展示订单交付风险 · 正在同步</p></div><button id="dashboard-order-agent" class="text-action module-agent-action" type="button">交给风险交付 Agent 分析<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-order-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+              <div id="dashboard-order-content" class="dashboard-module-content" hidden><div id="dashboard-order-metrics" class="order-risk-metric-grid" aria-live="polite"><div class="order-risk-metric"><span>订单风险</span><strong>—</strong><small>正在同步</small></div></div>
               <div id="dashboard-data-quality" class="dashboard-data-quality" aria-live="polite">正在核对订单字段完整度…</div>
               <div id="dashboard-risk-table" class="data-table risk-table">
                 <div class="table-row table-head"><span>风险事项</span><span>客户 / 产品</span><span>订单数量</span><span>影响金额</span><span>概率 / 等级</span><span>合同交期 / 出货计划</span><span>负责人</span><span>订单状态</span></div>
                 <div class="dashboard-loading">正在读取订单风险…</div>
-              </div>
-            </section>
-
-            <section class="surface question-surface">
-              <div class="surface-head"><div><h2 id="daily-question-title">每日经营六问</h2><p id="daily-question-caption">大模型按日期、角色与优先级生成</p></div><div class="question-head-actions"><button id="daily-question-shuffle" class="text-action" type="button"><i data-lucide="refresh-cw"></i>换一组</button><button id="daily-question-configure" class="icon-btn" type="button" title="配置每日经营问题" aria-label="配置每日经营问题"><i data-lucide="settings-2"></i></button></div></div>
-              <div id="daily-question-list" class="question-list" aria-live="polite"><div class="question-loading">正在加载经营问题…</div></div>
+              </div></div>
             </section>
           </div>
 
-          <section class="surface kitting-surface dashboard-layout-item">
-            <div class="surface-head"><div><h2>物料齐套中心 · 异常概览</h2><p id="dashboard-kitting-caption">仅展示非 FULL 的齐套结果 · 正在同步</p></div><button id="dashboard-kitting-agent" class="text-action module-agent-action" type="button">交给物料齐套 Agent 分析<i data-lucide="chevron-right"></i></button></div>
-            <div id="dashboard-kitting-metrics" class="kitting-metric-grid" aria-live="polite"><div class="kitting-metric"><span>齐套异常</span><strong>—</strong><small>正在同步</small></div></div>
+          <section class="surface kitting-surface dashboard-layout-item dashboard-module is-collapsed">
+            <div class="surface-head"><div><h2>物料齐套中心 · 异常概览</h2><p id="dashboard-kitting-caption">仅展示非 FULL 的齐套结果 · 正在同步</p></div><button id="dashboard-kitting-agent" class="text-action module-agent-action" type="button">交给物料齐套 Agent 分析<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-kitting-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-kitting-content" class="dashboard-module-content" hidden><div id="dashboard-kitting-metrics" class="kitting-metric-grid" aria-live="polite"><div class="kitting-metric"><span>齐套异常</span><strong>—</strong><small>正在同步</small></div></div>
             <div id="dashboard-kitting-table" class="data-table kitting-table">
               <div class="kitting-row kitting-head"><span>需求对象 / 齐套状态</span><span>需求日期 / 预计齐套</span><span>齐套率 / 缺料项</span><span>影响金额</span><span>责任人</span><span>证据状态</span></div>
               <div class="dashboard-loading">正在读取物料齐套结果…</div>
-            </div>
+            </div></div>
           </section>
 
-          <section class="surface quality-surface dashboard-layout-item">
-            <div class="surface-head"><div><h2>异常与质量中心 · 异常概览</h2><p id="dashboard-quality-caption">仅展示未关闭的质量异常 · 正在同步</p></div><button id="dashboard-quality-agent" class="text-action module-agent-action" type="button">交给异常与质量 Agent 分析<i data-lucide="chevron-right"></i></button></div>
-            <div id="dashboard-quality-metrics" class="quality-metric-grid" aria-live="polite"><div class="quality-metric"><span>质量异常</span><strong>—</strong><small>正在同步</small></div></div>
+          <section class="surface quality-surface dashboard-layout-item dashboard-module is-collapsed">
+            <div class="surface-head"><div><h2>异常与质量中心 · 异常概览</h2><p id="dashboard-quality-caption">仅展示未关闭的质量异常 · 正在同步</p></div><button id="dashboard-quality-agent" class="text-action module-agent-action" type="button">交给异常与质量 Agent 分析<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-quality-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-quality-content" class="dashboard-module-content" hidden><div id="dashboard-quality-metrics" class="quality-metric-grid" aria-live="polite"><div class="quality-metric"><span>质量异常</span><strong>—</strong><small>正在同步</small></div></div>
             <div id="dashboard-quality-table" class="data-table quality-table">
               <div class="quality-row quality-head"><span>异常编号 / 状态</span><span>关联订单 / 产品</span><span>缺陷类型 / 提交部门</span><span>发生时间</span><span>责任人 / 组织</span><span>证据状态</span></div>
               <div class="dashboard-loading">正在读取异常与质量结果…</div>
-            </div>
+            </div></div>
           </section>
-          <section class="surface quality-surface dashboard-layout-item">
-            <div class="surface-head"><div><h2>生产协同中心 · 链路概览</h2><p id="dashboard-production-caption">工单、工序、订单关联、报工与产能 · 正在同步</p></div><button id="dashboard-production-agent" class="text-action module-agent-action" type="button">交给生产协同 Agent 分析<i data-lucide="chevron-right"></i></button></div>
-            <div id="dashboard-production-metrics" class="quality-metric-grid" aria-live="polite"><div class="quality-metric"><span>生产链路</span><strong>—</strong><small>正在同步</small></div></div>
-            <div id="dashboard-production-table" class="data-table quality-table"><div class="quality-row quality-head"><span>工单号 / 状态</span><span>销售订单 / 产品</span><span>计划完工</span><span>车间</span><span>责任字段</span><span>证据状态</span></div><div class="dashboard-loading">正在读取生产协同数据…</div></div>
+          <section class="surface quality-surface production-surface dashboard-layout-item dashboard-module is-collapsed">
+            <div class="surface-head"><div><h2>生产协同中心 · 链路概览</h2><p id="dashboard-production-caption">工单、工序、订单关联、报工与产能 · 正在同步</p></div><button id="dashboard-production-agent" class="text-action module-agent-action" type="button">交给生产协同 Agent 分析<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-production-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-production-content" class="dashboard-module-content" hidden><div id="dashboard-production-metrics" class="quality-metric-grid" aria-live="polite"><div class="quality-metric"><span>生产链路</span><strong>—</strong><small>正在同步</small></div></div>
+            <div id="dashboard-production-table" class="data-table quality-table"><div class="quality-row quality-head"><span>工单号 / 状态</span><span>销售订单 / 产品</span><span>计划完工</span><span>车间</span><span>责任字段</span><span>证据状态</span></div><div class="dashboard-loading">正在读取生产协同数据…</div></div></div>
           </section>
 
           <div class="dashboard-grid dashboard-grid-secondary dashboard-layout-item">
-            <section class="surface">
-              <div class="surface-head"><div><h2>TOP 决策</h2><p>只呈现需要责任人介入的事项</p></div><button class="text-action nav-action" type="button" data-target="attention">全部事项<i data-lucide="chevron-right"></i></button></div>
-              <div id="dashboard-decision-list" class="decision-list"><div class="dashboard-loading">正在计算 TOP 决策…</div></div>
+            <section class="surface dashboard-module is-collapsed">
+              <div class="surface-head"><div><h2>TOP 决策</h2><p>只呈现需要责任人介入的事项</p></div><button class="text-action nav-action" type="button" data-target="attention">全部事项<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-decision-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+              <div id="dashboard-decision-content" class="dashboard-module-content" hidden><div id="dashboard-decision-list" class="decision-list"><div class="dashboard-loading">正在计算 TOP 决策…</div></div></div>
             </section>
 
-            <section class="surface capability-pulse">
-              <div class="surface-head"><div><h2>能力与治理脉冲</h2><p>共享内核当前试点覆盖</p></div><button class="text-action nav-action" type="button" data-target="registry">Registry<i data-lucide="chevron-right"></i></button></div>
-              <div id="dashboard-pulse-list" class="pulse-list"><div class="dashboard-loading">正在同步能力与治理状态…</div></div>
+            <section class="surface capability-pulse dashboard-module is-collapsed">
+              <div class="surface-head"><div><h2>能力与治理脉冲</h2><p>共享内核当前试点覆盖</p></div><button class="text-action nav-action" type="button" data-target="registry">Registry<i data-lucide="chevron-right"></i></button><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-pulse-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+              <div id="dashboard-pulse-content" class="dashboard-module-content" hidden><div id="dashboard-pulse-list" class="pulse-list"><div class="dashboard-loading">正在同步能力与治理状态…</div></div></div>
             </section>
           </div>
+            </div>
+          </section>
+
+          <section class="surface question-surface dashboard-layout-item dashboard-module is-collapsed">
+            <div class="surface-head"><div><h2 id="daily-question-title">每日经营六问</h2><p id="daily-question-caption">大模型按日期、角色与优先级生成</p></div><div class="question-head-actions"><button id="daily-question-shuffle" class="text-action" type="button"><i data-lucide="refresh-cw"></i>换一组</button><button id="daily-question-configure" class="icon-btn" type="button" title="配置每日经营问题" aria-label="配置每日经营问题"><i data-lucide="settings-2"></i></button></div><button class="dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-questions-content"><span data-dashboard-toggle-label>展开</span><i data-lucide="chevron-right"></i></button></div>
+            <div id="dashboard-questions-content" class="dashboard-module-content" hidden><div id="daily-question-list" class="question-list" aria-live="polite"><div class="question-loading">正在加载经营问题…</div></div></div>
+          </section>
         </section>
 
         <section id="view-chat" class="view app-view hidden">
@@ -262,8 +273,8 @@
           <div class="attention-summary"><div><span class="severity high">L4</span><strong id="attention-l4-count">0</strong><small>重要升级</small></div><div><span class="severity medium">L3</span><strong id="attention-l3-count">0</strong><small>责任人处理</small></div><div><span class="severity low">L2</span><strong id="attention-l2-count">0</strong><small>专业中心预警</small></div><div><span class="status-dot running"></span><strong id="guard-pending-count">0</strong><small>实时审批请求</small></div></div>
           <section class="surface attention-board">
             <div class="surface-head"><div><h2>需人关注事项</h2><p>金额影响 × 概率 × 时效</p></div><span id="attention-data-status" class="status-pill info">正在同步</span></div>
-            <div class="attention-filter-bar"><div class="attention-search"><i data-lucide="search"></i><input id="attention-search" type="search" placeholder="搜索经营事项、证据或 Agent 动作" aria-label="搜索 Attention、Evidence 或 Agent 动作" /></div><label class="attention-live-check" title="开启后按 Enter 才会向中台发起新的只读核查"><input id="attention-live-check" type="checkbox" />实时核查中台</label><span id="attention-search-status" class="attention-search-status">本地搜索</span><select id="attention-source-filter" aria-label="筛选事项来源"><option value="all">全部来源</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">异常与质量</option></select><select id="attention-state-filter" aria-label="筛选事项状态"><option value="all">全部状态</option><option value="new">待研判</option><option value="review">分析中</option><option value="owner">待责任人</option><option value="closed">已闭环</option></select><select id="attention-level-filter" aria-label="筛选风险等级"><option value="all">全部等级</option><option value="L4">L4 · 重要升级</option><option value="L3">L3 · 责任人处理</option><option value="L2">L2 · 专业中心预警</option></select><span id="attention-filter-count" class="attention-filter-count"></span></div>
-            <section id="attention-search-results" class="attention-active-search hidden" aria-live="polite"><div class="attention-active-search-head"><div><strong>搜索结果</strong><small id="attention-search-caption">输入关键词后，聚合显示 Attention、Evidence 与 Agent 动作。</small></div></div><div id="attention-result-attention" class="attention-search-group"></div><div id="attention-result-live" class="attention-search-group"></div><div id="attention-result-history" class="attention-search-group"></div></section>
+            <div class="attention-filter-bar"><div class="attention-query-main"><div class="attention-search"><i data-lucide="search"></i><input id="attention-search" type="search" placeholder="订单号、工单号、物料、异常号或责任人（可留空）" aria-label="本地筛选 Attention、Evidence 或 Agent 动作" /></div><button id="attention-live-query" class="btn primary compact" type="button" title="只读查询中台，不写入任何业务数据"><i data-lucide="scan-search"></i>核查中台</button></div><div class="attention-query-meta"><span>输入后即时本地筛选；留空后点击“核查中台”可查看当前可读事项。</span><span id="attention-search-status" class="attention-search-status">本地筛选 · 尚未核查中台</span></div><div class="attention-filter-row"><select id="attention-source-filter" aria-label="筛选事项来源"><option value="all">全部来源</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">异常与质量</option><option value="production">生产协同</option></select><select id="attention-state-filter" aria-label="筛选事项状态"><option value="all">全部状态</option><option value="new">待研判</option><option value="review">分析中</option><option value="owner">待责任人</option><option value="closed">已闭环</option></select><select id="attention-level-filter" aria-label="筛选风险等级"><option value="all">全部等级</option><option value="L4">L4 · 重要升级</option><option value="L3">L3 · 责任人处理</option><option value="L2">L2 · 专业中心预警</option></select><span id="attention-filter-count" class="attention-filter-count"></span></div></div>
+            <section id="attention-search-results" class="attention-active-search hidden" aria-live="polite"><div class="attention-active-search-head"><div><strong>搜索结果</strong><small id="attention-search-caption">输入关键词后，聚合显示 Attention、Evidence 与 Agent 动作。</small></div><button id="attention-search-close" class="btn ghost compact" type="button" title="收起本次搜索和中台核查结果">收起结果</button></div><div id="attention-result-attention" class="attention-search-group"></div><div id="attention-result-live" class="attention-search-group"></div><div id="attention-result-history" class="attention-search-group"></div></section>
             <div id="attention-table" class="attention-kanban"><div class="dashboard-loading">正在读取 MCP 经营风险…</div></div>
           </section>
           <div class="attention-principle"><i data-lucide="shield-alert"></i><div><strong>责任不因 AI 自动化消失</strong><p>涉及金额、承诺、质量、法律或不可逆影响的事项，保持 Accountable Owner 与 Guard 门禁；中台明确返回 completed / closed / FULL 时自动进入“已闭环”，Agent 研判完成只转“待责任人”，不会替代人工确认。</p></div></div>

@@ -1,4 +1,4 @@
-import { appendEvidence, type EvidenceEntry } from './evidence.ts';
+import { appendEvidence, type EvidenceEntry, type EvidenceInput } from './evidence.ts';
 import { findMcpRegistration, type McpRegistry } from './mcp-registry.ts';
 
 type JsonRecord = Record<string, unknown>;
@@ -49,7 +49,7 @@ export class McpAccessGateway {
   private readonly runtime: McpToolRuntime;
   private readonly registry: McpRegistry;
   private readonly now: () => number;
-  private readonly recordEvidence: (partial: Omit<EvidenceEntry, 'event_id' | 'occurred_at'>) => EvidenceEntry;
+  private readonly recordEvidence: (partial: EvidenceInput) => EvidenceEntry;
 
   constructor(
     runtime: McpToolRuntime,

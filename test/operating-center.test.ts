@@ -36,6 +36,33 @@ test('creates evidence-bound operating cases, Inbox work, and human decisions wi
   assert.equal(store.load().inbox.length, 2);
 });
 
+test('keeps an Agent result pending until a business owner verifies it', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'aeos-result-verify-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const store = new OperatingCenterStore(join(directory, 'operating-center.json'), () => new Date('2026-10-09T01:00:00.000Z'));
+  const item = store.upsertDashboardRisks([risk], 'dashboard', 1).created[0]!;
+
+  const result = store.createPendingResult({
+    caseId: item.id,
+    resultType: 'risk_analysis',
+    summary: 'Agent 已完成只读风险分析，等待业务确认。',
+    actor: 'agent:quality-analysis',
+  });
+  assert.equal(result.status, 'PENDING');
+  assert.equal(result.verified_by, null);
+  assert.deepEqual(result.evidence_refs, [risk.evidenceRef]);
+
+  assert.throws(
+    () => store.verifyResult({ resultId: result.result_id, outcome: 'VERIFIED', actor: 'agent:quality-analysis', note: 'Agent 自行确认。' }),
+    /业务 Owner 或规则/,
+  );
+
+  const verified = store.verifyResult({ resultId: result.result_id, outcome: 'VERIFIED', actor: '质量负责人:张三', note: '已核实，后续由质量部门按流程处理。' });
+  assert.equal(verified.status, 'VERIFIED');
+  assert.equal(verified.verified_by, '质量负责人:张三');
+  assert.ok(verified.verified_at);
+});
+
 test('migrates legacy Autopilot snapshots without losing operating records', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'aeos-autopilot-migration-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -51,14 +78,15 @@ test('migrates legacy Autopilot snapshots without losing operating records', (t)
   }, null, 2));
 
   const migrated = store.load();
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(migrated.cases[0]?.id, created.id);
   assert.ok(!('autopilot' in migrated));
   assert.ok(!('runs' in migrated));
 
   store.updateCase({ id: created.id, status: 'in_review' });
   const persisted = JSON.parse(readFileSync(file, 'utf8'));
-  assert.equal(persisted.version, 2);
+  assert.equal(persisted.version, 3);
   assert.ok(!('autopilot' in persisted));
   assert.ok(!('runs' in persisted));
 });
+

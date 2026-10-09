@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { ResultContractSchema, type ResultContract } from './result-contract.ts';
 import { atomicWrite } from './atomic-file.ts';
 import type { DashboardRisk } from './dashboard.ts';
 
@@ -31,15 +32,21 @@ export const DecisionSchema = z.object({
 }).strict();
 export type OperatingDecision = z.infer<typeof DecisionSchema>;
 
+export const OperatingResultSchema = ResultContractSchema.extend({
+  case_id: text(100, 1),
+}).strict();
+export type OperatingResult = z.infer<typeof OperatingResultSchema>;
+
 export const InboxItemSchema = z.object({
-  id: text(100, 1), kind: z.enum(['new_case', 'decision_required', 'autopilot_result']), caseId: text(100, 1).nullable(),
+  id: text(100, 1), kind: z.enum(['new_case', 'decision_required', 'autopilot_result', 'result_verification_required']), caseId: text(100, 1).nullable(),
   title: text(300, 1), detail: text(1_500), state: inboxStateSchema, createdAt: timestamp, updatedAt: timestamp,
 }).strict();
 export type InboxItem = z.infer<typeof InboxItemSchema>;
 
 const SnapshotSchema = z.object({
-  version: z.literal(2), revision: z.number().int().nonnegative(), updatedAt: timestamp,
+  version: z.literal(3), revision: z.number().int().nonnegative(), updatedAt: timestamp,
   cases: z.array(OperatingCaseSchema).max(5_000), decisions: z.array(DecisionSchema).max(20_000),
+  results: z.array(OperatingResultSchema).max(20_000),
   // Retain legacy autopilot_result Inbox items for data compatibility, but no
   // new item of that kind is created and the UI no longer renders them.
   inbox: z.array(InboxItemSchema).max(20_000),
@@ -53,16 +60,19 @@ function dateKey(clock: () => Date): string {
 function defaultSnapshot(clock: () => Date): OperatingCenterSnapshot {
   const createdAt = now(clock);
   return {
-    version: 2, revision: 0, updatedAt: createdAt, cases: [], decisions: [], inbox: [],
+    version: 3, revision: 0, updatedAt: createdAt, cases: [], decisions: [], results: [], inbox: [],
   };
 }
 function parse(value: unknown, source: string): OperatingCenterSnapshot {
   // Version 1 carried the removed scheduler configuration and run history.
   // Keep the business records, but do not revive the scheduler from a legacy
   // snapshot. The converted version is persisted on the next normal mutation.
-  const candidate = value && typeof value === 'object' && !Array.isArray(value) && (value as { version?: unknown }).version === 1
-    ? (() => { const { autopilot: _autopilot, runs: _runs, ...rest } = value as Record<string, unknown>; return { ...rest, version: 2 }; })()
-    : value;
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const candidate = record?.version === 1
+    ? (() => { const { autopilot: _autopilot, runs: _runs, ...rest } = record; return { ...rest, version: 3, results: [] }; })()
+    : record?.version === 2
+      ? { ...record, version: 3, results: [] }
+      : value;
   const parsed = SnapshotSchema.safeParse(candidate);
   if (!parsed.success) throw new Error(`${source} 数据无效：${parsed.error.issues.slice(0, 3).map((issue) => issue.message).join('；')}`);
   return parsed.data;
@@ -89,6 +99,90 @@ function riskKey(risk: DashboardRisk): string {
 }
 
 export class OperatingCenterStore {
+  /**
+   * Records an Agent or workflow output as a business result, not as a completed
+   * business action. A Result must remain PENDING until a business owner or a
+   * registered rule verifies it.
+   */
+  createPendingResult(input: Record<string, unknown>): OperatingResult {
+    const caseId = typeof input.caseId === 'string' ? input.caseId.trim() : '';
+    const resultType = typeof input.resultType === 'string' ? input.resultType.trim() : '';
+    const summary = typeof input.summary === 'string' ? input.summary.trim() : '';
+    const createdBy = typeof input.actor === 'string' ? input.actor.trim()
+      : typeof input.createdBy === 'string' ? input.createdBy.trim() : '';
+    if (!caseId || !resultType || !summary || !createdBy) {
+      throw new Error('创建 Result 需要 caseId、resultType、summary 和 actor');
+    }
+
+    return this.mutate((snapshot, createdAt) => {
+      const item = snapshot.cases.find((candidate) => candidate.id === caseId);
+      if (!item) throw new Error(`未找到运营事项：${caseId}`);
+
+      const base: ResultContract = {
+        result_id: `result-${randomUUID()}`,
+        result_type: resultType,
+        tenant_id: process.env.AEOS_TENANT_ID?.trim() || 'pilot-default',
+        object_ref: `business://${item.source}/${encodeURIComponent(item.entityId)}`,
+        owner: item.ownerRole,
+        created_by: createdBy,
+        status: 'PENDING',
+        source_system: 'aeos-hub',
+        correlation_id: item.id,
+        version: '1.0',
+        evidence_refs: item.evidenceRefs,
+        summary,
+        created_at: createdAt,
+        verified_by: null,
+        verified_at: null,
+        verification_note: null,
+      };
+      const result = OperatingResultSchema.parse({ ...base, case_id: item.id });
+      snapshot.results.push(result);
+      snapshot.inbox.push(InboxItemSchema.parse({
+        id: `inbox-${randomUUID()}`,
+        kind: 'result_verification_required',
+        caseId: item.id,
+        title: `待验证结果：${item.title}`,
+        detail: `${createdBy} 已提交结果，需由业务 Owner 或已登记规则验证；该记录不代表业务已完成。`,
+        state: 'unread',
+        createdAt,
+        updatedAt: createdAt,
+      }));
+      return result;
+    });
+  }
+
+  verifyResult(input: Record<string, unknown>): OperatingResult {
+    const resultId = typeof input.resultId === 'string' ? input.resultId.trim() : '';
+    const status = input.status === 'VERIFIED' || input.status === 'REJECTED'
+      ? input.status : input.outcome === 'VERIFIED' || input.outcome === 'REJECTED' ? input.outcome : '';
+    const actor = typeof input.actor === 'string' ? input.actor.trim() : '';
+    const note = typeof input.note === 'string' ? input.note.trim()
+      : typeof input.verificationNote === 'string' ? input.verificationNote.trim() : '';
+    if (!resultId || !status || !actor || !note) {
+      throw new Error('验证 Result 需要 resultId、status、actor 和 note');
+    }
+    if (/^(agent|system):/i.test(actor)) {
+      throw new Error('Agent 或系统身份不能验证业务 Result；请由业务 Owner 或规则确认');
+    }
+
+    return this.mutate((snapshot, verifiedAt) => {
+      const index = snapshot.results.findIndex((candidate) => candidate.result_id === resultId);
+      if (index < 0) throw new Error(`未找到 Result：${resultId}`);
+      const current = snapshot.results[index]!;
+      if (current.status !== 'PENDING') throw new Error(`Result 已处于 ${current.status} 状态，不能重复验证`);
+
+      const verified = OperatingResultSchema.parse({
+        ...current,
+        status,
+        verified_by: actor,
+        verified_at: verifiedAt,
+        verification_note: note,
+      });
+      snapshot.results[index] = verified;
+      return verified;
+    });
+  }
   private readonly file: string;
   private readonly clock: () => Date;
 
@@ -117,6 +211,7 @@ export class OperatingCenterStore {
     snapshot.updatedAt = timestamp;
     snapshot.inbox = snapshot.inbox.slice(-20_000);
     snapshot.decisions = snapshot.decisions.slice(-20_000);
+    snapshot.results = snapshot.results.slice(-20_000);
     atomicWrite(this.file, `${JSON.stringify(snapshot, null, 2)}\n`);
     return structuredClone(result);
   }

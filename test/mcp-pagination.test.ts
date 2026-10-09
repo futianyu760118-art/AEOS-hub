@@ -40,3 +40,23 @@ test('preserves medium confidence across every complete page', async () => {
   const payload = await collectMcpPages(async ({ page }) => mediumResponse(Number(page)), {}, 2) as { structuredContent: Record<string, unknown> };
   assert.equal(payload.structuredContent.data_confidence, 'medium');
 });
+
+test('uses a numeric next_cursor instead of assuming adjacent page numbers', async () => {
+  const requested: number[] = [];
+  const payload = await collectMcpPages(async ({ page }) => {
+    requested.push(Number(page));
+    return Number(page) === 1
+      ? { structuredContent: { data_confidence: 'high', data_as_of: '2026-10-08T00:00:00Z', data: [{ id: 'first' }], page: { total: 2, truncated: true, next_cursor: '7' } } }
+      : { structuredContent: { data_confidence: 'high', data_as_of: '2026-10-08T00:00:00Z', data: [{ id: 'last' }], page: { total: 2, truncated: false } } };
+  }, {}, 3) as { structuredContent: Record<string, unknown> };
+  assert.deepEqual(requested, [1, 7]);
+  assert.equal((payload.structuredContent.page as Record<string, unknown>).truncated, false);
+});
+
+test('keeps a malformed next_cursor partial and visible to the user', async () => {
+  const payload = await collectMcpPages(async () => ({
+    structuredContent: { data_confidence: 'high', data_as_of: '2026-10-08T00:00:00Z', data: [{ id: 'first' }], page: { total: 2, truncated: true, next_cursor: 'next-page' } },
+  }), {}, 3) as { structuredContent: Record<string, unknown> };
+  assert.equal((payload.structuredContent.page as Record<string, unknown>).truncated, true);
+  assert.match((payload.structuredContent.warnings as string[]).join(' '), /游标无法解析/);
+});
