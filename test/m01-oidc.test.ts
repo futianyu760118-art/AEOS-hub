@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { normalizeActorContext } from '../src/auth/actor-context.ts';
-import { readM01Config } from '../src/auth/m01-oidc.ts';
+import { M01OidcAuth, readM01Config } from '../src/auth/m01-oidc.ts';
 
 const m01Environment: NodeJS.ProcessEnv = {
   AEOS_AUTH_MODE: 'm01',
@@ -11,6 +13,173 @@ const m01Environment: NodeJS.ProcessEnv = {
   M01_REDIRECT_URI: 'http://localhost:3000/auth/callback',
   M01_AUDIENCE: 'aeos-api',
 };
+
+const oidcConfig = {
+  authMode: 'm01' as const,
+  issuer: 'https://login.example.test/realms/aeos',
+  clientId: 'aeos-hub',
+  clientSecret: 'not-a-real-secret',
+  redirectUri: 'http://localhost:3000/auth/callback',
+  audience: 'aeos-api',
+};
+const authorizationEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/auth';
+const tokenEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/token';
+const jwksUri = 'https://login.example.test/realms/aeos/protocol/openid-connect/certs';
+const signingKey = await generateKeyPair('RS256');
+const publicJwk = await exportJWK(signingKey.publicKey);
+Object.assign(publicJwk, { kid: 'm01-test-key', use: 'sig', alg: 'RS256' });
+
+type IdTokenOptions = {
+  issuer?: string;
+  audience?: string;
+  expiresAt?: number;
+  notBefore?: number;
+  nonce?: string;
+  tenantId?: string;
+  signingKey?: CryptoKey;
+};
+
+async function createIdToken(nonce: string, options: IdTokenOptions = {}): Promise<string> {
+  return new SignJWT({
+    tenant_id: options.tenantId === undefined ? 'tenant-a' : options.tenantId,
+    roles: ['manager'],
+    nonce: options.nonce === undefined ? nonce : options.nonce,
+  })
+    .setProtectedHeader({ alg: 'RS256', kid: 'm01-test-key' })
+    .setIssuer(options.issuer ?? oidcConfig.issuer)
+    .setAudience(options.audience ?? oidcConfig.audience)
+    .setSubject('user-123')
+    .setIssuedAt()
+    .setExpirationTime(options.expiresAt ?? Math.floor(Date.now() / 1000) + 120)
+    .setNotBefore(options.notBefore ?? Math.floor(Date.now() / 1000) - 1)
+    .sign(options.signingKey ?? signingKey.privateKey);
+}
+
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+}
+
+function createOidcFixture(options: { now?: () => number; discovery?: Record<string, unknown>; idToken?: string } = {}) {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  let token = options.idToken;
+  const auth = new M01OidcAuth(oidcConfig, {
+    now: options.now,
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return jsonResponse(options.discovery ?? {
+          issuer: oidcConfig.issuer,
+          authorization_endpoint: authorizationEndpoint,
+          token_endpoint: tokenEndpoint,
+          jwks_uri: jwksUri,
+        });
+      }
+      if (url === tokenEndpoint) return jsonResponse({ id_token: token });
+      if (url === jwksUri) return jsonResponse({ keys: [publicJwk] });
+      return jsonResponse({}, 404);
+    },
+  });
+  return { auth, requests, setIdToken: (value: string) => { token = value; } };
+}
+
+test('M01 OIDC authorization URL carries PKCE and exact callback parameters', async () => {
+  const { auth, requests, setIdToken } = createOidcFixture();
+  const { redirectUrl } = await auth.beginLogin();
+  const url = new URL(redirectUrl);
+  assert.equal(url.origin + url.pathname, authorizationEndpoint);
+  assert.equal(url.searchParams.get('response_type'), 'code');
+  assert.equal(url.searchParams.get('client_id'), oidcConfig.clientId);
+  assert.equal(url.searchParams.get('redirect_uri'), oidcConfig.redirectUri);
+  assert.match(url.searchParams.get('scope') ?? '', /(^| )openid( |$)/);
+  assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
+  assert.match(url.searchParams.get('state') ?? '', /^[A-Za-z0-9_-]{32,}$/);
+  assert.match(url.searchParams.get('nonce') ?? '', /^[A-Za-z0-9_-]{32,}$/);
+
+  setIdToken(await createIdToken(url.searchParams.get('nonce')!));
+  await auth.completeLogin({ code: 'authorization-code', state: url.searchParams.get('state')! });
+  const tokenRequest = requests.find((request) => request.url === tokenEndpoint)!;
+  const body = new URLSearchParams(String(tokenRequest.init?.body));
+  assert.equal(body.get('grant_type'), 'authorization_code');
+  assert.equal(body.get('redirect_uri'), oidcConfig.redirectUri);
+  assert.equal(body.get('client_id'), oidcConfig.clientId);
+  assert.equal(body.get('client_secret'), oidcConfig.clientSecret);
+  assert.equal(body.get('code'), 'authorization-code');
+  assert.equal(
+    createHash('sha256').update(body.get('code_verifier')!).digest('base64url'),
+    url.searchParams.get('code_challenge'),
+  );
+});
+
+test('M01 OIDC completes a valid signed token into an actor context', async () => {
+  const { auth, setIdToken } = createOidcFixture();
+  const { redirectUrl } = await auth.beginLogin();
+  const parameters = new URL(redirectUrl).searchParams;
+  setIdToken(await createIdToken(parameters.get('nonce')!));
+  assert.deepEqual(await auth.completeLogin({ code: 'code-123', state: parameters.get('state')! }), {
+    actorId: 'm01:user:user-123', actorType: 'human', tenantId: 'tenant-a', roles: ['manager'], authSource: 'm01',
+  });
+});
+
+test('M01 OIDC discovery requires the configured issuer and safe HTTPS endpoints', async () => {
+  const invalidDocuments = [
+    { issuer: `${oidcConfig.issuer}/`, authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, jwks_uri: jwksUri },
+    { issuer: oidcConfig.issuer, authorization_endpoint: 'http://login.example.test/auth', token_endpoint: tokenEndpoint, jwks_uri: jwksUri },
+    { issuer: oidcConfig.issuer, authorization_endpoint: authorizationEndpoint, token_endpoint: `${tokenEndpoint}?debug=1`, jwks_uri: jwksUri },
+    { issuer: oidcConfig.issuer, authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, jwks_uri: 'https://user:pass@login.example.test/certs' },
+  ];
+  for (const discovery of invalidDocuments) {
+    const { auth } = createOidcFixture({ discovery });
+    await assert.rejects(auth.beginLogin(), /authentication failed/i);
+  }
+});
+
+test('M01 OIDC rejects missing, mismatched, expired, and reused states', async () => {
+  let time = Date.now();
+  const { auth, setIdToken } = createOidcFixture({ now: () => time });
+  await assert.rejects(auth.completeLogin({ code: 'code', state: 'missing-state-value' }), /authentication failed/i);
+  const { redirectUrl } = await auth.beginLogin();
+  const parameters = new URL(redirectUrl).searchParams;
+  await assert.rejects(auth.completeLogin({ code: 'code', state: 'different-state-value' }), /authentication failed/i);
+  time += 300_001;
+  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i);
+
+  const second = new URL((await auth.beginLogin()).redirectUrl).searchParams;
+  setIdToken(await createIdToken(second.get('nonce')!, { expiresAt: Math.floor(Date.now() / 1000) + 900 }));
+  await auth.completeLogin({ code: 'code', state: second.get('state')! });
+  await assert.rejects(auth.completeLogin({ code: 'code', state: second.get('state')! }), /authentication failed/i);
+});
+
+test('M01 OIDC consumes state before a failed token exchange', async () => {
+  const { auth } = createOidcFixture({ idToken: undefined });
+  const parameters = new URL((await auth.beginLogin()).redirectUrl).searchParams;
+  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i);
+  await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i);
+});
+
+test('M01 OIDC performs actual JWT/JWKS verification and rejects invalid claims', async () => {
+  const cases: Array<[string, IdTokenOptions]> = [
+    ['issuer', { issuer: 'https://other.example.test/realms/aeos' }],
+    ['audience', { audience: 'other-api' }],
+    ['signature', { signingKey: (await generateKeyPair('RS256')).privateKey }],
+    ['expiry', { expiresAt: Math.floor(Date.now() / 1000) - 60 }],
+    ['not-before', { notBefore: Math.floor(Date.now() / 1000) + 60 }],
+    ['nonce', { nonce: 'wrong-nonce' }],
+    ['tenant_id', { tenantId: '' }],
+  ];
+  for (const [name, options] of cases) {
+    const { auth, setIdToken } = createOidcFixture();
+    const parameters = new URL((await auth.beginLogin()).redirectUrl).searchParams;
+    setIdToken(await createIdToken(parameters.get('nonce')!, options));
+    await assert.rejects(auth.completeLogin({ code: 'code', state: parameters.get('state')! }), /authentication failed/i, name);
+  }
+});
+
+test('M01 OIDC gives concurrent login attempts distinct states', async () => {
+  const { auth } = createOidcFixture();
+  const logins = await Promise.all(Array.from({ length: 8 }, () => auth.beginLogin()));
+  assert.equal(new Set(logins.map(({ redirectUrl }) => new URL(redirectUrl).searchParams.get('state'))).size, logins.length);
+});
 
 test('M01 configuration reports every missing required setting without exposing values', () => {
   for (const name of ['M01_ISSUER', 'M01_CLIENT_ID', 'M01_CLIENT_SECRET', 'M01_REDIRECT_URI', 'M01_AUDIENCE']) {
