@@ -30,8 +30,45 @@ test('M01 configuration accepts complete valid M01 settings', () => {
   });
 });
 
-test('M01 configuration does not read M01 settings outside M01 mode', () => {
+test('M01 configuration accepts only unset and local-dev non-M01 modes', () => {
+  assert.deepEqual(readM01Config({}), { authMode: 'local-dev' });
   assert.deepEqual(readM01Config({ AEOS_AUTH_MODE: 'local-dev' }), { authMode: 'local-dev' });
+});
+
+test('M01 configuration rejects unsupported auth modes without echoing their values', () => {
+  for (const mode of ['M01', ' m01', 'm01 ', 'staging']) {
+    assert.throws(
+      () => readM01Config({ AEOS_AUTH_MODE: mode }),
+      (error: Error) => error.message === 'AEOS_AUTH_MODE must be unset, local-dev, or m01',
+    );
+  }
+});
+
+test('M01 configuration rejects unsafe issuer URLs', () => {
+  for (const issuer of [
+    'https://username:password@login.example.test/',
+    'https://login.example.test/?tenant=tenant-a',
+    'https://login.example.test/#callback',
+  ]) {
+    assert.throws(() => readM01Config({ ...m01Environment, M01_ISSUER: issuer }), /M01_ISSUER/);
+  }
+});
+
+test('M01 configuration rejects unsafe redirect URLs while accepting loopback HTTP development callbacks', () => {
+  for (const redirectUri of [
+    'file:///tmp/callback',
+    'http://example.test/auth/callback',
+    'https://username:password@login.example.test/auth/callback',
+    'https://login.example.test/auth/callback?code=secret',
+    'https://login.example.test/auth/callback#fragment',
+  ]) {
+    assert.throws(() => readM01Config({ ...m01Environment, M01_REDIRECT_URI: redirectUri }), /M01_REDIRECT_URI/);
+  }
+
+  assert.equal(
+    readM01Config({ ...m01Environment, M01_REDIRECT_URI: 'http://localhost:3000/auth/callback' }).redirectUri,
+    'http://localhost:3000/auth/callback',
+  );
 });
 
 test('actor context rejects non-object claims and missing identity claims', () => {
@@ -65,6 +102,22 @@ test('actor context maps service-account subjects to client-scoped service actor
     tenantId: 'tenant-a',
     roles: ['automation'],
     clientId: 'sync-service',
+    authSource: 'm01',
+  });
+});
+
+test('actor context maps explicitly marked UUID service accounts to client-scoped service actors', () => {
+  assert.deepEqual(normalizeActorContext({
+    sub: 'c0a8016a-1f5f-4f06-9b36-00d8c343f6a4',
+    tenant_id: 'tenant-a',
+    client_id: 'keycloak-service',
+    aeos_actor_type: 'service',
+  }, 'm01'), {
+    actorId: 'm01:service:keycloak-service',
+    actorType: 'service',
+    tenantId: 'tenant-a',
+    roles: [],
+    clientId: 'keycloak-service',
     authSource: 'm01',
   });
 });

@@ -44,7 +44,9 @@ export function normalizeActorContext(claims: unknown, source: 'm01'): ActorCont
   const organizationId = optionalString(values.organization_id, 'organization_id');
   const azp = optionalString(values.azp, 'azp');
   const clientId = azp ?? optionalString(values.client_id, 'client_id');
-  const actorType = clientId && subject.startsWith('service-account-') ? 'service' : 'human';
+  const isService = clientId !== undefined
+    && (values.aeos_actor_type === 'service' || subject.startsWith('service-account-'));
+  const actorType = isService ? 'service' : 'human';
 
   return {
     actorId: actorType === 'service' ? `m01:service:${clientId}` : `m01:user:${subject}`,
