@@ -1,6 +1,7 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { taskDisplayState, taskInteractionPolicy } from './task-center.js';
+import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -153,6 +154,7 @@ let dailyQuestionConfig = null;
 let operatingCenterState = { cases: [], decisions: [], inbox: [], unreadInboxCount: 0 };
 let taskCenterState = { tasks: [], total: 0 };
 const taskDetails = new Map();
+const taskAgentCandidates = new Map();
 let selectedInboxItemId = null;
 let editingDailyQuestionConfig = null;
 let latestDailyQuestionConflictConfig = null;
@@ -2622,9 +2624,11 @@ function renderTaskCenter() {
 
   els.taskList.innerHTML = display.length ? display.map(({ task, state, policy }) => {
     const details = taskDetails.get(task.taskId);
+    const agentCandidates = taskAgentCandidates.get(task.taskId);
     const history = Array.isArray(details?.history) ? details.history : [];
     const actions = [
       `<button class="btn ghost compact" type="button" data-task-action="detail" data-task-id="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起历史' : '查看历史'}</button>`,
+      `<button class="btn ghost compact" type="button" data-task-action="agent-candidates" data-task-id="${esc(task.taskId)}"><i data-lucide="shield-check"></i>${agentCandidates ? '收起接手条件' : '查看 Agent 接手条件'}</button>`,
       policy.canAssign ? `<button class="btn secondary compact" type="button" data-task-action="assign" data-task-id="${esc(task.taskId)}"><i data-lucide="user-round-check"></i>${task.currentAssignee ? '改派责任' : '分派责任'}</button>` : '',
       task.status === 'ASSIGNED' ? `<button class="btn secondary compact" type="button" data-task-action="accept" data-task-id="${esc(task.taskId)}"><i data-lucide="handshake"></i>记录接受</button>` : '',
       ['ACCEPTED', 'AWAITING_DECISION'].includes(task.status) ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
@@ -2640,6 +2644,7 @@ function renderTaskCenter() {
       <div class="task-next-action"><i data-lucide="arrow-right"></i><span><b>下一步：</b>${esc(state.nextAction)}</span></div>
       ${state.awaitingBusinessVerification ? '<div class="task-verify-note"><i data-lucide="shield-check"></i>分析结果仍为待核验状态，只有业务 Owner 的核验记录才能完成任务。</div>' : ''}
       <div class="case-actions task-actions">${actions}</div>
+      ${agentCandidates ? renderAgentCandidatePanel(agentCandidates) : ''}
       ${details ? `<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
     </article>`;
   }).join('') : '<div class="dashboard-loading">暂无责任任务。请先从上方选择经营事项创建任务。</div>';
@@ -2679,10 +2684,22 @@ async function loadTaskDetail(taskId) {
   renderTaskCenter();
 }
 
+async function loadTaskAgentCandidates(taskId) {
+  if (taskAgentCandidates.has(taskId)) {
+    taskAgentCandidates.delete(taskId);
+    renderTaskCenter();
+    return;
+  }
+  const data = await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-candidates`);
+  taskAgentCandidates.set(taskId, data);
+  renderTaskCenter();
+}
+
 async function performTaskAction(taskId, action) {
   const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
   if (!task) return;
   if (action === 'detail') { await loadTaskDetail(taskId); return; }
+  if (action === 'agent-candidates') { await loadTaskAgentCandidates(taskId); return; }
   let path = `/api/tasks/${encodeURIComponent(taskId)}`;
   let body;
   if (action === 'assign') {
@@ -2721,6 +2738,7 @@ async function performTaskAction(taskId, action) {
   } else return;
   await taskRequest(path, 'POST', body);
   taskDetails.delete(taskId);
+  taskAgentCandidates.delete(taskId);
   await loadTasks({ silent: true });
   toast(action === 'verify' ? '业务核验结果已留痕' : '任务记录已更新');
 }
