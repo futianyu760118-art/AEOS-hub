@@ -1,4 +1,5 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
+import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -3611,20 +3612,70 @@ function agentOptions(selected = '') {
   return options.join('');
 }
 
+const agentTypeLabels = { master: '系统主 Agent', specialist: '专业 Agent', tool: '工具 Agent' };
+
+function agentParentOptions(type, selected = '') {
+  const parents = eligibleParentAgents(harbor.agents || [], type);
+  const options = ['<option value="">请选择上级 Agent</option>'];
+  for (const agent of parents) {
+    options.push(`<option value="${esc(agent.id)}"${agent.id === selected ? ' selected' : ''}>${esc(agent.name)} · ${esc(agent.registration?.code || agent.role)}</option>`);
+  }
+  return options.join('');
+}
+
+function syncAgentRegistrationForm() {
+  const typeSelect = $('[name="type"]', els.harborFormFields);
+  const parentSelect = $('[name="parentAgentId"]', els.harborFormFields);
+  const levelInput = $('[name="hierarchyLevel"]', els.harborFormFields);
+  const runtimeSelect = $('[name="runtimeId"]', els.harborFormFields);
+  const capabilityHint = $('[data-agent-runtime-capabilities]', els.harborFormFields);
+  if (!typeSelect || !parentSelect || !levelInput || !runtimeSelect || !capabilityHint) return;
+
+  const { level } = registrationRule(typeSelect.value);
+  const oldParent = parentSelect.value;
+  const parents = eligibleParentAgents(harbor.agents || [], typeSelect.value);
+  parentSelect.innerHTML = agentParentOptions(typeSelect.value, oldParent);
+  parentSelect.value = parents.some((agent) => agent.id === oldParent) ? oldParent : (parents[0]?.id || '');
+  parentSelect.disabled = parents.length === 0;
+  levelInput.value = level;
+
+  const runtime = (harbor.runtimes || []).find((item) => item.id === runtimeSelect.value);
+  capabilityHint.textContent = runtime
+    ? (runtime.capabilities || []).length
+      ? `当前 Runtime 可声明的能力：${runtime.capabilities.join('、')}`
+      : '当前 Runtime 尚未声明能力；此 Agent 的能力白名单必须留空。'
+    : '暂未绑定 Runtime；此 Agent 的能力白名单必须留空。';
+}
+
+function wireAgentRegistrationForm() {
+  const typeSelect = $('[name="type"]', els.harborFormFields);
+  const runtimeSelect = $('[name="runtimeId"]', els.harborFormFields);
+  if (!typeSelect || !runtimeSelect) return;
+  typeSelect.addEventListener('change', syncAgentRegistrationForm);
+  runtimeSelect.addEventListener('change', syncAgentRegistrationForm);
+  syncAgentRegistrationForm();
+}
+
 function openHarborModal(type) {
   harborModalType = type;
   els.harborFormStatus.textContent = '';
   els.harborForm.reset();
   const definitions = {
     agent: {
-      title: '新增智能体', desc: '登记持久身份、模型策略、自治等级和可执行环境。', submit: '创建智能体',
+      title: '新增智能体', desc: '先登记归属、层级与受限能力，再配置模型和执行环境；新增 Agent 默认保持草稿状态。', submit: '创建智能体',
       fields: `<label><span>智能体名称</span><input name="name" maxlength="80" required placeholder="例如：交付风险 Agent" /></label>
         <label><span>组织角色</span><input name="role" maxlength="120" required placeholder="例如：订单交付风险分析" /></label>
+        <label><span>Agent 编码</span><input name="code" maxlength="80" pattern="[A-Za-z][A-Za-z0-9-]{1,79}" required placeholder="例如：erp-order-risk" /><small class="field-note">稳定标识；保存时会统一为小写，不能与已有 Agent 重复。</small></label>
+        <label><span>Agent 类型</span><select name="type"><option value="master">系统主 Agent</option><option value="specialist" selected>专业 Agent</option><option value="tool">工具 Agent</option></select><small class="field-note">${agentTypeLabels.master}负责系统入口；专业与工具 Agent 只能归属对应上级。</small></label>
+        <label><span>所属组织</span><input name="ownerOrg" maxlength="120" required placeholder="例如：供应链中心" /></label>
+        <label><span>业务域</span><input name="domain" maxlength="120" required placeholder="例如：order-risk" /></label>
         <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" /></label>
         <label><span>模型</span><input name="model" maxlength="120" value="account-default" /></label>
         <label><span>执行 Runtime</span><select name="runtimeId">${runtimeOptions()}</select></label>
-        <label><span>组织层级</span><select name="hierarchyLevel"><option value="L0">L0 · 中枢编排</option><option value="L1">L1 · 业务编队</option><option value="L2" selected>L2 · 专项执行</option><option value="L3">L3 · 任务执行</option></select><small class="field-note">层级用于组织与路由；自治等级仍由 Guard 与 Capability 控制。</small></label>
-        <label><span>上级 Agent（可选）</span><select name="parentAgentId"><option value="">不指定上级</option>${(harbor.agents || []).map((agent) => `<option value="${esc(agent.id)}">${esc(agent.hierarchyLevel || 'L2')} · ${esc(agent.name)}</option>`).join('')}</select><small class="field-note">仅显示层级与名称，避免长文本干扰选择。</small></label>
+        <label><span>组织层级</span><input name="hierarchyLevel" readonly /><small class="field-note">由 Agent 类型自动确定，不能手动跨级。</small></label>
+        <label><span>上级 Agent</span><select name="parentAgentId" required></select><small class="field-note">只显示符合该类型层级规则的上级 Agent。</small></label>
+        <label class="wide"><span>Runtime 能力白名单</span><input name="allowedRuntimeCapabilities" placeholder="逗号分隔，例如：mcp, tool-calling" /><small class="field-note" data-agent-runtime-capabilities></small></label>
+        <label><span>治理生命周期</span><select name="lifecycle"><option value="draft" selected>草稿（默认，不可路由）</option><option value="suspended">暂停</option></select><small class="field-note">启用与退役将在版本、策略和审批模块完成后开放。</small></label>
         <label><span>自治等级</span><select name="autonomyLevel"><option>A0</option><option>A1</option><option selected>A2</option><option>A3</option><option>A4</option><option>A5</option></select></label>
         <label><span>访问范围</span><select name="access"><option value="private">仅自己</option><option value="workspace" selected>工作区</option><option value="selected">指定成员</option></select></label>
         <label><span>Skills</span><input name="skills" placeholder="逗号分隔，例如：风险扫描, 交付预测" /></label>
@@ -3662,6 +3713,7 @@ function openHarborModal(type) {
   $('span', els.harborFormSubmit).textContent = definition.submit;
   els.harborModal.classList.remove('hidden');
   refreshIcons(els.harborModal);
+  if (type === 'agent') wireAgentRegistrationForm();
   window.setTimeout(() => $('input, select, textarea', els.harborFormFields)?.focus(), 30);
 }
 
@@ -3677,13 +3729,14 @@ async function submitHarborForm(event) {
   event.preventDefault();
   if (!harborModalType) return;
   const formData = new FormData(els.harborForm);
-  const payload = Object.fromEntries(formData.entries());
+  let payload = Object.fromEntries(formData.entries());
   if (harborModalType === 'project') payload.agentIds = formData.getAll('agentIds');
   const endpoints = { agent: '/api/harbor/agents', runtime: '/api/harbor/runtimes', project: '/api/harbor/projects' };
   const labels = { agent: '智能体已创建', runtime: 'Runtime 已登记，等待真实连接与心跳', project: '协作项目已创建' };
   els.harborFormSubmit.disabled = true;
   els.harborFormStatus.textContent = '保存中...';
   try {
+    if (harborModalType === 'agent') payload = buildAgentRegistrationPayload(payload, harbor.agents || []);
     const response = await fetch(endpoints[harborModalType], {
       method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload),
     });
