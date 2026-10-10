@@ -60,7 +60,7 @@ export function isPublicLoginResource(pathname: string, method: string | undefin
   if (method !== 'GET') return false;
   return pathname === '/' || pathname === '/index.html'
     || pathname === '/style.css' || pathname === '/app.js'
-    || pathname === '/daily-questions.js' || pathname === '/agent-registration.js'
+    || pathname === '/daily-questions.js' || pathname === '/agent-registration.js' || pathname === '/task-center.js'
     || pathname === '/vendor/lucide.min.js' || pathname.startsWith('/brand/');
 }
 

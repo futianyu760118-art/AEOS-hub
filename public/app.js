@@ -1,5 +1,6 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
+import { taskDisplayState, taskInteractionPolicy } from './task-center.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -34,6 +35,10 @@ const els = {
   navInboxCount: $('#nav-inbox-count'), caseOpenCount: $('#case-open-count'), caseReviewCount: $('#case-review-count'),
   caseApprovalCount: $('#case-approval-count'), caseInboxCount: $('#case-inbox-count'), caseList: $('#case-list'),
   btnCasesRefresh: $('#btn-cases-refresh'), inboxList: $('#inbox-list'),
+  navTaskCount: $('#nav-task-count'), taskDraftCount: $('#task-draft-count'), taskActiveCount: $('#task-active-count'),
+  taskVerifyCount: $('#task-verify-count'), taskAttentionCount: $('#task-attention-count'), taskCaseSelect: $('#task-case-select'),
+  taskPriority: $('#task-priority'), taskCreateHint: $('#task-create-hint'), btnTaskCreate: $('#btn-task-create'),
+  btnTasksRefresh: $('#btn-tasks-refresh'), taskListCount: $('#task-list-count'), taskList: $('#task-list'),
   inboxUnreadCount: $('#inbox-unread-count'), btnInboxRefresh: $('#btn-inbox-refresh'), btnInboxReadAll: $('#btn-inbox-read-all'), inboxSearch: $('#inbox-search'), inboxFilter: $('#inbox-filter'),
   inboxUnreadMetric: $('#inbox-unread-metric'), inboxDecisionMetric: $('#inbox-decision-metric'), inboxTodayMetric: $('#inbox-today-metric'),
   inboxDetailModal: $('#inbox-detail-modal'), inboxDetailTitle: $('#inbox-detail-title'), inboxDetailMeta: $('#inbox-detail-meta'), inboxDetailBody: $('#inbox-detail-body'), inboxDetailStatus: $('#inbox-detail-status'), inboxDetailClose: $('#inbox-detail-close'), inboxDetailCancel: $('#inbox-detail-cancel'), inboxDetailRead: $('#inbox-detail-read'),
@@ -146,6 +151,8 @@ const expandedHarborBusinessSquadIds = new Set();
 const expandedSquadBusinessIds = new Set();
 let dailyQuestionConfig = null;
 let operatingCenterState = { cases: [], decisions: [], inbox: [], unreadInboxCount: 0 };
+let taskCenterState = { tasks: [], total: 0 };
+const taskDetails = new Map();
 let selectedInboxItemId = null;
 let editingDailyQuestionConfig = null;
 let latestDailyQuestionConflictConfig = null;
@@ -208,6 +215,7 @@ const commands = [
   { view: 'dashboard', label: '管理者首页', desc: '目标、风险、TOP 决策与治理脉冲', icon: 'layout-dashboard', group: '经营总览' },
   { view: 'chat', label: '中枢 Agent', desc: '跨域经营分析与 Capability 调用', icon: 'bot', group: '自治运行' },
   { view: 'attention', label: 'Attention 中心', desc: '需要责任人介入的例外事项', icon: 'list-checks', group: '自治运行' },
+  { view: 'tasks', label: '任务中心', desc: '责任角色、时限、证据与业务核验闭环', icon: 'list-todo', group: '经营闭环' },
   { view: 'cases', label: '经营事项', desc: '风险建档、人工决策与闭环验证', icon: 'clipboard-list', group: '经营闭环' },
   { view: 'inbox', label: 'Inbox', desc: '待确认事项、扫描结果与决策留痕', icon: 'inbox', group: '经营闭环' },
   { view: 'harbor', label: 'AI 港湾', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: 'AI 资源协作' },
@@ -560,6 +568,7 @@ function showView(view, options = {}) {
   if (view === 'evidence' || view === 'dashboard' || view === 'attention') loadEvidence();
   if (view === 'dashboard' || view === 'attention') loadDashboard({ silent: true });
   if (view === 'cases') loadOperatingCenter();
+  if (view === 'tasks') loadTasks();
   if (view === 'inbox') loadInbox();
   if (view === 'registry' || view === 'chat') loadCapabilityRegistry({ silent: view === 'chat' });
   if (view === 'harbor') loadHarbor();
@@ -2571,6 +2580,151 @@ async function loadInbox(options = {}) {
   if (!data && !options.silent) toast('Inbox 加载失败，请稍后重试', true);
 }
 
+async function taskRequest(path, method = 'GET', body) {
+  const response = await fetch(path, {
+    method,
+    headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+function renderTaskCenter() {
+  const tasks = Array.isArray(taskCenterState.tasks) ? taskCenterState.tasks : [];
+  const today = localDateKey();
+  const openCases = (operatingCenterState.cases || []).filter((item) => item.status !== 'closed' && Array.isArray(item.evidenceRefs) && item.evidenceRefs.length);
+  const selectedCase = els.taskCaseSelect.value;
+  els.taskCaseSelect.innerHTML = openCases.length
+    ? `<option value="">请选择经营事项</option>${openCases.map((item) => `<option value="${esc(item.id)}">${esc(item.entityId)} · ${esc(item.title)}</option>`).join('')}`
+    : '<option value="">暂无带 Evidence 的未闭环经营事项</option>';
+  if (openCases.some((item) => item.id === selectedCase)) els.taskCaseSelect.value = selectedCase;
+  els.btnTaskCreate.disabled = !openCases.length;
+  els.taskCreateHint.textContent = openCases.length
+    ? '创建后先分派一个责任角色；分析结果必须由业务 Owner 进行核验。'
+    : '暂无可建任务事项。请先从风险详情纳入经营事项，并确保其包含 Evidence。';
+
+  const display = tasks.map((task) => ({ task, state: taskDisplayState(task, today), policy: taskInteractionPolicy(task) }));
+  const draft = display.filter(({ task }) => task.status === 'DRAFT').length;
+  const active = display.filter(({ task }) => ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'AWAITING_DECISION'].includes(task.status)).length;
+  const verifying = display.filter(({ task }) => task.status === 'AWAITING_VERIFY').length;
+  const attention = display.filter(({ state }) => state.needsAttention).length;
+  els.taskDraftCount.textContent = String(draft);
+  els.taskActiveCount.textContent = String(active);
+  els.taskVerifyCount.textContent = String(verifying);
+  els.taskAttentionCount.textContent = String(attention);
+  const actionable = display.filter(({ task }) => !['COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED'].includes(task.status)).length;
+  els.navTaskCount.textContent = String(actionable);
+  els.navTaskCount.classList.toggle('hidden', actionable === 0);
+  els.taskListCount.textContent = `${tasks.length} 项任务`;
+  els.taskListCount.className = `status-pill ${attention ? 'warn' : 'neutral'}`;
+
+  els.taskList.innerHTML = display.length ? display.map(({ task, state, policy }) => {
+    const details = taskDetails.get(task.taskId);
+    const history = Array.isArray(details?.history) ? details.history : [];
+    const actions = [
+      `<button class="btn ghost compact" type="button" data-task-action="detail" data-task-id="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起历史' : '查看历史'}</button>`,
+      policy.canAssign ? `<button class="btn secondary compact" type="button" data-task-action="assign" data-task-id="${esc(task.taskId)}"><i data-lucide="user-round-check"></i>${task.currentAssignee ? '改派责任' : '分派责任'}</button>` : '',
+      task.status === 'ASSIGNED' ? `<button class="btn secondary compact" type="button" data-task-action="accept" data-task-id="${esc(task.taskId)}"><i data-lucide="handshake"></i>记录接受</button>` : '',
+      ['ACCEPTED', 'AWAITING_DECISION'].includes(task.status) ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
+      policy.canSupplementEvidence ? `<button class="btn ghost compact" type="button" data-task-action="evidence" data-task-id="${esc(task.taskId)}"><i data-lucide="paperclip"></i>补充证据</button>` : '',
+      policy.canEscalate ? `<button class="btn ghost compact" type="button" data-task-action="escalate" data-task-id="${esc(task.taskId)}"><i data-lucide="triangle-alert"></i>升级决策</button>` : '',
+      policy.canSubmitPendingResult ? `<button class="btn secondary compact" type="button" data-task-action="result" data-task-id="${esc(task.taskId)}"><i data-lucide="file-check-2"></i>登记待核验结果</button>` : '',
+      policy.canVerify ? `<button class="btn primary compact" type="button" data-task-action="verify" data-task-id="${esc(task.taskId)}"><i data-lucide="badge-check"></i>业务核验</button>` : '',
+    ].filter(Boolean).join('');
+    return `<article class="task-card${state.needsAttention ? ' needs-attention' : ''}">
+      <div class="task-card-top"><span class="case-source ${esc(task.source)}">${esc(operatingSourceLabel(task.source))}</span><code>${esc(task.taskId.slice(-12))}</code><span class="task-card-spacer"></span><b class="status-pill ${esc(state.tone)}">${esc(state.label)}${state.overdue ? ' · 已逾期' : ''}</b></div>
+      <strong>${esc(task.title)}</strong><p class="task-source-line">来源事项：${esc(task.caseId)} · Evidence ${task.evidenceRefs.length} 条</p>
+      <div class="task-meta"><span><i data-lucide="user-round-check"></i>责任：${esc(state.assigneeLabel)}</span><span><i data-lucide="calendar-clock"></i>时限：${esc(task.dueAt)}</span><span><i data-lucide="circle-dot-dashed"></i>优先级：${esc(task.priority)}</span></div>
+      <div class="task-next-action"><i data-lucide="arrow-right"></i><span><b>下一步：</b>${esc(state.nextAction)}</span></div>
+      ${state.awaitingBusinessVerification ? '<div class="task-verify-note"><i data-lucide="shield-check"></i>分析结果仍为待核验状态，只有业务 Owner 的核验记录才能完成任务。</div>' : ''}
+      <div class="case-actions task-actions">${actions}</div>
+      ${details ? `<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
+    </article>`;
+  }).join('') : '<div class="dashboard-loading">暂无责任任务。请先从上方选择经营事项创建任务。</div>';
+  refreshIcons($('#view-tasks'));
+}
+
+async function loadTasks(options = {}) {
+  try {
+    await loadOperatingCenter({ silent: true });
+    taskCenterState = await taskRequest('/api/tasks');
+    renderTaskCenter();
+    return taskCenterState;
+  } catch (error) {
+    els.taskList.innerHTML = `<div class="dashboard-loading">任务中心加载失败：${esc(error.message)}</div>`;
+    if (!options.silent) toast(`任务中心加载失败：${error.message}`, true);
+    return null;
+  }
+}
+
+async function createTaskFromCase() {
+  const caseId = els.taskCaseSelect.value;
+  if (!caseId) { toast('请先选择经营事项', true); return; }
+  const reason = window.prompt('建任务说明（将留痕到 Evidence，不会执行任何业务动作）：', '建立经营风险责任闭环任务。');
+  if (!reason?.trim()) return;
+  els.btnTaskCreate.disabled = true;
+  try {
+    const data = await taskRequest(`/api/operating-cases/${encodeURIComponent(caseId)}/tasks`, 'POST', { priority: els.taskPriority.value, reason });
+    await loadTasks({ silent: true });
+    toast('责任任务已创建或返回原有未关闭任务；请确认责任角色与下一步动作。');
+  } finally { els.btnTaskCreate.disabled = false; }
+}
+
+async function loadTaskDetail(taskId) {
+  if (taskDetails.has(taskId)) { taskDetails.delete(taskId); renderTaskCenter(); return; }
+  const data = await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}`);
+  taskDetails.set(taskId, data);
+  renderTaskCenter();
+}
+
+async function performTaskAction(taskId, action) {
+  const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
+  if (!task) return;
+  if (action === 'detail') { await loadTaskDetail(taskId); return; }
+  let path = `/api/tasks/${encodeURIComponent(taskId)}`;
+  let body;
+  if (action === 'assign') {
+    const assigneeRole = window.prompt('责任角色：', task.currentAssignee?.role || '');
+    if (!assigneeRole?.trim()) return;
+    const reason = window.prompt('分派/改派说明：', task.currentAssignee ? '根据当前事项调整责任角色。' : '指定责任角色跟进该任务。');
+    if (!reason?.trim()) return;
+    path += '/assignments'; body = { assigneeRole, reason };
+  } else if (action === 'accept' || action === 'start') {
+    const reason = window.prompt(action === 'accept' ? '接受任务说明：' : '开始/恢复处理说明：', action === 'accept' ? '责任角色已接受该任务。' : '责任角色开始处理任务。');
+    if (!reason?.trim()) return;
+    path += '/transitions'; body = { toStatus: action === 'accept' ? 'ACCEPTED' : 'IN_PROGRESS', reason };
+  } else if (action === 'evidence') {
+    const evidenceRef = window.prompt('Evidence 引用：');
+    if (!evidenceRef?.trim()) return;
+    const reason = window.prompt('补充说明：', '补充任务处理依据。');
+    if (!reason?.trim()) return;
+    path += '/evidence'; body = { evidenceRefs: [evidenceRef], reason };
+  } else if (action === 'escalate') {
+    const reason = window.prompt('升级原因：', '需管理层协调处理。');
+    if (!reason?.trim()) return;
+    const nextAction = window.prompt('明确下一步动作：', '由业务负责人确认处理优先级与时限。');
+    if (!nextAction?.trim()) return;
+    path += '/escalations'; body = { reason, nextAction };
+  } else if (action === 'result') {
+    const resultType = window.prompt('结果类型：', 'risk_analysis');
+    if (!resultType?.trim()) return;
+    const summary = window.prompt('分析结果摘要（仅登记，不代表业务已执行）：');
+    if (!summary?.trim()) return;
+    path += '/results'; body = { resultType, summary, reason: '已登记分析结果，等待业务 Owner 核验。' };
+  } else if (action === 'verify') {
+    const verified = window.confirm('确认业务 Owner 已核验该结果？\n\n确认后任务将标记为“已核验完成”，但不会自动执行任何业务操作。');
+    const reason = window.prompt(verified ? '核验通过说明：' : '退回原因：', verified ? '业务 Owner 已核验通过。' : '证据不足，退回重新分析。');
+    if (!reason?.trim()) return;
+    path += `/results/${encodeURIComponent(task.resultId)}/verify`; body = { outcome: verified ? 'VERIFIED' : 'REJECTED', reason };
+  } else return;
+  await taskRequest(path, 'POST', body);
+  taskDetails.delete(taskId);
+  await loadTasks({ silent: true });
+  toast(action === 'verify' ? '业务核验结果已留痕' : '任务记录已更新');
+}
+
 async function createOperatingCaseFromRisk() {
   const risk = selectedDashboardRisk;
   if (!risk) return;
@@ -2583,7 +2737,7 @@ async function createOperatingCaseFromRisk() {
     operatingCenterState = data.snapshot;
     renderOperatingCenter();
     closeDashboardRiskDetail();
-    showView('cases');
+    showView('tasks');
     toast(data.created?.length ? '已创建待人工确认的经营事项' : '该风险已有未闭环经营事项');
   } catch (error) { els.dashboardRiskModalStatus.textContent = error.message; toast(`纳入经营事项失败：${error.message}`, true); }
   finally { els.dashboardRiskCreateCase.disabled = false; }
@@ -4158,6 +4312,13 @@ els.dailyQuestionAdd.addEventListener('click', addDailyQuestionEditorRow);
 els.dailyQuestionForm.addEventListener('submit', saveDailyQuestions);
 els.dailyQuestionModal.addEventListener('mousedown', (event) => { if (event.target === els.dailyQuestionModal) closeDailyQuestionModal(); });
 els.btnCasesRefresh.addEventListener('click', () => loadOperatingCenter());
+els.btnTasksRefresh.addEventListener('click', () => loadTasks());
+els.btnTaskCreate.addEventListener('click', () => { void createTaskFromCase().catch((error) => toast(`创建任务失败：${error.message}`, true)); });
+els.taskList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-task-action]');
+  if (!button) return;
+  void performTaskAction(button.dataset.taskId, button.dataset.taskAction).catch((error) => toast(`更新任务失败：${error.message}`, true));
+});
 els.btnInboxRefresh.addEventListener('click', () => loadInbox());
 els.btnInboxReadAll?.addEventListener('click', () => { void markAllInboxRead(); });
 els.inboxSearch?.addEventListener('input', renderInbox);

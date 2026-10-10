@@ -121,6 +121,7 @@
         </div>
         <div class="nav-group" id="operating-center-nav">
           <span class="nav-label">经营闭环</span>
+          <button class="nav-item" type="button" data-view="tasks" data-title="任务中心"><i data-lucide="list-todo"></i><span>任务中心</span><b id="nav-task-count" class="nav-badge hidden">0</b></button>
           <button class="nav-item" type="button" data-view="cases" data-title="经营事项"><i data-lucide="clipboard-list"></i><span>经营事项</span></button>
           <button class="nav-item" type="button" data-view="inbox" data-title="Inbox"><i data-lucide="inbox"></i><span>Inbox</span><b id="nav-inbox-count" class="nav-badge">0</b></button>
         </div>
@@ -367,6 +368,13 @@
           </div>
         </section>
 
+        <section id="view-tasks" class="view app-view hidden">
+          <div class="page-head"><div><span class="page-module">经营闭环</span><h1>任务中心</h1><p>从已建档经营事项创建责任任务；记录、核验与证据留痕不代表系统已执行业务处置</p></div><div class="page-actions"><button id="btn-tasks-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+          <div class="task-metrics"><div><span>待分派</span><strong id="task-draft-count">0</strong><small>尚未指定责任角色</small></div><div><span>处理中</span><strong id="task-active-count">0</strong><small>责任人跟进中</small></div><div><span>待业务核验</span><strong id="task-verify-count">0</strong><small>结果尚未生效</small></div><div><span>需人关注</span><strong id="task-attention-count">0</strong><small>逾期、失败或待决策</small></div></div>
+          <section class="surface task-create-surface"><div class="surface-head"><div><h2>从经营事项建任务</h2><p>系统只复制事项元数据和 Evidence 引用；不会向 ERP、质量或生产系统写入任何内容。</p></div><span class="status-pill info">人工责任闭环</span></div><div class="task-create-controls"><label><span>经营事项</span><select id="task-case-select"><option value="">正在读取可建任务事项…</option></select></label><label><span>优先级</span><select id="task-priority"><option value="medium">中</option><option value="high">高</option><option value="urgent">紧急</option><option value="low">低</option></select></label><button id="btn-task-create" class="btn primary" type="button"><i data-lucide="clipboard-plus"></i>创建责任任务</button></div><small id="task-create-hint" class="task-create-hint">请先选择一个已关联 Evidence 的经营事项。</small></section>
+          <section class="surface task-list-surface"><div class="surface-head"><div><h2>责任任务台账</h2><p>失败或逾期任务必须显示当前责任角色与下一步动作；分析结果需业务 Owner 核验。</p></div><span id="task-list-count" class="status-pill neutral">加载中</span></div><div id="task-list" class="task-list"><div class="dashboard-loading">正在读取任务台账…</div></div></section>
+        </section>
+
         <section id="view-inbox" class="view app-view hidden">
           <div class="page-head"><div><span class="page-module">经营闭环</span><h1>Inbox</h1><p>集中处理待确认事项与人工决策留痕</p></div><div class="page-actions"><button id="btn-inbox-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
           <div class="inbox-overview"><section><span>待处理</span><strong id="inbox-unread-metric">0</strong><small>尚未阅读的工作消息</small></section><section><span>需决策</span><strong id="inbox-decision-metric">0</strong><small>涉及人工确认</small></section><section><span>今日更新</span><strong id="inbox-today-metric">0</strong><small>当前工作日新增</small></section></div>
@@ -464,6 +472,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=server-login-20261008"></script>
+  <script type="module" src="/app.js?v=m04-task-center-20261010"></script>
 </body>
 </html>
