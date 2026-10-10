@@ -76,7 +76,7 @@ npm run web
 
 `AEOS_M01_ALLOWED_ROLES` 是 M01 模式的必填准入配置：逗号分隔的非空角色名列表（会 trim、去重并限制数量/长度），例如 `manager,analyst`。未设置、为空或格式无效时 Hub 拒绝启动。回调仅在 token 顶层 `roles` 非空且与该列表有交集时才创建 Hub session；失败只返回通用登录失败并清除认证 cookie，不回显 token、原始角色或配置。
 
-此 HTTP callback 只因它是严格的 loopback 地址、且 `NODE_ENV` 未设置或明确为 `development`、`test`、`local` 时才被当前认证代码允许；它绝不可用于生产、UAT、staging、局域网或任何非 loopback hostname。`NODE_ENV=uat`、`staging`、`production` 及任何显式未知值均为严格环境：必须 `AEOS_AUTH_MODE=m01`、`AEOS_COOKIE_SECURE=1` 且使用 HTTPS redirect URI；不能回退 local-dev。首次登录前访问 discovery，确认 issuer 和所有 authorization/token/JWKS endpoint 均为预期 HTTPS URL；再以有 `tenant_id` 和允许 role 的测试用户完成登录，并确认 Hub session 的 actor、tenant、roles 不含 token 或 secret。
+此 HTTP callback 只因它是严格的 loopback 地址、且部署环境允许本地开发时才被当前认证代码允许；它绝不可用于生产、UAT、staging、局域网或任何非 loopback hostname。部署环境会同时读取 `NODE_ENV` 和遗留 `AEOS_ENV`：只有两者都缺失，或每个已提供值均为 `development`、`test`、`local` 时才是本地开发；任一变量为 `uat`、`staging`、`production`、空白或其他显式未知值，或两者一方本地一方严格时，均为严格环境。严格环境必须 `AEOS_AUTH_MODE=m01`、`AEOS_COOKIE_SECURE=1` 且使用 HTTPS redirect URI；不能回退 local-dev。迁移使用遗留 `AEOS_ENV` 的部署时，先确保其值与 `NODE_ENV` 一致或移除遗留变量，避免因配置分歧进入严格模式。首次登录前访问 discovery，确认 issuer 和所有 authorization/token/JWKS endpoint 均为预期 HTTPS URL；再以有 `tenant_id` 和允许 role 的测试用户完成登录，并确认 Hub session 的 actor、tenant、roles 不含 token 或 secret。
 
 ### 生产/UAT（HTTPS Hub）
 
@@ -93,7 +93,7 @@ AEOS_M01_ALLOWED_ROLES=manager,analyst
 AEOS_COOKIE_SECURE=1
 ```
 
-生产/UAT 的 Keycloak Client 只允许对应的精确 HTTPS redirect URI 与 web origin；staging 与任何显式未知 `NODE_ENV` 也执行相同的严格规则。根目录 Compose 未提供 M01 Hub Docker TLS/CA 挂载，必须在受控部署定义中显式、安全地完成这些注入。
+生产/UAT 的 Keycloak Client 只允许对应的精确 HTTPS redirect URI 与 web origin；staging、空白或未知的 `NODE_ENV`/遗留 `AEOS_ENV` 也执行相同的严格规则。根目录 Compose 未提供 M01 Hub Docker TLS/CA 挂载，必须在受控部署定义中显式、安全地完成这些注入。
 
 `AEOS_M01_ALLOWED_ROLES` 只是在身份回调后、建立 Hub session 前的最小准入边界，避免任意已登录 M01 用户进入 Hub。它不是每条业务动作的最终细粒度 RBAC；后续应由 Hub Guard 按操作、资源、租户和审批链继续扩展授权。
 

@@ -317,12 +317,15 @@ test('M01 configuration rejects unsafe or non-Hub callback URLs while accepting 
 });
 
 test('M01 configuration permits loopback HTTP only in explicit local environments and requires HTTPS elsewhere', () => {
-  for (const NODE_ENV of [undefined, 'development', 'test', 'local']) {
-    const environment = { ...m01Environment, ...(NODE_ENV === undefined ? {} : { NODE_ENV }) };
-    assert.equal(readM01Config(environment).redirectUri, 'http://localhost:3000/api/auth/callback');
+  for (const environment of [{}, { NODE_ENV: 'development', AEOS_ENV: 'local' }, { NODE_ENV: 'test', AEOS_ENV: 'development' }]) {
+    assert.equal(readM01Config({ ...m01Environment, ...environment }).redirectUri, 'http://localhost:3000/api/auth/callback');
   }
-  for (const NODE_ENV of ['uat', 'staging', 'production', 'unknown-environment']) {
-    assert.throws(() => readM01Config({ ...m01Environment, NODE_ENV }), /M01_REDIRECT_URI/);
+  for (const environment of [
+    ...['uat', 'staging', 'production', 'unknown-environment', ''].map((NODE_ENV) => ({ NODE_ENV })),
+    ...['uat', 'staging', 'production', 'unknown-environment', ''].map((AEOS_ENV) => ({ AEOS_ENV })),
+    { NODE_ENV: 'development', AEOS_ENV: 'production' },
+  ]) {
+    assert.throws(() => readM01Config({ ...m01Environment, ...environment }), /M01_REDIRECT_URI/);
   }
   assert.equal(readM01Config({ ...m01Environment, NODE_ENV: 'uat', M01_REDIRECT_URI: 'https://hub.example.test/api/auth/callback' }).redirectUri, 'https://hub.example.test/api/auth/callback');
 });

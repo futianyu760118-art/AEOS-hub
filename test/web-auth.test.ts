@@ -45,24 +45,30 @@ test('authenticated sessions retain a safe actor context instead of exposing ses
   assert.doesNotMatch(JSON.stringify(auth.actorFromCookie(`aeos_auth=${session}`)), /replace-me|aeos_auth/);
 });
 
-test('local development actor values are validated and production requires M01 with Secure cookies', () => {
+test('local development actor values are validated and legacy deployment environments fail closed', () => {
   assert.throws(() => buildLocalDevActor({ AEOS_LOCAL_TENANT_ID: 'bad tenant' }, 'operator'), /AEOS_LOCAL_TENANT_ID/);
   assert.throws(() => buildLocalDevActor({ AEOS_LOCAL_ROLES: 'manager, bad role' }, 'operator'), /AEOS_LOCAL_ROLES/);
   assert.equal(cookieSecureFromEnvironment({}), false);
   assert.equal(cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: '1' }), true);
   assert.equal(cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: '0' }), false);
   assert.throws(() => cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: 'yes' }), /AEOS_COOKIE_SECURE/);
-  for (const NODE_ENV of ['uat', 'staging', 'production', 'unknown-environment']) {
-    assert.throws(() => assertAuthModeAllowedInEnvironment('local-dev', { NODE_ENV }), /AEOS_AUTH_MODE=m01/);
-    assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV }), /AEOS_COOKIE_SECURE=1/);
-    assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV, AEOS_COOKIE_SECURE: '0' }), /AEOS_COOKIE_SECURE=1/);
-    assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV, AEOS_COOKIE_SECURE: '1' }));
-    assert.equal(cookieSecureFromEnvironment({ NODE_ENV, AEOS_COOKIE_SECURE: '1' }), true);
-    assert.throws(() => cookieSecureFromEnvironment({ NODE_ENV }), /AEOS_COOKIE_SECURE=1/);
+  const strictEnvironments: NodeJS.ProcessEnv[] = [
+    ...['uat', 'staging', 'production', 'unknown-environment', ''].map((NODE_ENV) => ({ NODE_ENV })),
+    ...['uat', 'staging', 'production', 'unknown-environment', ''].map((AEOS_ENV) => ({ AEOS_ENV })),
+    { NODE_ENV: 'development', AEOS_ENV: 'production' },
+    { NODE_ENV: 'production', AEOS_ENV: 'development' },
+  ];
+  for (const environment of strictEnvironments) {
+    assert.throws(() => assertAuthModeAllowedInEnvironment('local-dev', environment), /AEOS_AUTH_MODE=m01/);
+    assert.throws(() => assertAuthModeAllowedInEnvironment('m01', environment), /AEOS_COOKIE_SECURE=1/);
+    assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { ...environment, AEOS_COOKIE_SECURE: '0' }), /AEOS_COOKIE_SECURE=1/);
+    assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('m01', { ...environment, AEOS_COOKIE_SECURE: '1' }));
+    assert.equal(cookieSecureFromEnvironment({ ...environment, AEOS_COOKIE_SECURE: '1' }), true);
+    assert.throws(() => cookieSecureFromEnvironment(environment), /AEOS_COOKIE_SECURE=1/);
   }
-  for (const NODE_ENV of [undefined, 'development', 'test', 'local']) {
-    assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('local-dev', NODE_ENV === undefined ? {} : { NODE_ENV }));
-    assert.equal(cookieSecureFromEnvironment(NODE_ENV === undefined ? {} : { NODE_ENV }), false);
+  for (const environment of [{}, { AEOS_ENV: 'development' }, { NODE_ENV: 'local' }, { NODE_ENV: 'development', AEOS_ENV: 'development' }, { NODE_ENV: 'test', AEOS_ENV: 'local' }]) {
+    assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('local-dev', environment));
+    assert.equal(cookieSecureFromEnvironment(environment), false);
   }
 });
 

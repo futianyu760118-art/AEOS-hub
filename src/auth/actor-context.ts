@@ -13,11 +13,16 @@ type Claims = Record<string, unknown>;
 const ROLE_IDENTIFIER_RE = /^[A-Za-z0-9._:@/-]{1,128}$/;
 const MAX_M01_ALLOWED_ROLES = 64;
 const MAX_M01_ALLOWED_ROLES_LENGTH = 4_096;
+const LOCAL_DEVELOPMENT_ENVIRONMENTS = new Set(['development', 'test', 'local']);
 
-/** Only these NODE_ENV values may use local-development authentication relaxations. */
+/**
+ * Both the current NODE_ENV and legacy AEOS_ENV participate in deployment
+ * hardening. Missing variables are local only when every provided value is an
+ * explicit local-development value; blank, unknown, or strict values fail closed.
+ */
 export function isLocalDevelopmentEnvironment(environment: NodeJS.ProcessEnv = process.env): boolean {
-  const nodeEnvironment = environment.NODE_ENV;
-  return nodeEnvironment === undefined || nodeEnvironment === 'development' || nodeEnvironment === 'test' || nodeEnvironment === 'local';
+  return [environment.NODE_ENV, environment.AEOS_ENV]
+    .every((deploymentEnvironment) => deploymentEnvironment === undefined || LOCAL_DEVELOPMENT_ENVIRONMENTS.has(deploymentEnvironment));
 }
 
 /** Parses the explicit admission roles required before an M01 identity receives a Hub session. */
