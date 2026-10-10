@@ -10,6 +10,31 @@ export type ActorContext = {
 
 type Claims = Record<string, unknown>;
 
+const ROLE_IDENTIFIER_RE = /^[A-Za-z0-9._:@/-]{1,128}$/;
+const MAX_M01_ALLOWED_ROLES = 64;
+const MAX_M01_ALLOWED_ROLES_LENGTH = 4_096;
+
+/** Only these NODE_ENV values may use local-development authentication relaxations. */
+export function isLocalDevelopmentEnvironment(environment: NodeJS.ProcessEnv = process.env): boolean {
+  const nodeEnvironment = environment.NODE_ENV;
+  return nodeEnvironment === undefined || nodeEnvironment === 'development' || nodeEnvironment === 'test' || nodeEnvironment === 'local';
+}
+
+/** Parses the explicit admission roles required before an M01 identity receives a Hub session. */
+export function m01AllowedRolesFromEnvironment(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const rawRoles = environment.AEOS_M01_ALLOWED_ROLES;
+  if (typeof rawRoles !== 'string' || !rawRoles.trim() || rawRoles.length > MAX_M01_ALLOWED_ROLES_LENGTH) {
+    throw new Error('AEOS_M01_ALLOWED_ROLES must be a non-empty comma-separated list of safe role identifiers');
+  }
+  const roles = rawRoles.split(',').map((role) => role.trim());
+  if (roles.length > MAX_M01_ALLOWED_ROLES || roles.some((role) => !ROLE_IDENTIFIER_RE.test(role))) {
+    throw new Error('AEOS_M01_ALLOWED_ROLES must be a non-empty comma-separated list of safe role identifiers');
+  }
+  const uniqueRoles = [...new Set(roles)];
+  if (!uniqueRoles.length) throw new Error('AEOS_M01_ALLOWED_ROLES must be a non-empty comma-separated list of safe role identifiers');
+  return uniqueRoles;
+}
+
 function claimsRecord(claims: unknown): Claims {
   if (claims === null || typeof claims !== 'object' || Array.isArray(claims)) {
     throw new Error('M01 claims must be an object');

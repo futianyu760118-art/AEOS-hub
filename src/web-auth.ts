@@ -1,5 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import type { ActorContext } from './auth/actor-context.ts';
+import { isLocalDevelopmentEnvironment, type ActorContext } from './auth/actor-context.ts';
 
 export const DEFAULT_LOGIN_USERNAME = 'demo';
 export const AUTH_COOKIE_NAME = 'aeos_auth';
@@ -33,8 +33,8 @@ export function passwordFromEnvironment(env: NodeJS.ProcessEnv = process.env): s
 
 export function cookieSecureFromEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.AEOS_COOKIE_SECURE;
-  if (env.NODE_ENV === 'production' || env.AEOS_ENV === 'production') {
-    if (value !== '1') throw new Error('AEOS_COOKIE_SECURE=1 is required in production');
+  if (!isLocalDevelopmentEnvironment(env)) {
+    if (value !== '1') throw new Error('AEOS_COOKIE_SECURE=1 is required outside local development');
     return true;
   }
   if (value === undefined || value === '0') return false;
@@ -43,9 +43,9 @@ export function cookieSecureFromEnvironment(env: NodeJS.ProcessEnv = process.env
 }
 
 export function assertAuthModeAllowedInEnvironment(authMode: 'local-dev' | 'm01', env: NodeJS.ProcessEnv = process.env): void {
-  if (env.NODE_ENV === 'production' || env.AEOS_ENV === 'production') {
-    if (authMode !== 'm01') throw new Error('AEOS_AUTH_MODE=m01 is required in production');
-    if (env.AEOS_COOKIE_SECURE !== '1') throw new Error('AEOS_COOKIE_SECURE=1 is required in production');
+  if (!isLocalDevelopmentEnvironment(env)) {
+    if (authMode !== 'm01') throw new Error('AEOS_AUTH_MODE=m01 is required outside local development');
+    if (env.AEOS_COOKIE_SECURE !== '1') throw new Error('AEOS_COOKIE_SECURE=1 is required outside local development');
   }
 }
 
@@ -142,9 +142,15 @@ export function createBrowserAuthGateway(input: {
   authMode: 'local-dev' | 'm01';
   webAuth: BrowserSessionAuth;
   oidc?: M01BrowserOidc;
+  /** Explicit M01 roles admitted to the Hub; this is a login boundary, not per-action RBAC. */
+  allowedRoles?: readonly string[];
   secureCookies: boolean;
   browserBindingFactory?: () => string;
 }): BrowserAuthGateway {
+  const allowedRoles = input.authMode === 'm01' ? new Set(input.allowedRoles ?? []) : new Set<string>();
+  if (input.authMode === 'm01' && allowedRoles.size === 0) {
+    throw new Error('M01 role admission is not configured');
+  }
   const expiredAuthenticationCookies = (): string[] => {
     const expiry = `Path=/; HttpOnly; SameSite=Lax${input.secureCookies ? '; Secure' : ''}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     return [input.webAuth.expiredCookie(), `hub_token=; ${expiry}`, `aeos_session=; ${expiry}`, expiredBindingCookie(input.secureCookies)];
@@ -173,6 +179,9 @@ export function createBrowserAuthGateway(input: {
         const browserBinding = browserBindingFromCookie(cookieHeader);
         if (!browserBinding) throw new Error('browser binding required');
         const actor = await input.oidc!.completeLogin({ code, state, browserBinding });
+        if (actor.roles.length === 0 || !actor.roles.some((role) => allowedRoles.has(role))) {
+          throw new Error('M01 role admission denied');
+        }
         // A successful sign-in replaces any authenticated Hub session carried by this browser.
         input.webAuth.revoke(cookieHeader);
         const sessionId = input.webAuth.createSession(actor);

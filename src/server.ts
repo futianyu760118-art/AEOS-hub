@@ -105,6 +105,7 @@ const authGateway = createBrowserAuthGateway({
   authMode: AUTH_MODE,
   webAuth,
   ...(m01Oidc ? { oidc: m01Oidc } : {}),
+  ...(m01Config.authMode === 'm01' ? { allowedRoles: m01Config.allowedRoles } : {}),
   secureCookies: COOKIE_SECURE,
 });
 function addCookie(res: ServerResponse, value: string): void {

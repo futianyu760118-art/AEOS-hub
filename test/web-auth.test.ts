@@ -52,12 +52,18 @@ test('local development actor values are validated and production requires M01 w
   assert.equal(cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: '1' }), true);
   assert.equal(cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: '0' }), false);
   assert.throws(() => cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: 'yes' }), /AEOS_COOKIE_SECURE/);
-  assert.throws(() => assertAuthModeAllowedInEnvironment('local-dev', { NODE_ENV: 'production' }), /AEOS_AUTH_MODE=m01/);
-  assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production' }), /AEOS_COOKIE_SECURE=1/);
-  assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production', AEOS_COOKIE_SECURE: '0' }), /AEOS_COOKIE_SECURE=1/);
-  assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production', AEOS_COOKIE_SECURE: '1' }));
-  assert.equal(cookieSecureFromEnvironment({ NODE_ENV: 'production', AEOS_COOKIE_SECURE: '1' }), true);
-  assert.throws(() => cookieSecureFromEnvironment({ NODE_ENV: 'production' }), /AEOS_COOKIE_SECURE=1/);
+  for (const NODE_ENV of ['uat', 'staging', 'production', 'unknown-environment']) {
+    assert.throws(() => assertAuthModeAllowedInEnvironment('local-dev', { NODE_ENV }), /AEOS_AUTH_MODE=m01/);
+    assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV }), /AEOS_COOKIE_SECURE=1/);
+    assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV, AEOS_COOKIE_SECURE: '0' }), /AEOS_COOKIE_SECURE=1/);
+    assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV, AEOS_COOKIE_SECURE: '1' }));
+    assert.equal(cookieSecureFromEnvironment({ NODE_ENV, AEOS_COOKIE_SECURE: '1' }), true);
+    assert.throws(() => cookieSecureFromEnvironment({ NODE_ENV }), /AEOS_COOKIE_SECURE=1/);
+  }
+  for (const NODE_ENV of [undefined, 'development', 'test', 'local']) {
+    assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('local-dev', NODE_ENV === undefined ? {} : { NODE_ENV }));
+    assert.equal(cookieSecureFromEnvironment(NODE_ENV === undefined ? {} : { NODE_ENV }), false);
+  }
 });
 
 test('session expiry, capacity, and replacement revoke old sessions without exposing their values', () => {

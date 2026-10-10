@@ -22,7 +22,7 @@ function gatewayFixture() {
     },
   };
   const auth = new BrowserSessionAuth('demo', 'replace-me');
-  return { calls, auth, gateway: createBrowserAuthGateway({ authMode: 'm01', webAuth: auth, oidc, secureCookies: true, browserBindingFactory: () => 'binding-1234567890' }) };
+  return { calls, auth, gateway: createBrowserAuthGateway({ authMode: 'm01', webAuth: auth, oidc, allowedRoles: ['manager'], secureCookies: true, browserBindingFactory: () => 'binding-1234567890' }) };
 }
 
 test('M01 gateway rejects password POST and starts browser-bound GET login without external Keycloak', async () => {
@@ -65,6 +65,20 @@ test('callback failure and logout clear every authentication cookie without reve
   assert.equal(logout.status, 200);
   for (const name of ['aeos_auth', 'hub_token', 'aeos_session', 'aeos_m01_binding']) {
     assert.match(logout.cookies!.join('\n'), new RegExp(`^${name}=`, 'm'));
+  }
+});
+
+test('M01 callback refuses actors without an allowed role and creates no session', async () => {
+  for (const roles of [[], ['reader']]) {
+    const { auth, gateway } = gatewayFixture();
+    const rejectedGateway = createBrowserAuthGateway({
+      authMode: 'm01', webAuth: auth, allowedRoles: ['manager'], secureCookies: true,
+      oidc: { beginLogin: async () => ({ redirectUrl: 'https://id.example.test/authorize' }), completeLogin: async () => ({ ...m01Actor, roles }) },
+    });
+    const response = await rejectedGateway.callback('GET', 'aeos_m01_binding=binding-1234567890', 'code-value', 'state-value');
+    assert.equal(response.location, '/?auth_error=1');
+    assert.equal(auth.isAuthorized(response.cookies?.find((cookie) => cookie.startsWith('aeos_auth='))), false);
+    assert.match(response.cookies!.join('\n'), /^aeos_m01_binding=.*Max-Age=0/m);
   }
 });
 

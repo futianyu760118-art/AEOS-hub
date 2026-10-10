@@ -12,6 +12,7 @@ const m01Environment: NodeJS.ProcessEnv = {
   M01_CLIENT_SECRET: 'not-a-real-secret',
   M01_REDIRECT_URI: 'http://localhost:3000/api/auth/callback',
   M01_AUDIENCE: 'aeos-api',
+  AEOS_M01_ALLOWED_ROLES: 'manager, analyst, manager',
 };
 
 const oidcConfig = {
@@ -21,6 +22,7 @@ const oidcConfig = {
   clientSecret: 'not-a-real-secret',
   redirectUri: 'http://localhost:3000/api/auth/callback',
   audience: 'aeos-hub',
+  allowedRoles: ['manager'],
 };
 const authorizationEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/auth';
 const tokenEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/token';
@@ -253,7 +255,7 @@ test('M01 OIDC rejects incompatible token endpoint authentication and sanitizes 
 });
 
 test('M01 configuration reports every missing required setting without exposing values', () => {
-  for (const name of ['M01_ISSUER', 'M01_CLIENT_ID', 'M01_CLIENT_SECRET', 'M01_REDIRECT_URI', 'M01_AUDIENCE']) {
+  for (const name of ['M01_ISSUER', 'M01_CLIENT_ID', 'M01_CLIENT_SECRET', 'M01_REDIRECT_URI', 'M01_AUDIENCE', 'AEOS_M01_ALLOWED_ROLES']) {
     const environment = { ...m01Environment, [name]: '   ' };
     assert.throws(() => readM01Config(environment), new RegExp(name));
   }
@@ -267,6 +269,7 @@ test('M01 configuration accepts complete valid M01 settings', () => {
     clientSecret: 'not-a-real-secret',
     redirectUri: 'http://localhost:3000/api/auth/callback',
     audience: 'aeos-api',
+    allowedRoles: ['manager', 'analyst'],
   });
 });
 
@@ -311,6 +314,23 @@ test('M01 configuration rejects unsafe or non-Hub callback URLs while accepting 
     readM01Config({ ...m01Environment, M01_REDIRECT_URI: 'http://localhost:3000/api/auth/callback' }).redirectUri,
     'http://localhost:3000/api/auth/callback',
   );
+});
+
+test('M01 configuration permits loopback HTTP only in explicit local environments and requires HTTPS elsewhere', () => {
+  for (const NODE_ENV of [undefined, 'development', 'test', 'local']) {
+    const environment = { ...m01Environment, ...(NODE_ENV === undefined ? {} : { NODE_ENV }) };
+    assert.equal(readM01Config(environment).redirectUri, 'http://localhost:3000/api/auth/callback');
+  }
+  for (const NODE_ENV of ['uat', 'staging', 'production', 'unknown-environment']) {
+    assert.throws(() => readM01Config({ ...m01Environment, NODE_ENV }), /M01_REDIRECT_URI/);
+  }
+  assert.equal(readM01Config({ ...m01Environment, NODE_ENV: 'uat', M01_REDIRECT_URI: 'https://hub.example.test/api/auth/callback' }).redirectUri, 'https://hub.example.test/api/auth/callback');
+});
+
+test('M01 configuration rejects blank, malformed, and oversized allowed role admission lists', () => {
+  for (const AEOS_M01_ALLOWED_ROLES of ['', ' , ', 'manager,,analyst', 'manager, bad role', 'x'.repeat(129), Array.from({ length: 65 }, (_, index) => `role-${index}`).join(',')]) {
+    assert.throws(() => readM01Config({ ...m01Environment, AEOS_M01_ALLOWED_ROLES }), /AEOS_M01_ALLOWED_ROLES/);
+  }
 });
 
 test('actor context rejects non-object claims and missing identity claims', () => {

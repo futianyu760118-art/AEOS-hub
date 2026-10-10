@@ -35,7 +35,7 @@ PostgreSQL 与 Keycloak 均没有宿主机端口；只有 Caddy 的 `127.0.0.1:<
 4. 为浏览器 Client 的专用 client scope 配置并加入 **ID token** 的 mapper：
    - `tenant_id`：User Attribute mapper，claim 名称 `tenant_id`，单值；同时在 Realm User Profile 中把该属性设为必填。Hub 缺少或为空时会拒绝登录。
    - `organization_id`：User Attribute mapper，claim 名称 `organization_id`，单值、可选；未设置时不要伪造值。
-   - `roles`：Realm Role mapper，claim 名称 `roles`，JSON 类型 `String`、multivalued；Hub 只读取顶层 `roles` 数组。
+   - `roles`：Realm Role mapper，claim 名称 `roles`，JSON 类型 `String`、multivalued；Hub 只读取顶层 `roles` 数组。每个进入 Hub 的用户至少须拥有一个与 `AEOS_M01_ALLOWED_ROLES` 相交的角色。
    - audience：Audience mapper，把 `aeos-hub-web` 加入 ID token 的 `aud`。本接入把 `M01_AUDIENCE` 设为同一值，Hub 会同时验证 client ID 与 audience。
 5. 仅对服务账号 Client 的专用 scope 添加 Hardcoded claim mapper：`aeos_actor_type=service`。不要把该 mapper 加到人类浏览器 Client；服务 token 还必须包含该 Client 的 `client_id` 或 `azp`、`tenant_id`、正确 audience 和最小 roles。
 
@@ -69,11 +69,14 @@ $env:M01_CLIENT_ID = 'aeos-hub-web'
 $env:M01_CLIENT_SECRET = '<从 Keycloak 生成并安全保存的 client secret>'
 $env:M01_REDIRECT_URI = 'http://127.0.0.1:8787/api/auth/callback'
 $env:M01_AUDIENCE = 'aeos-hub-web'
+$env:AEOS_M01_ALLOWED_ROLES = 'manager,analyst'
 $env:AEOS_COOKIE_SECURE = '0'
 npm run web
 ```
 
-此 HTTP callback 只因它是严格的 loopback 地址、且 `NODE_ENV=development` 时才被当前认证代码允许；它绝不可用于生产、UAT、局域网或任何非 loopback hostname。首次登录前访问 discovery，确认 issuer 和所有 authorization/token/JWKS endpoint 均为预期 HTTPS URL；再以有 `tenant_id` 和允许 role 的测试用户完成登录，并确认 Hub session 的 actor、tenant、roles 不含 token 或 secret。
+`AEOS_M01_ALLOWED_ROLES` 是 M01 模式的必填准入配置：逗号分隔的非空角色名列表（会 trim、去重并限制数量/长度），例如 `manager,analyst`。未设置、为空或格式无效时 Hub 拒绝启动。回调仅在 token 顶层 `roles` 非空且与该列表有交集时才创建 Hub session；失败只返回通用登录失败并清除认证 cookie，不回显 token、原始角色或配置。
+
+此 HTTP callback 只因它是严格的 loopback 地址、且 `NODE_ENV` 未设置或明确为 `development`、`test`、`local` 时才被当前认证代码允许；它绝不可用于生产、UAT、staging、局域网或任何非 loopback hostname。`NODE_ENV=uat`、`staging`、`production` 及任何显式未知值均为严格环境：必须 `AEOS_AUTH_MODE=m01`、`AEOS_COOKIE_SECURE=1` 且使用 HTTPS redirect URI；不能回退 local-dev。首次登录前访问 discovery，确认 issuer 和所有 authorization/token/JWKS endpoint 均为预期 HTTPS URL；再以有 `tenant_id` 和允许 role 的测试用户完成登录，并确认 Hub session 的 actor、tenant、roles 不含 token 或 secret。
 
 ### 生产/UAT（HTTPS Hub）
 
@@ -86,10 +89,13 @@ M01_CLIENT_ID=aeos-hub-web
 M01_CLIENT_SECRET=<从 Keycloak 生成并安全保存的 client secret>
 M01_REDIRECT_URI=https://<hub-host>/api/auth/callback
 M01_AUDIENCE=aeos-hub-web
+AEOS_M01_ALLOWED_ROLES=manager,analyst
 AEOS_COOKIE_SECURE=1
 ```
 
-生产/UAT 的 Keycloak Client 只允许对应的精确 HTTPS redirect URI 与 web origin；根目录 Compose 未提供 M01 Hub Docker TLS/CA 挂载，必须在受控部署定义中显式、安全地完成这些注入。
+生产/UAT 的 Keycloak Client 只允许对应的精确 HTTPS redirect URI 与 web origin；staging 与任何显式未知 `NODE_ENV` 也执行相同的严格规则。根目录 Compose 未提供 M01 Hub Docker TLS/CA 挂载，必须在受控部署定义中显式、安全地完成这些注入。
+
+`AEOS_M01_ALLOWED_ROLES` 只是在身份回调后、建立 Hub session 前的最小准入边界，避免任意已登录 M01 用户进入 Hub。它不是每条业务动作的最终细粒度 RBAC；后续应由 Hub Guard 按操作、资源、租户和审批链继续扩展授权。
 
 ## 4. 运维边界
 
@@ -101,7 +107,7 @@ AEOS_COOKIE_SECURE=1
 
 - [ ] `docker compose ... config` 通过，且端口映射仅为 `127.0.0.1:<port>:443`；没有 PostgreSQL/Keycloak 宿主机端口。
 - [ ] 已信任本地 CA，discovery 的 issuer 为 HTTPS 且与 `M01_ISSUER` 一致。
-- [ ] 正确 tenant 与允许 role 的用户可完成 login；缺失/错误 tenant、错误 role 的 token 被 Hub 拒绝或无相应权限，未创建可用业务会话。
+- [ ] 正确 tenant 与 `AEOS_M01_ALLOWED_ROLES` 相交 role 的用户可完成 login；缺失/空 roles 或无交集 role 的 token 被 Hub 拒绝，未创建可用业务会话。
 - [ ] logout 清除 Hub cookies，并关闭该 Hub session 关联的 WebSocket；之后不能自动重连受保护 WebSocket。
 - [ ] callback 的 state、PKCE、nonce 和浏览器 binding 被篡改、过期或跨浏览器复用时登录失败且不泄露上游细节。
 - [ ] 生产演练中 `AEOS_COOKIE_SECURE=1`、HTTPS redirect URI 与精确 web origin 均生效；未出现 local-dev/无认证回退。

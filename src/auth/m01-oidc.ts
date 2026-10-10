@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
-import { normalizeActorContext, type ActorContext } from './actor-context.ts';
+import { isLocalDevelopmentEnvironment, m01AllowedRolesFromEnvironment, normalizeActorContext, type ActorContext } from './actor-context.ts';
 
 export type M01Config =
   | { authMode: 'local-dev' }
@@ -11,6 +11,7 @@ export type M01Config =
     clientSecret: string;
     redirectUri: string;
     audience: string;
+    allowedRoles: string[];
   };
 
 function requiredEnvironmentValue(environment: NodeJS.ProcessEnv, name: string): string {
@@ -51,7 +52,7 @@ function validateIssuer(issuer: string): void {
   }
 }
 
-function validateRedirectUri(redirectUri: string): void {
+function validateRedirectUri(redirectUri: string, environment: NodeJS.ProcessEnv): void {
   const url = validUrl(redirectUri, 'M01_REDIRECT_URI');
   assertNoUrlCredentialsQueryOrHash(url, redirectUri, 'M01_REDIRECT_URI');
   if (!url.host) {
@@ -61,6 +62,10 @@ function validateRedirectUri(redirectUri: string): void {
     throw new Error('M01_REDIRECT_URI must target /api/auth/callback');
   }
   if (url.protocol === 'https:') return;
+
+  if (!isLocalDevelopmentEnvironment(environment)) {
+    throw new Error('M01_REDIRECT_URI must use HTTPS outside local development');
+  }
 
   const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
   if (url.protocol !== 'http:' || !loopbackHosts.has(url.hostname)) {
@@ -76,10 +81,11 @@ export function readM01Config(environment: NodeJS.ProcessEnv = process.env): M01
   const clientSecret = requiredEnvironmentValue(environment, 'M01_CLIENT_SECRET');
   const redirectUri = requiredEnvironmentValue(environment, 'M01_REDIRECT_URI');
   const audience = requiredEnvironmentValue(environment, 'M01_AUDIENCE');
+  const allowedRoles = m01AllowedRolesFromEnvironment(environment);
   validateIssuer(issuer);
-  validateRedirectUri(redirectUri);
+  validateRedirectUri(redirectUri, environment);
 
-  return { authMode: 'm01', issuer, clientId, clientSecret, redirectUri, audience };
+  return { authMode: 'm01', issuer, clientId, clientSecret, redirectUri, audience, allowedRoles };
 }
 
 type M01EnabledConfig = Extract<M01Config, { authMode: 'm01' }>;
