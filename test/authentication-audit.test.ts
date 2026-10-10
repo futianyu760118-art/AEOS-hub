@@ -28,14 +28,20 @@ test('writes credential-free Evidence for each terminal M01 authentication outco
   assert.equal(succeeded.kind, 'authentication_audit');
   assert.equal(succeeded.tenant_id, 'tenant-42');
   assert.equal(succeeded.object_ref, 'hub://identity/m01/tenant-42/m01%3Auser%3Amanager-42');
+  assert.equal(succeeded.actor_id, 'm01:user:manager-42');
+  assert.equal(succeeded.actor_type, 'human');
   assert.deepEqual(succeeded.payload, {
     outcome: 'login_succeeded', authMode: 'm01', actor: { actorId: 'm01:user:manager-42', actorType: 'human', tenantId: 'tenant-42', roles: ['manager'] },
   });
   assert.equal(failed.object_ref, 'hub://identity/m01');
+  assert.equal(failed.actor_id, undefined);
+  assert.equal(failed.actor_type, undefined);
   assert.deepEqual(failed.payload, { outcome: 'authentication_failed', authMode: 'm01' });
   assert.deepEqual(denied.payload, {
     outcome: 'admission_denied', authMode: 'm01', actor: { actorId: 'm01:user:manager-42', actorType: 'human', tenantId: 'tenant-42', roles: ['manager'] },
   });
+  assert.equal(denied.actor_id, 'm01:user:manager-42');
+  assert.equal(denied.actor_type, 'human');
 
   const stored = readFileSync(file, 'utf8');
   assert.doesNotMatch(stored, /password|cookie|session|token|secret|code|state|verifier/i);

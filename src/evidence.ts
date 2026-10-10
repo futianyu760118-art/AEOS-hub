@@ -12,6 +12,8 @@ export const dataDir = join(here, '..', 'data');
 export const evidenceFile = join(dataDir, 'evidence.jsonl');
 
 export type EvidenceEntry = EvidenceEntryContract;
+export type EvidenceActorType = NonNullable<EvidenceEntry['actor_type']>;
+export type EvidenceQuery = { actorId?: string; actorType?: EvidenceActorType };
 
 /** Callers may omit pilot defaults, but persisted records always satisfy EvidenceEntryContract. */
 export type EvidenceInput = Omit<
@@ -102,7 +104,12 @@ export function appendEvidence(partial: EvidenceInput, file = evidenceFile): Evi
 }
 
 /** Reads a bounded tail asynchronously. Archives are retained for audit/backup. */
-export async function readRecentEvidence(limit: number, file = evidenceFile): Promise<{ rows: EvidenceEntry[]; total: number; totalIsExact: false; archivedFiles: number }> {
+function matchesEvidenceQuery(entry: EvidenceEntry, query: EvidenceQuery): boolean {
+  return (!query.actorId || entry.actor_id === query.actorId)
+    && (!query.actorType || entry.actor_type === query.actorType);
+}
+
+export async function readRecentEvidence(limit: number, file = evidenceFile, query: EvidenceQuery = {}): Promise<{ rows: EvidenceEntry[]; total: number; totalIsExact: false; archivedFiles: number }> {
   const archive = join(dirname(file), 'evidence-archive');
   const archived = existsSync(archive) ? readdirSync(archive).filter((name) => name.endsWith('.jsonl')).sort().reverse() : [];
   const files = [file, ...archived.map((name) => join(archive, name))];
@@ -127,7 +134,10 @@ export async function readRecentEvidence(limit: number, file = evidenceFile): Pr
         suffix = position > 0 ? buffer.subarray(0, firstNewline + 1) : Buffer.alloc(0);
         for (const line of complete.toString('utf8').split('\n').reverse()) {
           if (!line.trim()) continue;
-          try { rows.push(normalizeStoredEvidence(JSON.parse(line))); } catch { /* Skip partial or corrupt tail. */ }
+          try {
+            const entry = normalizeStoredEvidence(JSON.parse(line));
+            if (matchesEvidenceQuery(entry, query)) rows.push(entry);
+          } catch { /* Skip partial or corrupt tail. */ }
           if (rows.length >= limit) break;
         }
       }

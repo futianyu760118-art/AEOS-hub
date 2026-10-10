@@ -52,6 +52,38 @@ test('writes a complete, traceable Evidence entry', async (t) => {
   assert.equal(recent.rows[0]?.object_ref, 'business://order/SO-1001');
 });
 
+test('stores a typed actor identity and filters Evidence without excluding legacy events', async (t) => {
+  const file = evidenceFile(t);
+  appendEvidence({
+    kind: 'authentication_audit', tenant_id: 'tenant-a', object_ref: 'hub://identity/m01/tenant-a/user-a',
+    actor_id: 'm01:user:user-a', actor_type: 'human', payload: { outcome: 'login_succeeded' },
+  }, file);
+  appendEvidence({
+    kind: 'app_event', tenant_id: 'tenant-a', object_ref: 'hub://agent/hrm-master',
+    actor_id: 'agent:hrm-master', actor_type: 'agent', payload: { action: 'delegated' },
+  }, file);
+  appendEvidence({ kind: 'app_event', tenant_id: 'tenant-a', object_ref: 'hub://runtime/system', payload: { legacy: true } }, file);
+
+  const human = await readRecentEvidence(10, file, { actorId: 'm01:user:user-a', actorType: 'human' });
+  assert.equal(human.rows.length, 1);
+  assert.equal(human.rows[0]?.actor_id, 'm01:user:user-a');
+  assert.equal(human.rows[0]?.actor_type, 'human');
+
+  const agent = await readRecentEvidence(10, file, { actorType: 'agent' });
+  assert.equal(agent.rows.length, 1);
+  assert.equal(agent.rows[0]?.actor_id, 'agent:hrm-master');
+});
+
+test('rejects incomplete or unsupported typed actor identities', () => {
+  const base = {
+    event_id: '33333333-3333-4333-8333-333333333333', occurred_at: '2026-10-10T00:00:00.000Z',
+    tenant_id: 'tenant-a', object_ref: 'hub://identity/m01', source_system: 'aeos-hub', correlation_id: 'corr-3',
+    version: '1.0', kind: 'authentication_audit', evidence_refs: [], payload_hash: '0'.repeat(64),
+  };
+  assert.throws(() => validateEvidenceEntry({ ...base, actor_id: 'm01:user:user-a' }), /actor_id and actor_type/);
+  assert.throws(() => validateEvidenceEntry({ ...base, actor_id: 'm01:user:user-a', actor_type: 'unknown' }), /actor_type/);
+});
+
 test('uses a Hub runtime reference for system evidence without fabricating a business object', (t) => {
   const file = evidenceFile(t);
   const entry = appendEvidence({

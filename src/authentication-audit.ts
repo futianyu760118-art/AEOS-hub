@@ -34,6 +34,8 @@ export function appendAuthenticationAuditEvidence(
     ...(actor ? {
       tenant_id: actor.tenantId,
       object_ref: `hub://identity/m01/${encodeURIComponent(actor.tenantId)}/${encodeURIComponent(actor.actorId)}`,
+      actor_id: actor.actorId,
+      actor_type: actor.actorType,
     } : { object_ref: 'hub://identity/m01' }),
     payload: { outcome: event.type, authMode: event.authMode, ...(actor ? { actor } : {}) },
   });

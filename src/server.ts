@@ -1553,7 +1553,16 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const limit = boundedLimit(url.searchParams.get('limit'));
-      sendJson(res, 200, await readRecentEvidence(limit));
+      const actorId = url.searchParams.get('actor_id')?.trim();
+      const requestedActorType = url.searchParams.get('actor_type')?.trim();
+      if ((actorId !== undefined && (!actorId || actorId.length > 200))
+        || (requestedActorType !== undefined && !['human', 'service', 'agent', 'system'].includes(requestedActorType))) {
+        throw new Error('invalid actor filter');
+      }
+      sendJson(res, 200, await readRecentEvidence(limit, evidenceFile, {
+        ...(actorId ? { actorId } : {}),
+        ...(requestedActorType ? { actorType: requestedActorType as 'human' | 'service' | 'agent' | 'system' } : {}),
+      }));
       return;
     } catch (e) {
       sendJson(res, 400, { error: (e as Error).message });
