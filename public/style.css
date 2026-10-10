@@ -1952,9 +1952,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workspace-root .future-window-row small, .workspace-root .table-row small, .workspace-root .kitting-row small, .workspace-root .quality-row small { font-size: 12px; }
 .workspace-root .dashboard-loading { font-size: 13px; }
 
-/* Temporary local-only product review: hide the entire operating-center UI.
-   The routes, API and stored records remain available in code for restoration. */
-#operating-center-nav,
+/* The legacy operating-case and Inbox surfaces remain retired locally.
+   Task Center is intentionally kept as its own manager-facing entry. */
 [data-target="cases"],
 #view-cases,
 #view-inbox,
