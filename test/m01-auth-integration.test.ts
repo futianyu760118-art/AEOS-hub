@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import type { ActorContext } from '../src/auth/actor-context.ts';
 import { BrowserSessionAuth, createBrowserAuthGateway, isPublicLoginResource } from '../src/web-auth.ts';
@@ -35,14 +37,16 @@ test('M01 gateway rejects password POST and starts browser-bound GET login witho
 });
 
 test('M01 callback completes only through the browser binding and state route, then returns a safe actor session', async () => {
-  const { calls, gateway } = gatewayFixture();
-  const response = await gateway.callback('GET', 'aeos_m01_binding=binding-1234567890', 'code-value', 'state-value');
+  const { calls, auth, gateway } = gatewayFixture();
+  const previousSession = auth.createSession(m01Actor)!;
+  const response = await gateway.callback('GET', `aeos_m01_binding=binding-1234567890; aeos_auth=${previousSession}`, 'code-value', 'state-value');
   assert.equal(response.status, 302);
   assert.equal(response.location, '/');
   assert.deepEqual(calls, [{ kind: 'complete', code: 'code-value', state: 'state-value', browserBinding: 'binding-1234567890' }]);
   const sessionCookie = response.cookies!.find((cookie) => cookie.startsWith('aeos_auth='))!;
   assert.match(response.cookies!.find((cookie) => cookie.startsWith('aeos_m01_binding='))!, /Max-Age=0/);
   const sessionId = /aeos_auth=([0-9a-f-]{36})/.exec(sessionCookie)![1]!;
+  assert.equal(auth.isAuthorized(`aeos_auth=${previousSession}`), false);
   assert.equal(gateway.actorIdFromCookie(`aeos_auth=${sessionId}`), 'm01:user:manager-42');
   assert.deepEqual(gateway.session(`aeos_auth=${sessionId}`), {
     authenticated: true, authMode: 'm01', actorId: 'm01:user:manager-42', actorType: 'human', tenantId: 'tenant-42', roles: ['manager'], authSource: 'm01',
@@ -76,4 +80,10 @@ test('gateway rejects unauthenticated protected HTTP/static/WebSocket access and
   const actorId = gateway.actorIdFromCookie(`aeos_auth=${sessionId}`);
   assert.equal(actorId, 'm01:user:manager-42');
   assert.doesNotMatch(actorId!, /^web-session:/);
+});
+
+test('client reconnects a closed WebSocket only after an explicitly authenticated session summary', () => {
+  const appSource = readFileSync(join(process.cwd(), 'public', 'app.js'), 'utf8');
+  assert.match(appSource, /session\?\.authenticated === true\) reconnectTimer = window\.setTimeout\(connect, 3000\)/);
+  assert.match(appSource, /else showLoginRequired\('登录会话已结束，请重新登录'\)/);
 });

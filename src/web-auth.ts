@@ -7,6 +7,9 @@ export const M01_BINDING_COOKIE_NAME = 'aeos_m01_binding';
 const AUTH_COOKIE_RE = /(?:^|;\s*)aeos_auth=([0-9a-f-]{36})(?:;|$)/;
 const M01_BINDING_COOKIE_RE = /(?:^|;\s*)aeos_m01_binding=([A-Za-z0-9_-]{16,512})(?:;|$)/;
 const LOCAL_CONTEXT_VALUE_RE = /^[A-Za-z0-9._:@/-]{1,128}$/;
+const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000;
+const DEFAULT_MAX_SESSIONS = 10_000;
 
 function digest(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest();
@@ -30,14 +33,19 @@ export function passwordFromEnvironment(env: NodeJS.ProcessEnv = process.env): s
 
 export function cookieSecureFromEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.AEOS_COOKIE_SECURE;
+  if (env.NODE_ENV === 'production' || env.AEOS_ENV === 'production') {
+    if (value !== '1') throw new Error('AEOS_COOKIE_SECURE=1 is required in production');
+    return true;
+  }
   if (value === undefined || value === '0') return false;
   if (value === '1') return true;
   throw new Error('AEOS_COOKIE_SECURE must be 0 or 1');
 }
 
 export function assertAuthModeAllowedInEnvironment(authMode: 'local-dev' | 'm01', env: NodeJS.ProcessEnv = process.env): void {
-  if (authMode === 'local-dev' && (env.NODE_ENV === 'production' || env.AEOS_ENV === 'production')) {
-    throw new Error('AEOS_AUTH_MODE=local-dev is not permitted in production');
+  if (env.NODE_ENV === 'production' || env.AEOS_ENV === 'production') {
+    if (authMode !== 'm01') throw new Error('AEOS_AUTH_MODE=m01 is required in production');
+    if (env.AEOS_COOKIE_SECURE !== '1') throw new Error('AEOS_COOKIE_SECURE=1 is required in production');
   }
 }
 
@@ -126,6 +134,7 @@ export type BrowserAuthGateway = {
   session(cookieHeader: string | undefined): Record<string, unknown>;
   isAuthorized(cookieHeader: string | undefined): boolean;
   canAccess(pathname: string, method: string | undefined, cookieHeader: string | undefined): boolean;
+  sessionIdFromCookie(cookieHeader: string | undefined): string | null;
   actorIdFromCookie(cookieHeader: string | undefined): string | null;
 };
 
@@ -164,10 +173,14 @@ export function createBrowserAuthGateway(input: {
         const browserBinding = browserBindingFromCookie(cookieHeader);
         if (!browserBinding) throw new Error('browser binding required');
         const actor = await input.oidc!.completeLogin({ code, state, browserBinding });
+        // A successful sign-in replaces any authenticated Hub session carried by this browser.
+        input.webAuth.revoke(cookieHeader);
+        const sessionId = input.webAuth.createSession(actor);
+        if (!sessionId) throw new Error('session capacity reached');
         return {
           status: 302,
           location: '/',
-          cookies: [input.webAuth.sessionCookie(input.webAuth.createSession(actor)), expiredBindingCookie(input.secureCookies)],
+          cookies: [input.webAuth.sessionCookie(sessionId), expiredBindingCookie(input.secureCookies)],
         };
       } catch {
         return failure(cookieHeader);
@@ -187,36 +200,119 @@ export function createBrowserAuthGateway(input: {
     canAccess(pathname, method, cookieHeader) {
       return isPublicLoginResource(pathname, method) || input.webAuth.isAuthorized(cookieHeader);
     },
+    sessionIdFromCookie(cookieHeader) {
+      return input.webAuth.authorizedSessionId(cookieHeader);
+    },
     actorIdFromCookie(cookieHeader) {
       return input.webAuth.actorFromCookie(cookieHeader)?.actorId ?? null;
     },
   };
 }
 
+export type SessionSocket = { close(code?: number, reason?: string): void };
+
+/** Tracks sockets by opaque Hub session ID so revocation cannot affect another session for the same actor. */
+export class SessionSocketRegistry {
+  private readonly sessionSockets = new Map<string, Set<SessionSocket>>();
+  private readonly socketSessions = new Map<SessionSocket, string>();
+
+  attach(sessionId: string, socket: SessionSocket): void {
+    this.detach(socket);
+    const sockets = this.sessionSockets.get(sessionId) ?? new Set<SessionSocket>();
+    sockets.add(socket);
+    this.sessionSockets.set(sessionId, sockets);
+    this.socketSessions.set(socket, sessionId);
+  }
+
+  detach(socket: SessionSocket): void {
+    const sessionId = this.socketSessions.get(socket);
+    if (!sessionId) return;
+    this.socketSessions.delete(socket);
+    const sockets = this.sessionSockets.get(sessionId);
+    sockets?.delete(socket);
+    if (sockets?.size === 0) this.sessionSockets.delete(sessionId);
+  }
+
+  closeSession(sessionId: string): void {
+    const sockets = this.sessionSockets.get(sessionId);
+    if (!sockets) return;
+    this.sessionSockets.delete(sessionId);
+    for (const socket of sockets) {
+      this.socketSessions.delete(socket);
+      socket.close(1008, 'Session revoked');
+    }
+  }
+}
+
+type SessionRecord = {
+  actor: ActorContext;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+};
+
+export type BrowserSessionAuthOptions = {
+  secureCookies?: boolean;
+  now?: () => number;
+  idleTtlMs?: number;
+  absoluteTtlMs?: number;
+  maxSessions?: number;
+  onSessionRevoked?: (sessionId: string) => void;
+};
+
 export class BrowserSessionAuth {
-  private readonly sessions = new Map<string, ActorContext>();
+  private readonly sessions = new Map<string, SessionRecord>();
   private readonly username: string;
   private readonly password: string;
   private readonly localActor: ActorContext;
   private readonly secureCookies: boolean;
+  private readonly clock: () => number;
+  private readonly idleTtlMs: number;
+  private readonly absoluteTtlMs: number;
+  private readonly maxSessions: number;
+  private readonly onSessionRevoked?: (sessionId: string) => void;
+  private readonly cleanupTimer: ReturnType<typeof setInterval>;
 
-  constructor(username: string, password: string, localActor: ActorContext = buildLocalDevActor({}, username), secureCookies = false) {
+  constructor(
+    username: string,
+    password: string,
+    localActor: ActorContext = buildLocalDevActor({}, username),
+    options: boolean | BrowserSessionAuthOptions = false,
+  ) {
+    const configuration: BrowserSessionAuthOptions = typeof options === 'boolean' ? { secureCookies: options } : options;
     this.username = username;
     this.password = password;
     this.localActor = localActor;
-    this.secureCookies = secureCookies;
+    this.secureCookies = configuration.secureCookies ?? false;
+    this.clock = configuration.now ?? Date.now;
+    this.idleTtlMs = configuration.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+    this.absoluteTtlMs = configuration.absoluteTtlMs ?? DEFAULT_ABSOLUTE_TTL_MS;
+    this.maxSessions = configuration.maxSessions ?? DEFAULT_MAX_SESSIONS;
+    this.onSessionRevoked = configuration.onSessionRevoked;
+    if (!Number.isFinite(this.idleTtlMs) || this.idleTtlMs <= 0 || !Number.isFinite(this.absoluteTtlMs) || this.absoluteTtlMs <= 0 || !Number.isInteger(this.maxSessions) || this.maxSessions <= 0) {
+      throw new Error('Browser session limits must be positive');
+    }
+    this.cleanupTimer = setInterval(() => this.pruneExpired(), Math.min(this.idleTtlMs, 60_000));
+    this.cleanupTimer.unref();
   }
 
   login(account: string, password: string): string | null {
     if (!credentialsMatch(account, password, this.username, this.password)) return null;
-    const sessionId = randomUUID();
-    this.sessions.set(sessionId, this.localActor);
-    return sessionId;
+    return this.createSession(this.localActor);
   }
 
-  createSession(actor: ActorContext): string {
+  loginReplacing(cookieHeader: string | undefined, account: string, password: string): string | null {
+    if (!credentialsMatch(account, password, this.username, this.password)) return null;
+    this.revoke(cookieHeader);
+    return this.createSession(this.localActor);
+  }
+
+  createSession(actor: ActorContext): string | null {
+    this.pruneExpired();
+    if (this.sessions.size >= this.maxSessions) return null;
+    const now = this.clock();
     const sessionId = randomUUID();
-    this.sessions.set(sessionId, actor);
+    this.sessions.set(sessionId, { actor, createdAt: now, lastSeenAt: now, expiresAt: now + this.absoluteTtlMs });
     return sessionId;
   }
 
@@ -225,13 +321,29 @@ export class BrowserSessionAuth {
   }
 
   actorFromCookie(cookieHeader: string | undefined): ActorContext | null {
-    const sessionId = this.sessionId(cookieHeader);
-    return sessionId ? this.sessions.get(sessionId) ?? null : null;
+    const sessionId = this.authorizedSessionId(cookieHeader);
+    return sessionId ? this.sessions.get(sessionId)!.actor : null;
   }
 
-  revoke(cookieHeader: string | undefined): void {
+  authorizedSessionId(cookieHeader: string | undefined): string | null {
     const sessionId = this.sessionId(cookieHeader);
-    if (sessionId) this.sessions.delete(sessionId);
+    if (!sessionId) return null;
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    const now = this.clock();
+    if (now >= session.expiresAt || now - session.lastSeenAt >= this.idleTtlMs) {
+      this.removeSession(sessionId);
+      return null;
+    }
+    session.lastSeenAt = now;
+    return sessionId;
+  }
+
+  revoke(cookieHeader: string | undefined): string | null {
+    const sessionId = this.sessionId(cookieHeader);
+    if (!sessionId || !this.sessions.has(sessionId)) return null;
+    this.removeSession(sessionId);
+    return sessionId;
   }
 
   sessionCookie(sessionId: string): string {
@@ -245,5 +357,17 @@ export class BrowserSessionAuth {
 
   private sessionId(cookieHeader: string | undefined): string | null {
     return AUTH_COOKIE_RE.exec(cookieHeader ?? '')?.[1] ?? null;
+  }
+
+  private pruneExpired(): void {
+    const now = this.clock();
+    for (const [sessionId, session] of this.sessions) {
+      if (now >= session.expiresAt || now - session.lastSeenAt >= this.idleTtlMs) this.removeSession(sessionId);
+    }
+  }
+
+  private removeSession(sessionId: string): void {
+    if (!this.sessions.delete(sessionId)) return;
+    try { this.onSessionRevoked?.(sessionId); } catch { /* session revocation must not fail open */ }
   }
 }

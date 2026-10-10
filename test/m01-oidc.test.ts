@@ -10,7 +10,7 @@ const m01Environment: NodeJS.ProcessEnv = {
   M01_ISSUER: 'https://login.example.test/',
   M01_CLIENT_ID: 'aeos-hub',
   M01_CLIENT_SECRET: 'not-a-real-secret',
-  M01_REDIRECT_URI: 'http://localhost:3000/auth/callback',
+  M01_REDIRECT_URI: 'http://localhost:3000/api/auth/callback',
   M01_AUDIENCE: 'aeos-api',
 };
 
@@ -19,7 +19,7 @@ const oidcConfig = {
   issuer: 'https://login.example.test/realms/aeos',
   clientId: 'aeos-hub',
   clientSecret: 'not-a-real-secret',
-  redirectUri: 'http://localhost:3000/auth/callback',
+  redirectUri: 'http://localhost:3000/api/auth/callback',
   audience: 'aeos-hub',
 };
 const authorizationEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/auth';
@@ -265,7 +265,7 @@ test('M01 configuration accepts complete valid M01 settings', () => {
     issuer: 'https://login.example.test/',
     clientId: 'aeos-hub',
     clientSecret: 'not-a-real-secret',
-    redirectUri: 'http://localhost:3000/auth/callback',
+    redirectUri: 'http://localhost:3000/api/auth/callback',
     audience: 'aeos-api',
   });
 });
@@ -294,20 +294,22 @@ test('M01 configuration rejects unsafe issuer URLs', () => {
   }
 });
 
-test('M01 configuration rejects unsafe redirect URLs while accepting loopback HTTP development callbacks', () => {
+test('M01 configuration rejects unsafe or non-Hub callback URLs while accepting the exact loopback Hub callback', () => {
   for (const redirectUri of [
     'file:///tmp/callback',
-    'http://example.test/auth/callback',
-    'https://username:password@login.example.test/auth/callback',
-    'https://login.example.test/auth/callback?code=secret',
-    'https://login.example.test/auth/callback#fragment',
+    'http://example.test/api/auth/callback',
+    'https://username:password@login.example.test/api/auth/callback',
+    'https://login.example.test/api/auth/callback?code=secret',
+    'https://login.example.test/api/auth/callback#fragment',
+    'http://localhost:3000/auth/callback',
+    'http://localhost:3000/api/auth/callback/other',
   ]) {
     assert.throws(() => readM01Config({ ...m01Environment, M01_REDIRECT_URI: redirectUri }), /M01_REDIRECT_URI/);
   }
 
   assert.equal(
-    readM01Config({ ...m01Environment, M01_REDIRECT_URI: 'http://localhost:3000/auth/callback' }).redirectUri,
-    'http://localhost:3000/auth/callback',
+    readM01Config({ ...m01Environment, M01_REDIRECT_URI: 'http://localhost:3000/api/auth/callback' }).redirectUri,
+    'http://localhost:3000/api/auth/callback',
   );
 });
 

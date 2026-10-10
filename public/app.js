@@ -3974,10 +3974,11 @@ function connect() {
     // reconnecting so a stale page returns to the login screen instead of
     // retrying WebSocket connections forever.
     void fetch('/api/auth/session', { credentials: 'same-origin' })
-      .then((response) => {
+      .then(async (response) => {
         if (!authenticated) return;
-        if (response.ok) reconnectTimer = window.setTimeout(connect, 3000);
-        else showLoginRequired('登录会话已结束，请重新输入账号和密码');
+        const session = response.ok ? await response.json().catch(() => null) : null;
+        if (session?.authenticated === true) reconnectTimer = window.setTimeout(connect, 3000);
+        else showLoginRequired('登录会话已结束，请重新登录');
       })
       .catch(() => {
         if (authenticated) reconnectTimer = window.setTimeout(connect, 3000);

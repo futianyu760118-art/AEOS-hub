@@ -55,6 +55,7 @@ import {
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
 import {
   BrowserSessionAuth,
+  SessionSocketRegistry,
   assertAuthModeAllowedInEnvironment,
   authRoutePolicy,
   buildLocalDevActor,
@@ -92,11 +93,12 @@ const AUTH_MODE = m01Config.authMode;
 assertAuthModeAllowedInEnvironment(AUTH_MODE);
 const COOKIE_SECURE = cookieSecureFromEnvironment();
 const LOGIN_USERNAME = usernameFromEnvironment();
+const sessionSockets = new SessionSocketRegistry();
 const webAuth = new BrowserSessionAuth(
   LOGIN_USERNAME,
   AUTH_MODE === 'local-dev' ? passwordFromEnvironment() : '',
   buildLocalDevActor(process.env, LOGIN_USERNAME),
-  COOKIE_SECURE,
+  { secureCookies: COOKIE_SECURE, onSessionRevoked: (sessionId) => sessionSockets.closeSession(sessionId) },
 );
 const m01Oidc = AUTH_MODE === 'm01' ? new M01OidcAuth(m01Config) : null;
 const authGateway = createBrowserAuthGateway({
@@ -1172,7 +1174,7 @@ const server = createServer(async (req, res) => {
       if (!account || !password || account.length > 128 || password.length > 1024) {
         sendJson(res, 401, { error: '账号或密码错误' }); return;
       }
-      const sessionId = webAuth.login(account, password);
+      const sessionId = webAuth.loginReplacing(req.headers.cookie, account, password);
       if (!sessionId) { sendJson(res, 401, { error: '账号或密码错误' }); return; }
       addCookie(res, webAuth.sessionCookie(sessionId));
       sendJson(res, 200, { ok: true });
@@ -1560,14 +1562,16 @@ const wss = new WebSocketServer({
   },
 });
 wss.on('connection', (ws, request) => {
+  const sessionId = authGateway.sessionIdFromCookie(request.headers.cookie);
   const actorId = authGateway.actorIdFromCookie(request.headers.cookie);
-  if (!actorId) {
+  if (!sessionId || !actorId) {
     ws.close(1008, 'Authentication required');
     return;
   }
   allSockets.add(ws);
   viewOf.set(ws, null);
   actorOf.set(ws, actorId);
+  sessionSockets.attach(sessionId, ws);
   send(ws, { type: 'hello', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), modelOptions: buildModelOptions(), dataDir, evidenceFile });
 
   ws.on('message', async (raw) => {
@@ -1778,6 +1782,7 @@ wss.on('connection', (ws, request) => {
     }
   });
   ws.on('close', () => {
+    sessionSockets.detach(ws);
     allSockets.delete(ws);
     viewOf.delete(ws);
     actorOf.delete(ws);

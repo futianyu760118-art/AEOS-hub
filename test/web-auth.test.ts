@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   BrowserSessionAuth,
+  SessionSocketRegistry,
   assertAuthModeAllowedInEnvironment,
   authRoutePolicy,
   DEFAULT_LOGIN_USERNAME,
@@ -44,15 +45,55 @@ test('authenticated sessions retain a safe actor context instead of exposing ses
   assert.doesNotMatch(JSON.stringify(auth.actorFromCookie(`aeos_auth=${session}`)), /replace-me|aeos_auth/);
 });
 
-test('local development actor values are validated and production cookie switch fails closed', () => {
+test('local development actor values are validated and production requires M01 with Secure cookies', () => {
   assert.throws(() => buildLocalDevActor({ AEOS_LOCAL_TENANT_ID: 'bad tenant' }, 'operator'), /AEOS_LOCAL_TENANT_ID/);
   assert.throws(() => buildLocalDevActor({ AEOS_LOCAL_ROLES: 'manager, bad role' }, 'operator'), /AEOS_LOCAL_ROLES/);
   assert.equal(cookieSecureFromEnvironment({}), false);
   assert.equal(cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: '1' }), true);
   assert.equal(cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: '0' }), false);
   assert.throws(() => cookieSecureFromEnvironment({ AEOS_COOKIE_SECURE: 'yes' }), /AEOS_COOKIE_SECURE/);
-  assert.throws(() => assertAuthModeAllowedInEnvironment('local-dev', { NODE_ENV: 'production' }), /not permitted/);
-  assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production' }));
+  assert.throws(() => assertAuthModeAllowedInEnvironment('local-dev', { NODE_ENV: 'production' }), /AEOS_AUTH_MODE=m01/);
+  assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production' }), /AEOS_COOKIE_SECURE=1/);
+  assert.throws(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production', AEOS_COOKIE_SECURE: '0' }), /AEOS_COOKIE_SECURE=1/);
+  assert.doesNotThrow(() => assertAuthModeAllowedInEnvironment('m01', { NODE_ENV: 'production', AEOS_COOKIE_SECURE: '1' }));
+  assert.equal(cookieSecureFromEnvironment({ NODE_ENV: 'production', AEOS_COOKIE_SECURE: '1' }), true);
+  assert.throws(() => cookieSecureFromEnvironment({ NODE_ENV: 'production' }), /AEOS_COOKIE_SECURE=1/);
+});
+
+test('session expiry, capacity, and replacement revoke old sessions without exposing their values', () => {
+  let now = 1_000;
+  const revoked: string[] = [];
+  const auth = new BrowserSessionAuth('operator', 'replace-me', buildLocalDevActor({}, 'operator'), {
+    now: () => now, idleTtlMs: 10, absoluteTtlMs: 25, maxSessions: 1, onSessionRevoked: (sessionId) => revoked.push(sessionId),
+  });
+  const first = auth.login('operator', 'replace-me')!;
+  assert.equal(auth.createSession(buildLocalDevActor({}, 'other')), null);
+  now += 5;
+  assert.ok(auth.actorFromCookie(`aeos_auth=${first}`));
+  now += 9;
+  assert.ok(auth.actorFromCookie(`aeos_auth=${first}`));
+  now += 11;
+  assert.equal(auth.actorFromCookie(`aeos_auth=${first}`), null);
+  assert.deepEqual(revoked, [first]);
+  const second = auth.login('operator', 'replace-me')!;
+  const replacement = auth.loginReplacing(`aeos_auth=${second}`, 'operator', 'replace-me')!;
+  assert.equal(auth.isAuthorized(`aeos_auth=${second}`), false);
+  assert.equal(auth.isAuthorized(`aeos_auth=${replacement}`), true);
+  assert.ok(revoked.includes(second));
+});
+
+test('session-scoped WebSocket registry closes only the revoked session sockets', () => {
+  const registry = new SessionSocketRegistry();
+  const sockets = [{ closeCalls: 0, close() { this.closeCalls += 1; } }, { closeCalls: 0, close() { this.closeCalls += 1; } }];
+  const auth = new BrowserSessionAuth('operator', 'replace-me', buildLocalDevActor({}, 'operator'), { onSessionRevoked: (sessionId) => registry.closeSession(sessionId) });
+  const first = auth.login('operator', 'replace-me')!;
+  const second = auth.createSession(buildLocalDevActor({}, 'operator'))!;
+  registry.attach(first, sockets[0]!);
+  registry.attach(second, sockets[1]!);
+  auth.revoke(`aeos_auth=${first}`);
+  assert.equal(sockets[0]!.closeCalls, 1);
+  assert.equal(sockets[1]!.closeCalls, 0);
+  assert.equal(auth.isAuthorized(`aeos_auth=${second}`), true);
 });
 
 test('M01 browser binding cookie is short-lived, HttpOnly, SameSite=Lax, and safely cleared', () => {

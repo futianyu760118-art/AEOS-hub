@@ -57,6 +57,9 @@ function validateRedirectUri(redirectUri: string): void {
   if (!url.host) {
     throw new Error('M01_REDIRECT_URI must include a host');
   }
+  if (url.pathname !== '/api/auth/callback') {
+    throw new Error('M01_REDIRECT_URI must target /api/auth/callback');
+  }
   if (url.protocol === 'https:') return;
 
   const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
