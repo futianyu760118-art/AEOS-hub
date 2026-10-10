@@ -125,6 +125,12 @@ test('M01 OIDC authorization URL carries PKCE and exact callback parameters', as
   }
 });
 
+test('M01 OIDC retry explicitly requests the credential page instead of reusing an IdP session', async () => {
+  const { auth } = createOidcFixture();
+  const { redirectUrl } = await auth.beginLogin({ browserBinding, forceReauthentication: true });
+  assert.equal(new URL(redirectUrl).searchParams.get('prompt'), 'login');
+});
+
 test('M01 OIDC completes a valid signed token into an actor context', async () => {
   const { auth, setIdToken } = createOidcFixture();
   const { redirectUrl } = await auth.beginLogin({ browserBinding });

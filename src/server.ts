@@ -1198,7 +1198,7 @@ const server = createServer(async (req, res) => {
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
   if (url.pathname === '/api/auth/login') {
     if (AUTH_MODE === 'm01') {
-      const outcome = await authGateway.login(req.method, req.headers.cookie);
+      const outcome = await authGateway.login(req.method, req.headers.cookie, url.searchParams.get('retry') === '1');
       for (const cookie of outcome.cookies ?? []) addCookie(res, cookie);
       if (outcome.location) { res.writeHead(outcome.status, { location: outcome.location }); res.end(); }
       else sendJson(res, outcome.status, { error: outcome.error });

@@ -10,10 +10,10 @@ const m01Actor: ActorContext = {
 };
 
 function gatewayFixture(options: { postLogoutRedirectUri?: string; endSessionUrl?: () => Promise<string | null> } = {}) {
-  const calls: Array<Record<string, string>> = [];
+  const calls: Array<Record<string, string | boolean>> = [];
   const oidc = {
-    beginLogin: async ({ browserBinding }: { browserBinding: string }) => {
-      calls.push({ kind: 'begin', browserBinding });
+    beginLogin: async ({ browserBinding, forceReauthentication }: { browserBinding: string; forceReauthentication?: boolean }) => {
+      calls.push({ kind: 'begin', browserBinding, ...(forceReauthentication === true ? { forceReauthentication } : {}) });
       return { redirectUrl: 'https://id.example.test/authorize?state=opaque' };
     },
     completeLogin: async (input: { code: string; state: string; browserBinding: string }) => {
@@ -47,6 +47,13 @@ test('M01 gateway rejects password POST and starts browser-bound GET login witho
   assert.match(response.cookies![0]!, /aeos_m01_binding=binding-1234567890/);
   assert.match(response.cookies![0]!, /HttpOnly; SameSite=Lax; Secure; Max-Age=300/);
   assert.deepEqual(calls, [{ kind: 'begin', browserBinding: 'binding-1234567890' }]);
+});
+
+test('M01 gateway forwards an explicit failed-login retry as a forced reauthentication', async () => {
+  const { calls, gateway } = gatewayFixture();
+  const response = await gateway.login('GET', undefined, true);
+  assert.equal(response.status, 302);
+  assert.deepEqual(calls, [{ kind: 'begin', browserBinding: 'binding-1234567890', forceReauthentication: true }]);
 });
 
 test('M01 callback completes only through the browser binding and state route, then returns a safe actor session', async () => {

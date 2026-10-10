@@ -4034,7 +4034,13 @@ async function bootstrapAuthentication() {
 
 /* Authentication and profile interactions */
 els.loginForm.addEventListener('submit', handleLogin);
-els.m01LoginSubmit.addEventListener('click', () => { window.location.assign('/api/auth/login'); });
+els.m01LoginSubmit.addEventListener('click', () => {
+  // After an unsuccessful OIDC callback, request a fresh Keycloak credential
+  // page instead of allowing a stale IdP browser session to repeat the failure.
+  const retry = !els.loginError.classList.contains('hidden');
+  els.m01LoginSubmit.disabled = true;
+  window.location.assign(retry ? '/api/auth/login?retry=1' : '/api/auth/login');
+});
 els.loginAccount.addEventListener('input', () => els.loginError.classList.add('hidden'));
 els.loginPassword.addEventListener('input', () => els.loginError.classList.add('hidden'));
 els.togglePassword.addEventListener('click', () => {

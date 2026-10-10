@@ -235,7 +235,7 @@ export class M01OidcAuth {
   }
 
   /** browserBinding must come from a server-trusted, HttpOnly browser cookie. */
-  async beginLogin(input: { browserBinding: string }): Promise<{ redirectUrl: string }> {
+  async beginLogin(input: { browserBinding: string; forceReauthentication?: boolean }): Promise<{ redirectUrl: string }> {
     try {
       if (!validBrowserBinding(input?.browserBinding)) throw authenticationFailed();
       const discovery = await this.getDiscovery();
@@ -257,6 +257,10 @@ export class M01OidcAuth {
       redirect.searchParams.set('nonce', nonce);
       redirect.searchParams.set('code_challenge', challenge);
       redirect.searchParams.set('code_challenge_method', 'S256');
+      // A failed sign-in may leave an IdP browser session behind.  On an explicit
+      // retry, require Keycloak to render its credential page instead of silently
+      // reusing that session and returning the user to the same failure screen.
+      if (input.forceReauthentication === true) redirect.searchParams.set('prompt', 'login');
       return { redirectUrl: redirect.toString() };
     } catch {
       throw authenticationFailed();

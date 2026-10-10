@@ -123,14 +123,14 @@ export function expiredBindingCookie(secure = false): string {
 }
 
 export type M01BrowserOidc = {
-  beginLogin(input: { browserBinding: string }): Promise<{ redirectUrl: string }>;
+  beginLogin(input: { browserBinding: string; forceReauthentication?: boolean }): Promise<{ redirectUrl: string }>;
   completeLogin(input: { code: string; state: string; browserBinding: string }): Promise<ActorContext>;
   /** Returns the RP-initiated logout URL, or null when the IdP exposes no end session endpoint. */
   endSessionUrl(input: { postLogoutRedirectUri: string }): Promise<string | null>;
 };
 
 export type BrowserAuthGateway = {
-  login(method: string | undefined, cookieHeader: string | undefined): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
+  login(method: string | undefined, cookieHeader: string | undefined, forceReauthentication?: boolean): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
   callback(method: string | undefined, cookieHeader: string | undefined, code: string, state: string): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
   /** Revokes the Hub session; in M01 mode `redirectTo` also ends the IdP session in the browser. */
   logout(cookieHeader: string | undefined): Promise<{ status: number; cookies: string[]; redirectTo?: string }>;
@@ -166,12 +166,12 @@ export function createBrowserAuthGateway(input: {
   };
 
   return {
-    async login(method, cookieHeader) {
+    async login(method, cookieHeader, forceReauthentication = false) {
       if (input.authMode !== 'm01') return { status: 404, error: 'not found' };
       if (method !== 'GET') return { status: 405, error: 'method not allowed' };
       try {
         const browserBinding = browserBindingFromCookie(cookieHeader) ?? (input.browserBindingFactory ?? newBrowserBinding)();
-        const login = await input.oidc!.beginLogin({ browserBinding });
+        const login = await input.oidc!.beginLogin({ browserBinding, forceReauthentication });
         return { status: 302, location: login.redirectUrl, cookies: [bindingCookie(browserBinding, input.secureCookies)] };
       } catch {
         return { status: 302, location: '/?auth_error=1', cookies: [expiredBindingCookie(input.secureCookies)] };
