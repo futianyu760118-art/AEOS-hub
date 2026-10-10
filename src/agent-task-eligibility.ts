@@ -37,6 +37,11 @@ export type ControlledTaskType = z.infer<typeof ControlledTaskTypeSchema>;
 export type AgentTaskEligibilityReasonCode = z.infer<typeof AgentTaskEligibilityReasonCodeSchema>;
 export type AgentTaskEligibilityInput = z.infer<typeof AgentTaskEligibilityInputSchema>;
 
+/** M04 tasks are all evidence-bound operating-case analysis tasks until a later dispatch schema adds explicit task types. */
+export function controlledTaskTypeForM04Task(_task: { source: string }): ControlledTaskType {
+  return 'operating-case-analysis';
+}
+
 const REASON_MESSAGES: Record<AgentTaskEligibilityReasonCode, string> = {
   AGENT_PROFILE_UNCONFIGURED: 'Agent 尚未完成任务服务档案配置。',
   AGENT_LIFECYCLE_NOT_ACTIVE: 'Agent 当前不处于已启用生命周期。',

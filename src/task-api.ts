@@ -1,4 +1,6 @@
 import type { EvidenceInput } from './evidence.ts';
+import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
+import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
 import { TaskCenterStore, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
 
@@ -18,6 +20,8 @@ type TaskApiDependencies = {
   operatingCenter: Pick<OperatingCenterStore, 'load' | 'createPendingResult' | 'verifyResult'>;
   taskCenter: TaskCenterStore;
   appendEvidence: (input: EvidenceInput) => unknown;
+  loadHarbor?: () => HarborSnapshot;
+  now?: () => Date;
 };
 
 class TaskApiError extends Error {
@@ -104,6 +108,34 @@ export class TaskApi {
       const task = this.requireTask(decoded(detailMatch[1] ?? ''), actor);
       const history = this.dependencies.taskCenter.load().history.filter((entry) => entry.taskId === task.taskId);
       return { status: 200, body: { task, history } };
+    }
+
+    const candidatesMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/agent-candidates$/);
+    if (candidatesMatch) {
+      this.method(method, 'GET');
+      const task = this.requireTask(decoded(candidatesMatch[1] ?? ''), actor);
+      const harbor = (this.dependencies.loadHarbor ?? loadHarbor)();
+      const taskType = controlledTaskTypeForM04Task(task);
+      const evaluatedAt = (this.dependencies.now ?? (() => new Date()))().toISOString();
+      const candidates = harbor.agents
+        .map((agent) => evaluateAgentTaskEligibility({
+          taskId: task.taskId,
+          tenantId: task.tenantId,
+          taskType,
+          agent,
+          runtime: agent.runtimeId ? harbor.runtimes.find((runtime) => runtime.id === agent.runtimeId) ?? null : null,
+          evaluatedAt,
+        }))
+        .sort((left, right) => Number(right.eligible) - Number(left.eligible) || left.candidate.name.localeCompare(right.candidate.name, 'zh-CN'));
+      return {
+        status: 200,
+        body: {
+          taskId: task.taskId,
+          taskType,
+          dispatchEnabled: false,
+          candidates,
+        },
+      };
     }
 
     const assignmentMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/assignments$/);
