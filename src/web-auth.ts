@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isLocalDevelopmentEnvironment, type ActorContext } from './auth/actor-context.ts';
+import type { AuthenticationAuditEvent } from './authentication-audit.ts';
 
 export const DEFAULT_LOGIN_USERNAME = 'demo';
 export const AUTH_COOKIE_NAME = 'aeos_auth';
@@ -149,6 +150,8 @@ export function createBrowserAuthGateway(input: {
   allowedRoles?: readonly string[];
   /** Registered post logout redirect URI, required for M01 RP-initiated logout. */
   postLogoutRedirectUri?: string;
+  /** Best-effort, credential-free audit sink for terminal M01 callback outcomes. */
+  onAuthenticationAudit?: (event: AuthenticationAuditEvent) => void;
   secureCookies: boolean;
   browserBindingFactory?: () => string;
 }): BrowserAuthGateway {
@@ -160,7 +163,11 @@ export function createBrowserAuthGateway(input: {
     const expiry = `Path=/; HttpOnly; SameSite=Lax${input.secureCookies ? '; Secure' : ''}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     return [input.webAuth.expiredCookie(), `hub_token=; ${expiry}`, `aeos_session=; ${expiry}`, expiredBindingCookie(input.secureCookies)];
   };
-  const failure = (cookieHeader: string | undefined) => {
+  const emitAuthenticationAudit = (event: AuthenticationAuditEvent): void => {
+    try { input.onAuthenticationAudit?.(event); } catch { /* Audit availability must not change an authentication response. */ }
+  };
+  const failure = (cookieHeader: string | undefined, event: Extract<AuthenticationAuditEvent, { type: 'authentication_failed' | 'admission_denied' }>) => {
+    emitAuthenticationAudit(event);
     input.webAuth.revoke(cookieHeader);
     return { status: 302, location: '/?auth_error=1', cookies: expiredAuthenticationCookies() };
   };
@@ -185,19 +192,20 @@ export function createBrowserAuthGateway(input: {
         if (!browserBinding) throw new Error('browser binding required');
         const actor = await input.oidc!.completeLogin({ code, state, browserBinding });
         if (actor.roles.length === 0 || !actor.roles.some((role) => allowedRoles.has(role))) {
-          throw new Error('M01 role admission denied');
+          return failure(cookieHeader, { type: 'admission_denied', authMode: 'm01', actor });
         }
         // A successful sign-in replaces any authenticated Hub session carried by this browser.
         input.webAuth.revoke(cookieHeader);
         const sessionId = input.webAuth.createSession(actor);
         if (!sessionId) throw new Error('session capacity reached');
+        emitAuthenticationAudit({ type: 'login_succeeded', authMode: 'm01', actor });
         return {
           status: 302,
           location: '/',
           cookies: [input.webAuth.sessionCookie(sessionId), expiredBindingCookie(input.secureCookies)],
         };
       } catch {
-        return failure(cookieHeader);
+        return failure(cookieHeader, { type: 'authentication_failed', authMode: 'm01' });
       }
     },
     async logout(cookieHeader) {

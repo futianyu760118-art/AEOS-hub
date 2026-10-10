@@ -12,6 +12,7 @@ import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
 import { codexHome, configFile, readConfig, saveModelConfig, listEnvKeys, setEnvKey, loadModelPresets, saveModelPresets, ensureConfigFile } from './hub-config.ts';
 import { appendEvidence, evidenceFile, readRecentEvidence, evidenceHealth } from './evidence.ts';
+import { appendAuthenticationAuditEvidence } from './authentication-audit.ts';
 import { collectMcpPages, payloadOf } from './mcp-pagination.ts';
 import { dashboardReadPlan } from './dashboard-read-plan.ts';
 import { serveRuntimeImage, validOrigin, boundedLimit } from './http-security.ts';
@@ -108,6 +109,7 @@ const authGateway = createBrowserAuthGateway({
   ...(m01Oidc ? { oidc: m01Oidc } : {}),
   ...(m01Config.authMode === 'm01' ? { allowedRoles: m01Config.allowedRoles } : {}),
   ...(m01Config.authMode === 'm01' ? { postLogoutRedirectUri: derivePostLogoutRedirectUri(m01Config.redirectUri) } : {}),
+  onAuthenticationAudit: (event) => { appendAuthenticationAuditEvidence(event); },
   secureCookies: COOKIE_SECURE,
 });
 function addCookie(res: ServerResponse, value: string): void {

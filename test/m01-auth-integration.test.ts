@@ -3,13 +3,18 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { ActorContext } from '../src/auth/actor-context.ts';
+import type { AuthenticationAuditEvent } from '../src/authentication-audit.ts';
 import { BrowserSessionAuth, createBrowserAuthGateway, isPublicLoginResource } from '../src/web-auth.ts';
 
 const m01Actor: ActorContext = {
   actorId: 'm01:user:manager-42', actorType: 'human', tenantId: 'tenant-42', roles: ['manager'], authSource: 'm01',
 };
 
-function gatewayFixture(options: { postLogoutRedirectUri?: string; endSessionUrl?: () => Promise<string | null> } = {}) {
+function gatewayFixture(options: {
+  postLogoutRedirectUri?: string;
+  endSessionUrl?: () => Promise<string | null>;
+  onAuthenticationAudit?: (event: AuthenticationAuditEvent) => void;
+} = {}) {
   const calls: Array<Record<string, string | boolean>> = [];
   const oidc = {
     beginLogin: async ({ browserBinding, forceReauthentication }: { browserBinding: string; forceReauthentication?: boolean }) => {
@@ -34,6 +39,7 @@ function gatewayFixture(options: { postLogoutRedirectUri?: string; endSessionUrl
     gateway: createBrowserAuthGateway({
       authMode: 'm01', webAuth: auth, oidc, allowedRoles: ['manager'], secureCookies: true, browserBindingFactory: () => 'binding-1234567890',
       postLogoutRedirectUri: options.postLogoutRedirectUri ?? 'http://127.0.0.1:8790/?logged_out=1',
+      onAuthenticationAudit: options.onAuthenticationAudit,
     }),
   };
 }
@@ -73,6 +79,21 @@ test('M01 callback completes only through the browser binding and state route, t
   });
 });
 
+test('M01 callback emits one safe audit event for success and generic authentication failure', async () => {
+  const events: AuthenticationAuditEvent[] = [];
+  const successful = gatewayFixture({ onAuthenticationAudit: (event) => events.push(event) });
+  await successful.gateway.callback('GET', 'aeos_m01_binding=binding-1234567890', 'code-value', 'state-value');
+  assert.deepEqual(events, [{ type: 'login_succeeded', authMode: 'm01', actor: m01Actor }]);
+
+  const failed = gatewayFixture({ onAuthenticationAudit: (event) => events.push(event) });
+  const response = await failed.gateway.callback('GET', undefined, 'code', 'state');
+  assert.equal(response.location, '/?auth_error=1');
+  assert.deepEqual(events, [
+    { type: 'login_succeeded', authMode: 'm01', actor: m01Actor },
+    { type: 'authentication_failed', authMode: 'm01' },
+  ]);
+});
+
 test('callback failure and logout clear every authentication cookie without revealing upstream details', async () => {
   const { gateway } = gatewayFixture();
   const failure = await gateway.callback('GET', undefined, 'code', 'state');
@@ -100,6 +121,24 @@ test('M01 callback refuses actors without an allowed role and creates no session
     assert.equal(auth.isAuthorized(response.cookies?.find((cookie) => cookie.startsWith('aeos_auth='))), false);
     assert.match(response.cookies!.join('\n'), /^aeos_m01_binding=.*Max-Age=0/m);
   }
+});
+
+test('M01 role admission denial emits safe actor context and an audit sink cannot change login behavior', async () => {
+  const events: AuthenticationAuditEvent[] = [];
+  const auth = new BrowserSessionAuth('demo', 'replace-me');
+  const rejectedGateway = createBrowserAuthGateway({
+    authMode: 'm01', webAuth: auth, allowedRoles: ['manager'], secureCookies: true,
+    oidc: { beginLogin: async () => ({ redirectUrl: 'https://id.example.test/authorize' }), completeLogin: async () => ({ ...m01Actor, roles: ['reader'] }) },
+    onAuthenticationAudit: (event) => events.push(event),
+  });
+  const rejected = await rejectedGateway.callback('GET', 'aeos_m01_binding=binding-1234567890', 'code-value', 'state-value');
+  assert.equal(rejected.location, '/?auth_error=1');
+  assert.deepEqual(events, [{ type: 'admission_denied', authMode: 'm01', actor: { ...m01Actor, roles: ['reader'] } }]);
+
+  const available = gatewayFixture({ onAuthenticationAudit: () => { throw new Error('Evidence unavailable'); } });
+  const accepted = await available.gateway.callback('GET', 'aeos_m01_binding=binding-1234567890', 'code-value', 'state-value');
+  assert.equal(accepted.location, '/');
+  assert.equal(available.auth.isAuthorized(accepted.cookies?.find((cookie) => cookie.startsWith('aeos_auth='))), true);
 });
 
 test('gateway rejects unauthenticated protected HTTP/static/WebSocket access and never returns web-session actors', () => {
