@@ -101,6 +101,7 @@ test('M01 OIDC authorization URL carries PKCE and exact callback parameters', as
   assert.equal(url.searchParams.get('client_id'), oidcConfig.clientId);
   assert.equal(url.searchParams.get('redirect_uri'), oidcConfig.redirectUri);
   assert.match(url.searchParams.get('scope') ?? '', /(^| )openid( |$)/);
+  assert.equal(url.searchParams.get('ui_locales'), 'zh-CN');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.match(url.searchParams.get('state') ?? '', /^[A-Za-z0-9_-]{32,}$/);
   assert.match(url.searchParams.get('nonce') ?? '', /^[A-Za-z0-9_-]{32,}$/);

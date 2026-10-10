@@ -253,6 +253,9 @@ export class M01OidcAuth {
       redirect.searchParams.set('client_id', this.config.clientId);
       redirect.searchParams.set('redirect_uri', this.config.redirectUri);
       redirect.searchParams.set('scope', 'openid');
+      // AEOS is operated in Chinese in this local deployment. Keycloak honors
+      // this standard OIDC hint when rendering its authorization screens.
+      redirect.searchParams.set('ui_locales', 'zh-CN');
       redirect.searchParams.set('state', state);
       redirect.searchParams.set('nonce', nonce);
       redirect.searchParams.set('code_challenge', challenge);
