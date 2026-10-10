@@ -16,6 +16,14 @@ import { z } from 'zod';
 
 const AUTONOMY_LEVELS = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'] as const;
 const AGENT_HIERARCHY_LEVELS = ['L0', 'L1', 'L2', 'L3'] as const;
+const AGENT_TYPES = ['hub', 'master', 'specialist', 'tool'] as const;
+const AGENT_LIFECYCLES = ['draft', 'active', 'suspended', 'retired'] as const;
+const AGENT_LEVEL_BY_TYPE: Record<(typeof AGENT_TYPES)[number], (typeof AGENT_HIERARCHY_LEVELS)[number]> = {
+  hub: 'L0', master: 'L1', specialist: 'L2', tool: 'L3',
+};
+const AGENT_PARENT_TYPE_BY_TYPE: Partial<Record<(typeof AGENT_TYPES)[number], (typeof AGENT_TYPES)[number]>> = {
+  master: 'hub', specialist: 'master', tool: 'specialist',
+};
 const AGENT_STATUSES = ['draft', 'idle', 'working', 'offline', 'archived'] as const;
 const RUNTIME_STATUSES = ['ready', 'online', 'busy', 'offline', 'unstable'] as const;
 const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli'] as const;
@@ -28,6 +36,8 @@ const MAX_HARBOR_FILE_BYTES = 25 * 1024 * 1024;
 
 export const AutonomyLevelSchema = z.enum(AUTONOMY_LEVELS);
 export const AgentHierarchyLevelSchema = z.enum(AGENT_HIERARCHY_LEVELS);
+export const AgentTypeSchema = z.enum(AGENT_TYPES);
+export const AgentLifecycleSchema = z.enum(AGENT_LIFECYCLES);
 export const HarborAgentStatusSchema = z.enum(AGENT_STATUSES);
 export const HarborRuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
 export const HarborRuntimeKindSchema = z.enum(RUNTIME_KINDS);
@@ -39,6 +49,8 @@ export const HarborRunStatusSchema = z.enum(RUN_STATUSES);
 
 export type AutonomyLevel = z.infer<typeof AutonomyLevelSchema>;
 export type AgentHierarchyLevel = z.infer<typeof AgentHierarchyLevelSchema>;
+export type AgentType = z.infer<typeof AgentTypeSchema>;
+export type AgentLifecycle = z.infer<typeof AgentLifecycleSchema>;
 export type HarborAgentStatus = z.infer<typeof HarborAgentStatusSchema>;
 export type HarborRuntimeStatus = z.infer<typeof HarborRuntimeStatusSchema>;
 export type HarborRuntimeKind = z.infer<typeof HarborRuntimeKindSchema>;
@@ -53,6 +65,8 @@ const trimmedString = (max: number, min = 0) => z.string()
   .max(max)
   .refine((value) => value === value.trim(), '字符串前后不能包含空白');
 const identifierSchema = trimmedString(160, 1);
+const agentCodeSchema = z.string().trim().toLowerCase()
+  .regex(/^[a-z][a-z0-9-]{1,79}$/, 'Agent 编码只能使用小写字母、数字和连字符，且长度为 2-80 位');
 const timestampSchema = z.string().datetime({ offset: true });
 const stringListSchema = (itemMax: number, max = 40) => z.array(trimmedString(itemMax, 1)).max(max);
 const calendarDateSchema = z.string()
@@ -62,6 +76,15 @@ const calendarDateSchema = z.string()
     const date = new Date(Date.UTC(year, month - 1, day));
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }, '日期无效');
+
+export const AgentRegistrationSchema = z.object({
+  code: agentCodeSchema,
+  type: AgentTypeSchema,
+  ownerOrg: trimmedString(120, 1),
+  domain: trimmedString(120, 1),
+  lifecycle: AgentLifecycleSchema,
+  allowedRuntimeCapabilities: stringListSchema(200),
+}).strict();
 
 export const HarborAgentSchema = z.object({
   id: identifierSchema,
@@ -74,6 +97,7 @@ export const HarborAgentSchema = z.object({
   runtimeId: identifierSchema.nullable(),
   parentAgentId: identifierSchema.nullable().default(null),
   hierarchyLevel: AgentHierarchyLevelSchema.default('L2'),
+  registration: AgentRegistrationSchema,
   autonomyLevel: AutonomyLevelSchema,
   access: z.enum(['private', 'workspace', 'selected']),
   skills: stringListSchema(200),
@@ -169,14 +193,21 @@ export const HarborSnapshotSchema = z.object({
   runs: z.array(HarborRunSchema).max(50_000),
 }).strict().superRefine((snapshot, ctx) => {
   addDuplicateIssues(snapshot.agents.map((agent) => agent.id), ctx, ['agents'], 'Agent id');
+  addDuplicateIssues(snapshot.agents.map((agent) => agent.registration.code), ctx, ['agents'], 'Agent code');
   addDuplicateIssues(snapshot.runtimes.map((runtime) => runtime.id), ctx, ['runtimes'], 'Runtime id');
   addDuplicateIssues(snapshot.projects.map((project) => project.id), ctx, ['projects'], 'Project id');
   addDuplicateIssues(snapshot.projects.map((project) => project.key), ctx, ['projects'], 'Project key');
   addDuplicateIssues(snapshot.runs.map((run) => run.id), ctx, ['runs'], 'Run id');
 
-  const runtimeIds = new Set(snapshot.runtimes.map((runtime) => runtime.id));
+  const runtimeById = new Map(snapshot.runtimes.map((runtime) => [runtime.id, runtime]));
+  const runtimeIds = new Set(runtimeById.keys());
   const agentIds = new Set(snapshot.agents.map((agent) => agent.id));
+  const agentsById = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
   const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
+  const hubAgents = snapshot.agents.filter((agent) => agent.registration.type === 'hub');
+  if (hubAgents.length !== 1) {
+    ctx.addIssue({ code: 'custom', path: ['agents'], message: 'AI 港湾必须且只能有一个 Hub Agent' });
+  }
 
   snapshot.agents.forEach((agent, index) => {
     addTimelineIssue(agent.createdAt, agent.updatedAt, ctx, ['agents', index]);
@@ -192,7 +223,54 @@ export const HarborSnapshotSchema = z.object({
     if (agent.parentAgentId === agent.id) {
       ctx.addIssue({ code: 'custom', path: ['agents', index, 'parentAgentId'], message: 'Agent 不能将自己设为上级' });
     }
+    const runtime = agent.runtimeId ? runtimeById.get(agent.runtimeId) : undefined;
+    if (!runtime && agent.registration.allowedRuntimeCapabilities.length) {
+      ctx.addIssue({ code: 'custom', path: ['agents', index, 'registration', 'allowedRuntimeCapabilities'], message: '未绑定 Runtime 的 Agent 不能声明能力白名单' });
+    }
+    if (runtime) {
+      const supportedCapabilities = new Set(runtime.capabilities);
+      agent.registration.allowedRuntimeCapabilities.forEach((capability, capabilityIndex) => {
+        if (!supportedCapabilities.has(capability)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['agents', index, 'registration', 'allowedRuntimeCapabilities', capabilityIndex],
+            message: `Runtime 未声明能力: ${capability}`,
+          });
+        }
+      });
+    }
+    addDuplicateIssues(agent.registration.allowedRuntimeCapabilities, ctx, ['agents', index, 'registration', 'allowedRuntimeCapabilities'], 'Agent capability');
+
+    if (agent.hierarchyLevel !== AGENT_LEVEL_BY_TYPE[agent.registration.type]) {
+      ctx.addIssue({ code: 'custom', path: ['agents', index, 'hierarchyLevel'], message: `${agent.registration.type} 必须使用 ${AGENT_LEVEL_BY_TYPE[agent.registration.type]} 层级` });
+    }
+    if (agent.registration.type === 'hub') {
+      if (agent.parentAgentId) {
+        ctx.addIssue({ code: 'custom', path: ['agents', index, 'parentAgentId'], message: 'Hub Agent 不能设置上级' });
+      }
+    } else if (!agent.parentAgentId || !agentsById.has(agent.parentAgentId)) {
+      ctx.addIssue({ code: 'custom', path: ['agents', index, 'parentAgentId'], message: `${agent.registration.type} 必须设置有效上级 Agent` });
+    } else if (agentsById.get(agent.parentAgentId)?.registration.type !== AGENT_PARENT_TYPE_BY_TYPE[agent.registration.type]) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['agents', index, 'parentAgentId'],
+        message: `${agent.registration.type} 的上级必须是 ${AGENT_PARENT_TYPE_BY_TYPE[agent.registration.type]}`,
+      });
+    }
     addDuplicateIssues(agent.skills, ctx, ['agents', index, 'skills'], 'Skill');
+  });
+
+  snapshot.agents.forEach((agent, index) => {
+    const visited = new Set<string>();
+    let current: HarborAgent | undefined = agent;
+    while (current?.parentAgentId) {
+      if (visited.has(current.parentAgentId)) {
+        ctx.addIssue({ code: 'custom', path: ['agents', index, 'parentAgentId'], message: 'Agent 上下级关系存在循环' });
+        break;
+      }
+      visited.add(current.id);
+      current = agentsById.get(current.parentAgentId);
+    }
   });
 
   snapshot.runtimes.forEach((runtime, index) => {
@@ -252,6 +330,7 @@ export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
 const HARBOR_AGENT_CREATE_KEYS = new Set([
   'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
   'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
+  'code', 'type', 'ownerOrg', 'domain', 'lifecycle', 'allowedRuntimeCapabilities',
 ]);
 export type HarborRuntimeCreateInput = Readonly<Record<string, unknown>> & { name?: unknown };
 export interface HarborRuntimeVerificationInput {
@@ -323,8 +402,106 @@ function formatIssues(error: z.ZodError): string {
     .join('; ');
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function legacyAgentCode(id: unknown, index: number, usedCodes: Set<string>): string {
+  const normalized = typeof id === 'string'
+    ? id.toLocaleLowerCase('en-US').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    : '';
+  const base = `legacy-${normalized || `agent-${index + 1}`}`.slice(0, 76).replace(/-+$/g, '');
+  let code = base.length >= 2 ? base : `legacy-agent-${index + 1}`;
+  let suffix = 2;
+  while (usedCodes.has(code)) {
+    const candidateSuffix = `-${suffix++}`;
+    code = `${base.slice(0, 80 - candidateSuffix.length)}${candidateSuffix}`;
+  }
+  usedCodes.add(code);
+  return code;
+}
+
+function normalizedLegacySnapshot(value: unknown): unknown {
+  const snapshot = record(value);
+  if (!snapshot || !Array.isArray(snapshot.agents)) return value;
+  const agents = snapshot.agents.map(record);
+  if (agents.some((agent) => agent === null)) return value;
+  if (agents.every((agent) => agent?.registration !== undefined)) return value;
+
+  const root = agents.find((agent) => agent?.id === 'agent-aeos-hub');
+  const rootId = typeof root?.id === 'string' ? root.id : null;
+  const usedCodes = new Set<string>();
+  agents.forEach((agent) => {
+    const registration = record(agent?.registration);
+    if (typeof registration?.code === 'string') usedCodes.add(registration.code.trim().toLocaleLowerCase('en-US'));
+  });
+  const legacyTypeById = new Map<string, AgentType>();
+  const legacyDepthById = new Map<string, number>();
+  const rawById = new Map(agents.flatMap((agent) => typeof agent?.id === 'string' ? [[agent.id, agent] as const] : []));
+
+  const depthFromHub = (agent: Record<string, unknown>, seen = new Set<string>()): number => {
+    const id = typeof agent.id === 'string' ? agent.id : '';
+    if (id === rootId) return 0;
+    if (!id || seen.has(id)) return 1;
+    const parentId = typeof agent.parentAgentId === 'string' ? agent.parentAgentId : null;
+    if (!parentId || !rootId) return 1;
+    const parent = rawById.get(parentId);
+    if (!parent) return 1;
+    const nextSeen = new Set(seen);
+    nextSeen.add(id);
+    return Math.min(depthFromHub(parent, nextSeen) + 1, 3);
+  };
+
+  const normalizedAgents = agents.map((agent, index) => {
+    if (!agent) return agent;
+    const id = typeof agent.id === 'string' ? agent.id : '';
+    const isHub = id === rootId;
+    const depth = isHub ? 0 : depthFromHub(agent);
+    const type: AgentType = isHub ? 'hub' : depth === 1 ? 'master' : depth === 2 ? 'specialist' : 'tool';
+    legacyTypeById.set(id, type);
+    legacyDepthById.set(id, depth);
+    return agent;
+  });
+
+  return {
+    ...snapshot,
+    agents: normalizedAgents.map((agent, index) => {
+      if (!agent || agent.registration !== undefined) return agent;
+      const id = typeof agent.id === 'string' ? agent.id : '';
+      const type = legacyTypeById.get(id) ?? 'master';
+      const lifecycle: AgentLifecycle = agent.status === 'archived'
+        ? 'retired'
+        : agent.status === 'offline'
+          ? 'suspended'
+          : agent.status === 'draft'
+            ? 'draft'
+            : 'active';
+      const depth = legacyDepthById.get(id) ?? 1;
+      const parentId = typeof agent.parentAgentId === 'string' ? agent.parentAgentId : null;
+      const expectedParentId = type === 'hub'
+        ? null
+        : depth === 1
+          ? rootId
+          : parentId;
+      return {
+        ...agent,
+        parentAgentId: expectedParentId,
+        hierarchyLevel: type === 'hub' ? 'L0' : type === 'master' ? 'L1' : type === 'specialist' ? 'L2' : 'L3',
+        registration: {
+          code: type === 'hub' ? 'aeos-hub' : legacyAgentCode(id, index, usedCodes),
+          type,
+          ownerOrg: 'AEOS Platform',
+          domain: type === 'hub' ? 'enterprise-operation' : 'unclassified',
+          lifecycle,
+          allowedRuntimeCapabilities: [],
+        },
+      };
+    }),
+  };
+}
+
 function parseSnapshot(value: unknown, source: string): HarborSnapshot {
-  const result = HarborSnapshotSchema.safeParse(value);
+  const result = HarborSnapshotSchema.safeParse(normalizedLegacySnapshot(value));
   if (!result.success) {
     throw new HarborStoreCorruptError(`${source} 数据结构无效: ${formatIssues(result.error)}`, result.error);
   }
@@ -442,6 +619,20 @@ export class HarborStore {
       const timestamp = this.now();
       const runtimeId = optionalText(input, 'runtimeId', 160) || null;
       const parentAgentId = optionalText(input, 'parentAgentId', 160) || null;
+      const type = enumValue(input, 'type', AGENT_TYPES, 'specialist');
+      const expectedLevel = AGENT_LEVEL_BY_TYPE[type];
+      const requestedLevel = optionalText(input, 'hierarchyLevel', 8);
+      if (requestedLevel && requestedLevel !== expectedLevel) {
+        throw new Error(`${type} 必须使用 ${expectedLevel} 层级`);
+      }
+      const registration = AgentRegistrationSchema.parse({
+        code: requiredText(input, 'code', 80),
+        type,
+        ownerOrg: requiredText(input, 'ownerOrg', 120),
+        domain: requiredText(input, 'domain', 120),
+        lifecycle: enumValue(input, 'lifecycle', AGENT_LIFECYCLES, 'draft'),
+        allowedRuntimeCapabilities: stringList(input.allowedRuntimeCapabilities, 200),
+      });
       if (runtimeId && !snapshot.runtimes.some((runtime) => runtime.id === runtimeId)) {
         throw new Error('所选 Runtime 不存在');
       }
@@ -458,7 +649,8 @@ export class HarborStore {
         model: optionalText(input, 'model', 120, 'provider-default'),
         runtimeId,
         parentAgentId,
-        hierarchyLevel: enumValue(input, 'hierarchyLevel', AGENT_HIERARCHY_LEVELS, 'L2'),
+        hierarchyLevel: expectedLevel,
+        registration,
         autonomyLevel: enumValue(input, 'autonomyLevel', AUTONOMY_LEVELS, 'A1'),
         access: enumValue(input, 'access', ['private', 'workspace', 'selected'] as const, 'private'),
         skills: stringList(input.skills, 200),
@@ -659,6 +851,16 @@ export class HarborStore {
           provider: 'openai-codex',
           model: 'account-default',
           runtimeId: 'runtime-codex-local',
+          parentAgentId: null,
+          hierarchyLevel: 'L0',
+          registration: {
+            code: 'aeos-hub',
+            type: 'hub',
+            ownerOrg: 'AEOS Platform',
+            domain: 'enterprise-operation',
+            lifecycle: 'active',
+            allowedRuntimeCapabilities: [],
+          },
           autonomyLevel: 'A2',
           access: 'workspace',
           skills: ['订单风险扫描', '物料缺口核查', '经营综合判断'],

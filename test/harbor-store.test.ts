@@ -57,6 +57,29 @@ test('loads a legacy version 1 snapshot without revision as revision zero', (t) 
   assert.equal(store.load().revision, 0);
 });
 
+test('normalizes a legacy Agent into a governed registration without rewriting on read', (t) => {
+  const { file, store } = fixture(t);
+  store.load();
+  const legacy = JSON.parse(readFileSync(file, 'utf8'));
+  delete legacy.agents[0].parentAgentId;
+  delete legacy.agents[0].hierarchyLevel;
+  delete legacy.agents[0].registration;
+  writeFileSync(file, JSON.stringify(legacy), 'utf8');
+
+  const snapshot = store.load();
+
+  assert.deepEqual(snapshot.agents[0]?.registration, {
+    code: 'aeos-hub',
+    type: 'hub',
+    ownerOrg: 'AEOS Platform',
+    domain: 'enterprise-operation',
+    lifecycle: 'active',
+    allowedRuntimeCapabilities: [],
+  });
+  assert.equal(snapshot.agents[0]?.hierarchyLevel, 'L0');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).agents[0].registration, undefined);
+});
+
 test('creates related runtime, agent, project, and run in locked revisions', (t) => {
   const { store } = fixture(t);
   store.load();
@@ -73,6 +96,14 @@ test('creates related runtime, agent, project, and run in locked revisions', (t)
     provider: 'openai',
     model: '   ',
     runtimeId: runtime.id,
+    parentAgentId: 'agent-aeos-hub',
+    hierarchyLevel: 'L1',
+    code: 'procurement-master',
+    type: 'master',
+    ownerOrg: '供应链中心',
+    domain: 'procurement',
+    lifecycle: 'draft',
+    allowedRuntimeCapabilities: ['chat', 'tools'],
     skills: ['询价', '询价', '供应风险'],
     access: 'workspace',
   });
@@ -96,10 +127,68 @@ test('creates related runtime, agent, project, and run in locked revisions', (t)
   assert.equal(runtime.owner, 'workspace-owner');
   assert.deepEqual(agent.skills, ['询价', '供应风险']);
   assert.equal(agent.model, 'provider-default');
+  assert.equal(agent.registration.type, 'master');
+  assert.deepEqual(agent.registration.allowedRuntimeCapabilities, ['chat', 'tools']);
   assert.deepEqual(project.agentIds, [agent.id]);
   assert.equal(run.trigger, 'project');
   assert.equal(snapshot.revision, 4);
   assert.equal(snapshot.runs[0]?.id, run.id);
+});
+
+test('enforces a governed Agent tree, unique codes, and runtime capability allowlists', (t) => {
+  const { store } = fixture(t);
+  const root = store.load().agents[0]!;
+
+  const master = store.createAgent({
+    name: 'ERP 主 Agent', role: 'ERP 系统任务入口', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'erp-master', type: 'master', ownerOrg: '信息中心', domain: 'erp',
+    allowedRuntimeCapabilities: ['mcp'],
+  });
+  const specialist = store.createAgent({
+    name: 'ERP 订单 Agent', role: '订单专业分析', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: master.id, hierarchyLevel: 'L2',
+    code: 'erp-orders', type: 'specialist', ownerOrg: '信息中心', domain: 'order',
+    allowedRuntimeCapabilities: ['mcp'],
+  });
+
+  assert.equal(master.registration.code, 'erp-master');
+  assert.equal(specialist.registration.type, 'specialist');
+  assert.throws(() => store.createAgent({
+    name: '重复编码 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'ERP-MASTER', type: 'master', ownerOrg: '信息中心', domain: 'duplicate',
+  }), /Agent code 不能重复/);
+  assert.throws(() => store.createAgent({
+    name: '越权能力 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'erp-invalid-capability', type: 'master', ownerOrg: '信息中心', domain: 'erp',
+    allowedRuntimeCapabilities: ['unregistered-capability'],
+  }), /Runtime 未声明能力/);
+  assert.throws(() => store.createAgent({
+    name: '无运行环境能力 Agent', role: '测试', provider: 'openai',
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'erp-no-runtime', type: 'master', ownerOrg: '信息中心', domain: 'erp',
+    allowedRuntimeCapabilities: ['mcp'],
+  }), /未绑定 Runtime 的 Agent 不能声明能力白名单/);
+  assert.throws(() => store.createAgent({
+    name: '错误层级 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L3',
+    code: 'erp-wrong-level', type: 'master', ownerOrg: '信息中心', domain: 'erp',
+  }), /master 必须使用 L1 层级/);
+  assert.throws(() => store.createAgent({
+    name: '错误上级 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L2',
+    code: 'erp-wrong-parent', type: 'specialist', ownerOrg: '信息中心', domain: 'erp',
+  }), /specialist 的上级必须是 master/);
+
+  const invalid = store.load();
+  invalid.agents.find((agent) => agent.id === master.id)!.parentAgentId = specialist.id;
+  const parsed = HarborSnapshotSchema.safeParse(invalid);
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    assert.ok(parsed.error.issues.some((issue) => issue.message === 'Agent 上下级关系存在循环'));
+  }
 });
 
 test('rejects a stale snapshot instead of overwriting a newer revision', (t) => {

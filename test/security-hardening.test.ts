@@ -48,6 +48,10 @@ test('Harbor agent creation rejects unknown fields and validates hierarchy', (t)
     provider: 'openai',
     parentAgentId: parent.id,
     hierarchyLevel: 'L1',
+    code: 'security-master',
+    type: 'master',
+    ownerOrg: '安全测试',
+    domain: 'security',
   });
   assert.equal(child.parentAgentId, parent.id);
   assert.equal(child.hierarchyLevel, 'L1');
