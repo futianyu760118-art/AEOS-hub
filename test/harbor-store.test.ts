@@ -15,6 +15,7 @@ import {
   HarborStore,
   HarborStoreConflictError,
   HarborStoreCorruptError,
+  isAgentTaskServiceProfileConfigured,
 } from '../src/harbor-store.ts';
 
 const FIXED_NOW = '2026-09-03T08:30:00.000Z';
@@ -75,9 +76,89 @@ test('normalizes a legacy Agent into a governed registration without rewriting o
     domain: 'enterprise-operation',
     lifecycle: 'active',
     allowedRuntimeCapabilities: [],
+    taskServiceProfile: {
+      profileVersion: '0.0.0',
+      businessOwner: 'unassigned',
+      technicalOwner: 'unassigned',
+      supportedTaskTypes: [],
+      tenantIds: [],
+      inputSchemaVersion: '0.0.0',
+      outputSchemaVersion: '0.0.0',
+      accessMode: 'read_only',
+      dataFreshnessMinutes: 0,
+    },
   });
   assert.equal(snapshot.agents[0]?.hierarchyLevel, 'L0');
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).agents[0].registration, undefined);
+});
+
+test('governs Agent task service profiles while keeping unconfigured records non-routable', (t) => {
+  const { store } = fixture(t);
+  const root = store.load().agents[0]!;
+
+  const agent = store.createAgent({
+    name: '订单风险 Agent', role: '订单风险分析', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'order-risk-master', type: 'master', ownerOrg: '运营中心', domain: 'order-risk',
+    lifecycle: 'testing', allowedRuntimeCapabilities: ['mcp'],
+    taskServiceProfile: {
+      profileVersion: '1.0.0',
+      businessOwner: '订单运营负责人',
+      technicalOwner: '平台技术负责人',
+      supportedTaskTypes: ['operating-case-analysis'],
+      tenantIds: ['default'],
+      inputSchemaVersion: '1.0.0',
+      outputSchemaVersion: '1.0.0',
+      accessMode: 'read_only',
+      dataFreshnessMinutes: 30,
+    },
+  });
+
+  assert.equal(agent.registration.lifecycle, 'testing');
+  assert.deepEqual(agent.registration.taskServiceProfile, {
+    profileVersion: '1.0.0',
+    businessOwner: '订单运营负责人',
+    technicalOwner: '平台技术负责人',
+    supportedTaskTypes: ['operating-case-analysis'],
+    tenantIds: ['default'],
+    inputSchemaVersion: '1.0.0',
+    outputSchemaVersion: '1.0.0',
+    accessMode: 'read_only',
+    dataFreshnessMinutes: 30,
+  });
+
+  const unconfigured = store.createAgent({
+    name: '待配置 Agent', role: '待配置', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'unconfigured-master', type: 'master', ownerOrg: '运营中心', domain: 'order-risk',
+  });
+  assert.deepEqual(unconfigured.registration.taskServiceProfile.supportedTaskTypes, []);
+  assert.deepEqual(unconfigured.registration.taskServiceProfile.tenantIds, []);
+  assert.equal(isAgentTaskServiceProfileConfigured(agent.registration.taskServiceProfile), true);
+  assert.equal(isAgentTaskServiceProfileConfigured(unconfigured.registration.taskServiceProfile), false);
+
+  assert.throws(() => store.createAgent({
+    name: '越权读写 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'write-capable-master', type: 'master', ownerOrg: '运营中心', domain: 'order-risk',
+    taskServiceProfile: {
+      profileVersion: '1.0.0', businessOwner: '业务 Owner', technicalOwner: '技术 Owner',
+      supportedTaskTypes: ['operating-case-analysis'], tenantIds: ['default'],
+      inputSchemaVersion: '1.0.0', outputSchemaVersion: '1.0.0',
+      accessMode: 'read_write', dataFreshnessMinutes: 30,
+    },
+  }), /read_only/);
+  assert.throws(() => store.createAgent({
+    name: '重复任务类型 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, hierarchyLevel: 'L1',
+    code: 'duplicate-task-type-master', type: 'master', ownerOrg: '运营中心', domain: 'order-risk',
+    taskServiceProfile: {
+      profileVersion: '1.0.0', businessOwner: '业务 Owner', technicalOwner: '技术 Owner',
+      supportedTaskTypes: ['operating-case-analysis', 'operating-case-analysis'], tenantIds: ['default'],
+      inputSchemaVersion: '1.0.0', outputSchemaVersion: '1.0.0',
+      accessMode: 'read_only', dataFreshnessMinutes: 30,
+    },
+  }), /任务类型不能重复/);
 });
 
 test('creates related runtime, agent, project, and run in locked revisions', (t) => {

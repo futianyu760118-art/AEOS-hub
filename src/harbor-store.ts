@@ -17,7 +17,7 @@ import { z } from 'zod';
 const AUTONOMY_LEVELS = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'] as const;
 const AGENT_HIERARCHY_LEVELS = ['L0', 'L1', 'L2', 'L3'] as const;
 const AGENT_TYPES = ['hub', 'master', 'specialist', 'tool'] as const;
-const AGENT_LIFECYCLES = ['draft', 'active', 'suspended', 'retired'] as const;
+const AGENT_LIFECYCLES = ['draft', 'testing', 'active', 'suspended', 'retired'] as const;
 const AGENT_LEVEL_BY_TYPE: Record<(typeof AGENT_TYPES)[number], (typeof AGENT_HIERARCHY_LEVELS)[number]> = {
   hub: 'L0', master: 'L1', specialist: 'L2', tool: 'L3',
 };
@@ -69,6 +69,18 @@ const agentCodeSchema = z.string().trim().toLowerCase()
   .regex(/^[a-z][a-z0-9-]{1,79}$/, 'Agent 编码只能使用小写字母、数字和连字符，且长度为 2-80 位');
 const timestampSchema = z.string().datetime({ offset: true });
 const stringListSchema = (itemMax: number, max = 40) => z.array(trimmedString(itemMax, 1)).max(max);
+const governedIdentifierSchema = z.string()
+  .regex(/^[a-z][a-z0-9._-]{1,79}$/, '标识只能使用小写字母、数字、点、下划线和连字符，且长度为 2-80 位');
+const semanticVersionSchema = z.string()
+  .regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, '版本必须使用 x.y.z 格式');
+const uniqueGovernedIdentifierListSchema = (label: string) => z.array(governedIdentifierSchema).max(40)
+  .superRefine((values, ctx) => {
+    const seen = new Set<string>();
+    values.forEach((value, index) => {
+      if (seen.has(value)) ctx.addIssue({ code: 'custom', path: [index], message: `${label}不能重复: ${value}` });
+      seen.add(value);
+    });
+  });
 const calendarDateSchema = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, '日期必须使用 YYYY-MM-DD 格式')
   .refine((value) => {
@@ -77,6 +89,30 @@ const calendarDateSchema = z.string()
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }, '日期无效');
 
+export const AgentTaskServiceProfileSchema = z.object({
+  profileVersion: semanticVersionSchema,
+  businessOwner: trimmedString(120, 1),
+  technicalOwner: trimmedString(120, 1),
+  supportedTaskTypes: uniqueGovernedIdentifierListSchema('任务类型'),
+  tenantIds: uniqueGovernedIdentifierListSchema('租户标识'),
+  inputSchemaVersion: semanticVersionSchema,
+  outputSchemaVersion: semanticVersionSchema,
+  accessMode: z.literal('read_only'),
+  dataFreshnessMinutes: z.number().int().min(0).max(43_200),
+}).strict();
+
+export const UNCONFIGURED_AGENT_TASK_SERVICE_PROFILE = {
+  profileVersion: '0.0.0',
+  businessOwner: 'unassigned',
+  technicalOwner: 'unassigned',
+  supportedTaskTypes: [],
+  tenantIds: [],
+  inputSchemaVersion: '0.0.0',
+  outputSchemaVersion: '0.0.0',
+  accessMode: 'read_only',
+  dataFreshnessMinutes: 0,
+} satisfies z.input<typeof AgentTaskServiceProfileSchema>;
+
 export const AgentRegistrationSchema = z.object({
   code: agentCodeSchema,
   type: AgentTypeSchema,
@@ -84,6 +120,11 @@ export const AgentRegistrationSchema = z.object({
   domain: trimmedString(120, 1),
   lifecycle: AgentLifecycleSchema,
   allowedRuntimeCapabilities: stringListSchema(200),
+  taskServiceProfile: AgentTaskServiceProfileSchema.default(() => ({
+    ...UNCONFIGURED_AGENT_TASK_SERVICE_PROFILE,
+    supportedTaskTypes: [],
+    tenantIds: [],
+  })),
 }).strict();
 
 export const HarborAgentSchema = z.object({
@@ -317,10 +358,22 @@ export const HarborSnapshotSchema = z.object({
 });
 
 export type HarborAgent = z.infer<typeof HarborAgentSchema>;
+export type AgentTaskServiceProfile = z.infer<typeof AgentTaskServiceProfileSchema>;
 export type HarborRuntime = z.infer<typeof HarborRuntimeSchema>;
 export type HarborProject = z.infer<typeof HarborProjectSchema>;
 export type HarborRun = z.infer<typeof HarborRunSchema>;
 export type HarborSnapshot = z.infer<typeof HarborSnapshotSchema>;
+
+export function isAgentTaskServiceProfileConfigured(profile: AgentTaskServiceProfile): boolean {
+  return profile.profileVersion !== '0.0.0'
+    && profile.inputSchemaVersion !== '0.0.0'
+    && profile.outputSchemaVersion !== '0.0.0'
+    && profile.businessOwner !== 'unassigned'
+    && profile.technicalOwner !== 'unassigned'
+    && profile.supportedTaskTypes.length > 0
+    && profile.tenantIds.length > 0
+    && profile.dataFreshnessMinutes > 0;
+}
 
 export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
   name?: unknown;
@@ -330,7 +383,7 @@ export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
 const HARBOR_AGENT_CREATE_KEYS = new Set([
   'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
   'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
-  'code', 'type', 'ownerOrg', 'domain', 'lifecycle', 'allowedRuntimeCapabilities',
+  'code', 'type', 'ownerOrg', 'domain', 'lifecycle', 'allowedRuntimeCapabilities', 'taskServiceProfile',
 ]);
 export type HarborRuntimeCreateInput = Readonly<Record<string, unknown>> & { name?: unknown };
 export interface HarborRuntimeVerificationInput {
@@ -632,6 +685,7 @@ export class HarborStore {
         domain: requiredText(input, 'domain', 120),
         lifecycle: enumValue(input, 'lifecycle', AGENT_LIFECYCLES, 'draft'),
         allowedRuntimeCapabilities: stringList(input.allowedRuntimeCapabilities, 200),
+        taskServiceProfile: input.taskServiceProfile,
       });
       if (runtimeId && !snapshot.runtimes.some((runtime) => runtime.id === runtimeId)) {
         throw new Error('所选 Runtime 不存在');
@@ -860,6 +914,17 @@ export class HarborStore {
             domain: 'enterprise-operation',
             lifecycle: 'active',
             allowedRuntimeCapabilities: [],
+            taskServiceProfile: {
+              profileVersion: '1.0.0',
+              businessOwner: 'AEOS Platform',
+              technicalOwner: 'AEOS Platform',
+              supportedTaskTypes: ['operating-case-analysis'],
+              tenantIds: ['default'],
+              inputSchemaVersion: '1.0.0',
+              outputSchemaVersion: '1.0.0',
+              accessMode: 'read_only',
+              dataFreshnessMinutes: 60,
+            },
           },
           autonomyLevel: 'A2',
           access: 'workspace',
