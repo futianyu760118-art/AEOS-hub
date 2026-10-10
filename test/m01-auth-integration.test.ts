@@ -148,6 +148,7 @@ test('gateway rejects unauthenticated protected HTTP/static/WebSocket access and
   assert.equal(gateway.canAccess('/private.css', 'GET', undefined), false);
   assert.equal(gateway.isAuthorized(undefined), false);
   assert.equal(isPublicLoginResource('/app.js', 'GET'), true);
+  assert.equal(isPublicLoginResource('/agent-registration.js', 'GET'), true);
   assert.deepEqual(gateway.session(undefined), { authenticated: false, authMode: 'm01' });
   const sessionId = auth.createSession(m01Actor);
   const actorId = gateway.actorIdFromCookie(`aeos_auth=${sessionId}`);
