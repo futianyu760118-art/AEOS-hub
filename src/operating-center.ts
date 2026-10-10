@@ -108,6 +108,7 @@ export class OperatingCenterStore {
     const caseId = typeof input.caseId === 'string' ? input.caseId.trim() : '';
     const resultType = typeof input.resultType === 'string' ? input.resultType.trim() : '';
     const summary = typeof input.summary === 'string' ? input.summary.trim() : '';
+    const tenantId = typeof input.tenantId === 'string' ? input.tenantId.trim() : '';
     const createdBy = typeof input.actor === 'string' ? input.actor.trim()
       : typeof input.createdBy === 'string' ? input.createdBy.trim() : '';
     if (!caseId || !resultType || !summary || !createdBy) {
@@ -121,7 +122,7 @@ export class OperatingCenterStore {
       const base: ResultContract = {
         result_id: `result-${randomUUID()}`,
         result_type: resultType,
-        tenant_id: process.env.AEOS_TENANT_ID?.trim() || 'pilot-default',
+        tenant_id: tenantId || process.env.AEOS_TENANT_ID?.trim() || 'pilot-default',
         object_ref: `business://${item.source}/${encodeURIComponent(item.entityId)}`,
         owner: item.ownerRole,
         created_by: createdBy,

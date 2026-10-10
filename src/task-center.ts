@@ -203,14 +203,15 @@ export class TaskCenterStore {
     if (!dueAt.success) throw new Error('dueAt必须使用 YYYY-MM-DD 格式');
     const refs = uniqueRefs(input.evidenceRefs);
     const correlationId = optionalString(input, 'correlationId', 200) || caseId;
-    const alreadyOpen = this.load().tasks.find((task) => task.caseId === caseId && !TERMINAL_STATUSES.has(task.status));
+    const tenantId = optionalString(input, 'tenantId', 160) || this.tenantId;
+    const alreadyOpen = this.load().tasks.find((task) => task.caseId === caseId && task.tenantId === tenantId && !TERMINAL_STATUSES.has(task.status));
     if (alreadyOpen) return structuredClone(alreadyOpen);
     return this.mutate((snapshot, occurredAt) => {
-      const existing = snapshot.tasks.find((task) => task.caseId === caseId && !TERMINAL_STATUSES.has(task.status));
+      const existing = snapshot.tasks.find((task) => task.caseId === caseId && task.tenantId === tenantId && !TERMINAL_STATUSES.has(task.status));
       if (existing) return existing;
       const task = TaskRecordSchema.parse({
         taskId: `task-${this.idFactory()}`,
-        tenantId: this.tenantId,
+        tenantId,
         businessObjectRef: `business://${source}/${encodeURIComponent(entityId)}`,
         caseId, source, title, evidenceRefs: refs, priority: priority.data, dueAt: dueAt.data,
         initiatedBy: actor, currentAssignee: null, status: 'DRAFT', correlationId,

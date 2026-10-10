@@ -29,6 +29,8 @@ import { buildCapabilityRegistry } from './capability-registry.ts';
 import { buildDashboardSnapshot, type DashboardSnapshot } from './dashboard.ts';
 import { AttentionSearchRequestSchema, searchLiveDashboard } from './attention-search.ts';
 import { operatingCenter } from './operating-center.ts';
+import { taskCenter } from './task-center.ts';
+import { TaskApi } from './task-api.ts';
 import { McpAccessGateway } from './mcp-access-gateway.ts';
 import { McpReadinessError, waitForReadOnlyMcpTools } from './mcp-readiness.ts';
 import { loadMcpRegistry } from './mcp-registry.ts';
@@ -127,6 +129,7 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // this policy boundary.  Chat-agent calls are constrained by the same registry
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
+const taskApi = new TaskApi({ operatingCenter, taskCenter, appendEvidence });
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
@@ -1250,7 +1253,8 @@ const server = createServer(async (req, res) => {
     sendJson(res, 200, { ok: true, ...(outcome.redirectTo ? { redirectTo: outcome.redirectTo } : {}) });
     return;
   }
-  const requestActor = publicAsset ? 'anonymous' : authGateway.actorIdFromCookie(req.headers.cookie)!;
+  const requestActorContext = publicAsset ? null : authGateway.actorFromCookie(req.headers.cookie);
+  const requestActor = publicAsset ? 'anonymous' : requestActorContext!.actorId;
   let rel: string;
   try {
     rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
@@ -1346,6 +1350,24 @@ const server = createServer(async (req, res) => {
       const snapshot = operatingCenter.load();
       sendJson(res, 200, { ...snapshot, unreadInboxCount: snapshot.inbox.filter((item) => item.state === 'unread').length });
     } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
+    return;
+  }
+  if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/') || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(url.pathname)) {
+    try {
+      const body = req.method === 'GET' ? {} : await readJsonBody(req);
+      const taskResponse = taskApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        actor: requestActorContext ? {
+          actorId: requestActorContext.actorId,
+          actorType: requestActorContext.actorType,
+          tenantId: requestActorContext.tenantId,
+        } : null,
+        body,
+      });
+      if (!taskResponse) { sendJson(res, 404, { error: 'task endpoint not found' }); }
+      else sendJson(res, taskResponse.status, taskResponse.body);
+    } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
   if (url.pathname === '/api/operating-cases/from-dashboard') {

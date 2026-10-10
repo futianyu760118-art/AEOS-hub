@@ -140,6 +140,8 @@ export type BrowserAuthGateway = {
   canAccess(pathname: string, method: string | undefined, cookieHeader: string | undefined): boolean;
   sessionIdFromCookie(cookieHeader: string | undefined): string | null;
   actorIdFromCookie(cookieHeader: string | undefined): string | null;
+  /** Returns the server-held actor context for an authorized browser session. */
+  actorFromCookie(cookieHeader: string | undefined): ActorContext | null;
 };
 
 export function createBrowserAuthGateway(input: {
@@ -237,6 +239,9 @@ export function createBrowserAuthGateway(input: {
     },
     actorIdFromCookie(cookieHeader) {
       return input.webAuth.actorFromCookie(cookieHeader)?.actorId ?? null;
+    },
+    actorFromCookie(cookieHeader) {
+      return input.webAuth.actorFromCookie(cookieHeader);
     },
   };
 }
