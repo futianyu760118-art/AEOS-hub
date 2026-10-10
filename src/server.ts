@@ -65,7 +65,7 @@ import {
   passwordFromEnvironment,
   usernameFromEnvironment,
 } from './web-auth.ts';
-import { M01OidcAuth, readM01Config } from './auth/m01-oidc.ts';
+import { M01OidcAuth, derivePostLogoutRedirectUri, readM01Config } from './auth/m01-oidc.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -106,6 +106,7 @@ const authGateway = createBrowserAuthGateway({
   webAuth,
   ...(m01Oidc ? { oidc: m01Oidc } : {}),
   ...(m01Config.authMode === 'm01' ? { allowedRoles: m01Config.allowedRoles } : {}),
+  ...(m01Config.authMode === 'm01' ? { postLogoutRedirectUri: derivePostLogoutRedirectUri(m01Config.redirectUri) } : {}),
   secureCookies: COOKIE_SECURE,
 });
 function addCookie(res: ServerResponse, value: string): void {
@@ -1203,9 +1204,11 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === '/api/auth/logout') {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    const outcome = authGateway.logout(req.headers.cookie);
+    const outcome = await authGateway.logout(req.headers.cookie);
     for (const cookie of outcome.cookies) addCookie(res, cookie);
-    sendJson(res, 200, { ok: true });
+    // In M01 mode the browser must still end the IdP session, so the Hub hands the
+    // client the RP-initiated logout URL instead of following a cross-origin redirect.
+    sendJson(res, 200, { ok: true, ...(outcome.redirectTo ? { redirectTo: outcome.redirectTo } : {}) });
     return;
   }
   const requestActor = publicAsset ? 'anonymous' : authGateway.actorIdFromCookie(req.headers.cookie)!;

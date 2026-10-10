@@ -9,7 +9,7 @@ const m01Actor: ActorContext = {
   actorId: 'm01:user:manager-42', actorType: 'human', tenantId: 'tenant-42', roles: ['manager'], authSource: 'm01',
 };
 
-function gatewayFixture() {
+function gatewayFixture(options: { postLogoutRedirectUri?: string; endSessionUrl?: () => Promise<string | null> } = {}) {
   const calls: Array<Record<string, string>> = [];
   const oidc = {
     beginLogin: async ({ browserBinding }: { browserBinding: string }) => {
@@ -20,9 +20,22 @@ function gatewayFixture() {
       calls.push({ kind: 'complete', ...input });
       return m01Actor;
     },
+    endSessionUrl: async ({ postLogoutRedirectUri }: { postLogoutRedirectUri: string }) => {
+      calls.push({ kind: 'end-session', postLogoutRedirectUri });
+      return options.endSessionUrl
+        ? options.endSessionUrl()
+        : `https://id.example.test/logout?client_id=aeos-hub-web&post_logout_redirect_uri=${encodeURIComponent(postLogoutRedirectUri)}`;
+    },
   };
   const auth = new BrowserSessionAuth('demo', 'replace-me');
-  return { calls, auth, gateway: createBrowserAuthGateway({ authMode: 'm01', webAuth: auth, oidc, allowedRoles: ['manager'], secureCookies: true, browserBindingFactory: () => 'binding-1234567890' }) };
+  return {
+    calls,
+    auth,
+    gateway: createBrowserAuthGateway({
+      authMode: 'm01', webAuth: auth, oidc, allowedRoles: ['manager'], secureCookies: true, browserBindingFactory: () => 'binding-1234567890',
+      postLogoutRedirectUri: options.postLogoutRedirectUri ?? 'http://127.0.0.1:8790/?logged_out=1',
+    }),
+  };
 }
 
 test('M01 gateway rejects password POST and starts browser-bound GET login without external Keycloak', async () => {
@@ -61,7 +74,7 @@ test('callback failure and logout clear every authentication cookie without reve
   for (const name of ['aeos_auth', 'hub_token', 'aeos_session', 'aeos_m01_binding']) {
     assert.match(failure.cookies!.join('\n'), new RegExp(`^${name}=`, 'm'));
   }
-  const logout = gateway.logout(undefined);
+  const logout = await gateway.logout(undefined);
   assert.equal(logout.status, 200);
   for (const name of ['aeos_auth', 'hub_token', 'aeos_session', 'aeos_m01_binding']) {
     assert.match(logout.cookies!.join('\n'), new RegExp(`^${name}=`, 'm'));
@@ -100,4 +113,54 @@ test('client reconnects a closed WebSocket only after an explicitly authenticate
   const appSource = readFileSync(join(process.cwd(), 'public', 'app.js'), 'utf8');
   assert.match(appSource, /session\?\.authenticated === true\) reconnectTimer = window\.setTimeout\(connect, 3000\)/);
   assert.match(appSource, /else showLoginRequired\('登录会话已结束，请重新登录'\)/);
+});
+
+test('M01 logout revokes the Hub session and hands back the IdP logout URL', async () => {
+  const { auth, gateway } = gatewayFixture();
+  const sessionId = auth.createSession(m01Actor)!;
+  const logout = await gateway.logout(`aeos_auth=${sessionId}`);
+  assert.equal(logout.status, 200);
+  assert.equal(
+    logout.redirectTo,
+    `https://id.example.test/logout?client_id=aeos-hub-web&post_logout_redirect_uri=${encodeURIComponent('http://127.0.0.1:8790/?logged_out=1')}`,
+  );
+  assert.equal(auth.isAuthorized(`aeos_auth=${sessionId}`), false);
+  assert.match(logout.cookies.join('\n'), /^aeos_m01_binding=.*Max-Age=0/m);
+});
+
+test('M01 logout still clears the Hub session when the IdP logout URL is unavailable', async () => {
+  const unavailable = [async () => null, async () => { throw new Error('idp unreachable'); }];
+  for (const endSessionUrl of unavailable) {
+    const { auth, gateway } = gatewayFixture({ endSessionUrl });
+    const sessionId = auth.createSession(m01Actor)!;
+    const logout = await gateway.logout(`aeos_auth=${sessionId}`);
+    assert.equal(logout.status, 200);
+    assert.equal(logout.redirectTo, undefined);
+    assert.equal(auth.isAuthorized(`aeos_auth=${sessionId}`), false);
+  }
+});
+
+test('M01 logout without a registered post logout redirect only ends the Hub session', async () => {
+  const auth = new BrowserSessionAuth('demo', 'replace-me');
+  const gateway = createBrowserAuthGateway({
+    authMode: 'm01', webAuth: auth, allowedRoles: ['manager'], secureCookies: true,
+    oidc: {
+      beginLogin: async () => ({ redirectUrl: 'https://id.example.test/authorize' }),
+      completeLogin: async () => m01Actor,
+      endSessionUrl: async () => 'https://id.example.test/logout',
+    },
+  });
+  const sessionId = auth.createSession(m01Actor)!;
+  const logout = await gateway.logout(`aeos_auth=${sessionId}`);
+  assert.equal(logout.redirectTo, undefined);
+  assert.equal(auth.isAuthorized(`aeos_auth=${sessionId}`), false);
+});
+
+test('local-dev logout never returns an IdP redirect', async () => {
+  const auth = new BrowserSessionAuth('demo', 'replace-me');
+  const gateway = createBrowserAuthGateway({ authMode: 'local-dev', webAuth: auth, secureCookies: false });
+  const sessionId = auth.createSession({ ...m01Actor, authSource: 'local-dev' })!;
+  const logout = await gateway.logout(`aeos_auth=${sessionId}`);
+  assert.equal(logout.status, 200);
+  assert.equal(logout.redirectTo, undefined);
 });

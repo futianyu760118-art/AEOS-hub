@@ -523,7 +523,11 @@ async function logout() {
 
   try {
     const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-    if (!response.ok) showLoginError('本地已退出；服务端会话未能确认失效，请恢复网络后重新打开页面。');
+    if (!response.ok) { showLoginError('本地已退出；服务端会话未能确认失效，请恢复网络后重新打开页面。'); return; }
+    // M01 sign-out also ends the IdP session. The Hub hands back that URL instead of
+    // issuing a redirect itself, because the IdP sits on a different origin.
+    const outcome = await response.json().catch(() => null);
+    if (typeof outcome?.redirectTo === 'string' && outcome.redirectTo) window.location.assign(outcome.redirectTo);
   } catch {
     showLoginError('本地已退出；服务端会话未能确认失效，请恢复网络后重新打开页面。');
   }
@@ -4009,7 +4013,9 @@ function showLoginRequired(message = '') {
 }
 
 async function bootstrapAuthentication() {
-  const loginError = new URLSearchParams(location.search).get('auth_error') === '1';
+  const query = new URLSearchParams(location.search);
+  const loginError = query.get('auth_error') === '1';
+  const loggedOut = query.get('logged_out') === '1';
   try {
     const response = await fetch('/api/auth/session', { credentials: 'same-origin' });
     const session = response.ok ? await response.json() : null;
@@ -4022,7 +4028,7 @@ async function bootstrapAuthentication() {
   } catch {
     // The visible login form will surface a precise error if the server stays unavailable.
   }
-  if (loginError) history.replaceState(null, '', `${location.pathname}${location.hash}`);
+  if (loginError || loggedOut) history.replaceState(null, '', `${location.pathname}${location.hash}`);
   showLoginRequired(loginError ? '统一登录未完成，请重新登录。' : '');
 }
 

@@ -125,12 +125,15 @@ export function expiredBindingCookie(secure = false): string {
 export type M01BrowserOidc = {
   beginLogin(input: { browserBinding: string }): Promise<{ redirectUrl: string }>;
   completeLogin(input: { code: string; state: string; browserBinding: string }): Promise<ActorContext>;
+  /** Returns the RP-initiated logout URL, or null when the IdP exposes no end session endpoint. */
+  endSessionUrl(input: { postLogoutRedirectUri: string }): Promise<string | null>;
 };
 
 export type BrowserAuthGateway = {
   login(method: string | undefined, cookieHeader: string | undefined): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
   callback(method: string | undefined, cookieHeader: string | undefined, code: string, state: string): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
-  logout(cookieHeader: string | undefined): { status: number; cookies: string[] };
+  /** Revokes the Hub session; in M01 mode `redirectTo` also ends the IdP session in the browser. */
+  logout(cookieHeader: string | undefined): Promise<{ status: number; cookies: string[]; redirectTo?: string }>;
   session(cookieHeader: string | undefined): Record<string, unknown>;
   isAuthorized(cookieHeader: string | undefined): boolean;
   canAccess(pathname: string, method: string | undefined, cookieHeader: string | undefined): boolean;
@@ -144,6 +147,8 @@ export function createBrowserAuthGateway(input: {
   oidc?: M01BrowserOidc;
   /** Explicit M01 roles admitted to the Hub; this is a login boundary, not per-action RBAC. */
   allowedRoles?: readonly string[];
+  /** Registered post logout redirect URI, required for M01 RP-initiated logout. */
+  postLogoutRedirectUri?: string;
   secureCookies: boolean;
   browserBindingFactory?: () => string;
 }): BrowserAuthGateway {
@@ -195,9 +200,19 @@ export function createBrowserAuthGateway(input: {
         return failure(cookieHeader);
       }
     },
-    logout(cookieHeader) {
+    async logout(cookieHeader) {
+      // The Hub session is revoked first: sign-out must succeed locally even when
+      // the IdP is unreachable and the browser cannot be redirected to it.
       input.webAuth.revoke(cookieHeader);
-      return { status: 200, cookies: expiredAuthenticationCookies() };
+      let redirectTo: string | undefined;
+      if (input.authMode === 'm01' && input.oidc && input.postLogoutRedirectUri) {
+        try {
+          redirectTo = (await input.oidc.endSessionUrl({ postLogoutRedirectUri: input.postLogoutRedirectUri })) ?? undefined;
+        } catch {
+          redirectTo = undefined;
+        }
+      }
+      return { status: 200, cookies: expiredAuthenticationCookies(), ...(redirectTo ? { redirectTo } : {}) };
     },
     session(cookieHeader) {
       const actor = input.webAuth.actorFromCookie(cookieHeader);

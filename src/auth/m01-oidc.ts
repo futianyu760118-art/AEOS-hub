@@ -90,12 +90,22 @@ export function readM01Config(environment: NodeJS.ProcessEnv = process.env): M01
 
 type M01EnabledConfig = Extract<M01Config, { authMode: 'm01' }>;
 
+/**
+ * The Hub URL Keycloak returns to after an RP-initiated logout. It is derived from
+ * the validated callback origin and must be registered as a valid post logout
+ * redirect URI on the M01 client.
+ */
+export function derivePostLogoutRedirectUri(redirectUri: string): string {
+  return `${new URL(redirectUri).origin}/?logged_out=1`;
+}
+
 type OidcDiscovery = {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
   jwks_uri: string;
   token_endpoint_auth_methods_supported?: string[];
+  end_session_endpoint?: string;
 };
 
 type LoginTransaction = {
@@ -185,6 +195,7 @@ function isOidcDiscovery(value: unknown, issuer: string): value is OidcDiscovery
     secureOidcUrl(document.authorization_endpoint);
     secureOidcUrl(document.token_endpoint);
     secureOidcUrl(document.jwks_uri);
+    if (document.end_session_endpoint !== undefined) secureOidcUrl(document.end_session_endpoint);
     return true;
   } catch {
     return false;
@@ -276,6 +287,26 @@ export class M01OidcAuth {
     }
   }
 
+  /**
+   * Builds the RP-initiated logout URL for this client. It deliberately sends no
+   * id_token_hint, so the Hub never has to retain token material in order to sign
+   * out; Keycloak answers with its own logout confirmation page.
+   */
+  async endSessionUrl(input: { postLogoutRedirectUri: string }): Promise<string | null> {
+    try {
+      const postLogoutRedirectUri = new URL(String(input?.postLogoutRedirectUri));
+      if (postLogoutRedirectUri.origin !== new URL(this.config.redirectUri).origin) return null;
+      const discovery = await this.getDiscovery();
+      if (!discovery.end_session_endpoint) return null;
+      const url = new URL(discovery.end_session_endpoint);
+      url.searchParams.set('client_id', this.config.clientId);
+      url.searchParams.set('post_logout_redirect_uri', postLogoutRedirectUri.toString());
+      return url.toString();
+    } catch {
+      return null;
+    }
+  }
+
   dispose(): void {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
@@ -346,6 +377,8 @@ export class M01OidcAuth {
       jwks_uri: secureOidcUrl(document.jwks_uri),
       ...(document.token_endpoint_auth_methods_supported === undefined
         ? {} : { token_endpoint_auth_methods_supported: document.token_endpoint_auth_methods_supported }),
+      ...(document.end_session_endpoint === undefined
+        ? {} : { end_session_endpoint: secureOidcUrl(document.end_session_endpoint) }),
     };
     this.discoveryCache = { value, expiresAt: this.clock() + OIDC_CACHE_TTL_MS };
     return value;

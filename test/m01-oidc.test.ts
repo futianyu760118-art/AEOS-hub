@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { normalizeActorContext } from '../src/auth/actor-context.ts';
-import { M01OidcAuth, readM01Config } from '../src/auth/m01-oidc.ts';
+import { M01OidcAuth, derivePostLogoutRedirectUri, readM01Config } from '../src/auth/m01-oidc.ts';
 
 const m01Environment: NodeJS.ProcessEnv = {
   AEOS_AUTH_MODE: 'm01',
@@ -385,4 +385,39 @@ test('actor context maps explicitly marked UUID service accounts to client-scope
     clientId: 'keycloak-service',
     authSource: 'm01',
   });
+});
+
+test('M01 end session URL targets the discovered logout endpoint and sends no token hint', async () => {
+  const endSessionEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/logout';
+  const { auth } = createOidcFixture({
+    discovery: {
+      issuer: oidcConfig.issuer, authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, jwks_uri: jwksUri, end_session_endpoint: endSessionEndpoint,
+    },
+  });
+  const url = await auth.endSessionUrl({ postLogoutRedirectUri: 'http://localhost:3000/?logged_out=1' });
+  assert.ok(url, 'the IdP logout URL must be produced when discovery exposes one');
+  const parsed = new URL(url);
+  assert.equal(parsed.origin + parsed.pathname, endSessionEndpoint);
+  assert.equal(parsed.searchParams.get('client_id'), oidcConfig.clientId);
+  assert.equal(parsed.searchParams.get('post_logout_redirect_uri'), 'http://localhost:3000/?logged_out=1');
+  assert.equal(parsed.searchParams.has('id_token_hint'), false);
+});
+
+test('M01 end session URL is withheld without a logout endpoint or for a redirect on another origin', async () => {
+  const withoutLogoutEndpoint = createOidcFixture();
+  assert.equal(await withoutLogoutEndpoint.auth.endSessionUrl({ postLogoutRedirectUri: 'http://localhost:3000/?logged_out=1' }), null);
+
+  const endSessionEndpoint = 'https://login.example.test/realms/aeos/protocol/openid-connect/logout';
+  const { auth } = createOidcFixture({
+    discovery: {
+      issuer: oidcConfig.issuer, authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, jwks_uri: jwksUri, end_session_endpoint: endSessionEndpoint,
+    },
+  });
+  assert.equal(await auth.endSessionUrl({ postLogoutRedirectUri: 'http://evil.example.test/?logged_out=1' }), null);
+  assert.equal(await auth.endSessionUrl({ postLogoutRedirectUri: 'not-a-url' }), null);
+});
+
+test('derived post logout redirect stays on the validated Hub origin', () => {
+  assert.equal(derivePostLogoutRedirectUri('http://127.0.0.1:8790/api/auth/callback'), 'http://127.0.0.1:8790/?logged_out=1');
+  assert.equal(derivePostLogoutRedirectUri('https://hub.example.test/api/auth/callback'), 'https://hub.example.test/?logged_out=1');
 });
