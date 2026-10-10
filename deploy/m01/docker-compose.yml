@@ -1,4 +1,25 @@
 services:
+  m01-config-check:
+    image: alpine:3.20
+    restart: "no"
+    environment:
+      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?Set KEYCLOAK_ADMIN_USERNAME in deploy/m01/.env}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in deploy/m01/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/m01/.env}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        sentinel='__REPLACE_BEFORE_START__'
+        failed=0
+        for value_name in KEYCLOAK_ADMIN_USERNAME KEYCLOAK_ADMIN_PASSWORD POSTGRES_PASSWORD; do
+          value="$$(printenv "$$value_name" || true)"
+          if [ -z "$$value" ] || [ "$$value" = "$$sentinel" ]; then
+            echo "ERROR: $$value_name must be replaced in deploy/m01/.env before startup." >&2
+            failed=1
+          fi
+        done
+        exit "$$failed"
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -6,6 +27,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in deploy/m01/.env}
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in deploy/m01/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/m01/.env}
+    depends_on:
+      m01-config-check:
+        condition: service_completed_successfully
     volumes:
       - keycloak-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -20,6 +44,8 @@ services:
     restart: unless-stopped
     command: ["start-dev", "--http-enabled=true"]
     depends_on:
+      m01-config-check:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:

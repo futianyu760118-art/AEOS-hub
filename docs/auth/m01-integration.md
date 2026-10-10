@@ -6,7 +6,7 @@
 
 ## 1. 本地身份栈
 
-从仓库根目录复制模板并替换所有密码（`.env` 已被忽略，绝不提交）：
+从仓库根目录复制模板并替换 sentinel 管理员凭据和数据库密码（`.env` 已被忽略，绝不提交）：
 
 ```powershell
 Copy-Item deploy/m01/.env.example deploy/m01/.env
@@ -14,7 +14,7 @@ docker compose --env-file deploy/m01/.env -f deploy/m01/docker-compose.yml confi
 docker compose --env-file deploy/m01/.env -f deploy/m01/docker-compose.yml up -d
 ```
 
-必须设置的变量如下。模板中的密码均为无效占位/开发示例，实际启动前必须替换。
+必须设置的变量如下。模板中的 `__REPLACE_BEFORE_START__` 是故意不可启动的 sentinel，不是示例密码：复制后未替换时，`docker compose ... config` 会通过静态检查，但 `docker compose ... up` 会由 `m01-config-check` 故意失败，且 PostgreSQL 与 Keycloak 均不会启动。
 
 | 变量 | 用途 |
 | --- | --- |
@@ -25,24 +25,13 @@ docker compose --env-file deploy/m01/.env -f deploy/m01/docker-compose.yml up -d
 
 PostgreSQL 与 Keycloak 均没有宿主机端口；只有 Caddy 的 `127.0.0.1:<M01_KEYCLOAK_HTTPS_PORT>` 可访问。Keycloak 在容器网络使用 HTTP，`KC_HOSTNAME` 固定其公开 HTTPS 地址，`KC_PROXY_HEADERS=xforwarded` 接受 Caddy 传递的代理头，因此 discovery 返回的 issuer 必须是 `https://localhost:<port>/realms/aeos`（或你明确配置的本机 hostname）。
 
-### 信任本地开发 CA
-
-`tls internal` 会生成一套只适用于此开发机的 Caddy 根 CA。浏览器和 Hub 必须信任它，才能安全访问 HTTPS issuer；不要跳过证书错误。先查看导出的证书来源与指纹，再按本机安全规范导入当前用户的受信任根证书存储。例如 Windows 可按以下流程操作：
-
-```powershell
-docker compose --env-file deploy/m01/.env -f deploy/m01/docker-compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt deploy/m01/caddy-root.crt
-Import-Certificate -FilePath .\deploy\m01\caddy-root.crt -CertStoreLocation Cert:\CurrentUser\Root
-```
-
-导出的证书被 `.gitignore` 忽略。若重建 `caddy-data` 命名卷，CA 会变化，需重新审核并信任新根证书。生产应由受信任证书链提供 HTTPS，不得导入此开发 CA。
-
 ## 2. Keycloak 人工配置契约
 
 本试点不导入 Realm：不将任何默认账户、示例密码或不可审计的 Realm JSON 写入仓库。使用 `https://localhost:<port>/` 的 Administration Console 以 bootstrap 管理员登录，并手工完成、复核和记录以下清单。
 
 1. 创建 Realm **`aeos`**。`master` realm 只保留平台管理员；不要在其中创建或登录 AEOS 业务用户。
 2. 在 `aeos` 创建浏览器 Client **`aeos-hub-web`**：类型 confidential，启用 Client authentication 和 Standard Flow，token endpoint authentication method 为 **`client_secret_basic`**。关闭不需要的 implicit、direct grant、device 等 flow。
-3. `Valid redirect URIs` 只填写精确地址 `https://<hub-host>/api/auth/callback`；`Web origins` 只填写精确 Hub origin `https://<hub-host>`。不得用 `*`、通配域或仅主机路径。`<hub-host>` 必须与 `M01_REDIRECT_URI` 一致；生产必须为 HTTPS。
+3. 每个部署环境的 `Valid redirect URIs` 与 `Web origins` 必须精确匹配其 Hub：本地端到端开发只填写 `http://127.0.0.1:8787/api/auth/callback` 与 `http://127.0.0.1:8787`；生产/UAT 只填写 `https://<hub-host>/api/auth/callback` 与 `https://<hub-host>`。不得用 `*`、通配域或仅主机路径。不要在生产 Client 中保留本地 HTTP 地址。
 4. 为浏览器 Client 的专用 client scope 配置并加入 **ID token** 的 mapper：
    - `tenant_id`：User Attribute mapper，claim 名称 `tenant_id`，单值；同时在 Realm User Profile 中把该属性设为必填。Hub 缺少或为空时会拒绝登录。
    - `organization_id`：User Attribute mapper，claim 名称 `organization_id`，单值、可选；未设置时不要伪造值。
@@ -52,13 +41,47 @@ Import-Certificate -FilePath .\deploy\m01\caddy-root.crt -CertStoreLocation Cert
 
 每个智能体使用一个独立 Client + Service Account + 最小角色集合；禁止共享 browser Client secret、共享服务账号或授予 realm-admin。创建/修改 mapper 后取得一个 ID token，确认顶层 claims 与上述名称、类型完全一致，再允许 Hub 接入。
 
-## 3. Hub M01 环境变量
+## 3. Hub M01 环境变量与本地端到端开发
 
-在实际运行 Hub 的受保护环境中精确设置以下变量。不要把 `M01_CLIENT_SECRET`、Keycloak bootstrap 密码或 PostgreSQL 密码提交到 `.env.example`、日志或版本库。
+不要把 `M01_CLIENT_SECRET`、Keycloak bootstrap 密码或 PostgreSQL 密码提交到 `.env.example`、日志或版本库。`M01_ISSUER` 必须与 discovery 的 `issuer` 逐字一致，且 `M01_REDIRECT_URI` 的 pathname 必须精确为 `/api/auth/callback`。
+
+### 本地端到端开发（Node Hub）
+
+这是当前仓库唯一已说明的 M01 Hub 本地运行方式：IdP 仍通过 Caddy internal CA 使用 `https://localhost:8443/realms/aeos`（把 `8443` 替换为 `M01_KEYCLOAK_HTTPS_PORT`），而本地 Node Hub 监听其默认 loopback HTTP 地址 `http://127.0.0.1:8787`。根目录 `docker-compose.yml` 仍只支持 local-dev；它没有 M01 Hub 的 TLS、CA 挂载或 `M01_*` 变量注入，不能用于本节。
+
+**仅在已成功启动 M01 容器、且 `m01-config-check` 已通过之后**，导出并审核 Caddy 根 CA；本任务不会执行这些操作：
+
+```powershell
+docker compose --env-file deploy/m01/.env -f deploy/m01/docker-compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt deploy/m01/caddy-root.crt
+Import-Certificate -FilePath .\deploy\m01\caddy-root.crt -CertStoreLocation Cert:\CurrentUser\Root
+$env:NODE_EXTRA_CA_CERTS = (Resolve-Path .\deploy\m01\caddy-root.crt)
+```
+
+第一条取得 CA，第二条令浏览器信任，第三条令随后启动的 Node Hub 信任 issuer。先核对证书来源和指纹；不得用 `NODE_TLS_REJECT_UNAUTHORIZED=0` 绕过验证。导出的证书被 `.gitignore` 忽略；若重建 `caddy-data` 命名卷，CA 会变化，需重新审核并信任新根证书。
+
+在 Keycloak 开发 Client 中设置精确 redirect URI/web origin 后，在同一个 PowerShell 会话安全注入 Client secret 并启动 Hub：
+
+```powershell
+$env:NODE_ENV = 'development'
+$env:AEOS_AUTH_MODE = 'm01'
+$env:M01_ISSUER = 'https://localhost:8443/realms/aeos'
+$env:M01_CLIENT_ID = 'aeos-hub-web'
+$env:M01_CLIENT_SECRET = '<从 Keycloak 生成并安全保存的 client secret>'
+$env:M01_REDIRECT_URI = 'http://127.0.0.1:8787/api/auth/callback'
+$env:M01_AUDIENCE = 'aeos-hub-web'
+$env:AEOS_COOKIE_SECURE = '0'
+npm run web
+```
+
+此 HTTP callback 只因它是严格的 loopback 地址、且 `NODE_ENV=development` 时才被当前认证代码允许；它绝不可用于生产、UAT、局域网或任何非 loopback hostname。首次登录前访问 discovery，确认 issuer 和所有 authorization/token/JWKS endpoint 均为预期 HTTPS URL；再以有 `tenant_id` 和允许 role 的测试用户完成登录，并确认 Hub session 的 actor、tenant、roles 不含 token 或 secret。
+
+### 生产/UAT（HTTPS Hub）
+
+生产与 UAT 必须使用 HTTPS Hub、正式反向代理、受控 CA/证书与受保护的密钥注入；不要把开发 Compose、`start-dev` 或 Caddy internal CA 直接上线。示例变量如下，其中 `<hub-host>` 是正式 HTTPS origin：
 
 ```text
 AEOS_AUTH_MODE=m01
-M01_ISSUER=https://localhost:8443/realms/aeos
+M01_ISSUER=https://<idp-host>/realms/aeos
 M01_CLIENT_ID=aeos-hub-web
 M01_CLIENT_SECRET=<从 Keycloak 生成并安全保存的 client secret>
 M01_REDIRECT_URI=https://<hub-host>/api/auth/callback
@@ -66,13 +89,7 @@ M01_AUDIENCE=aeos-hub-web
 AEOS_COOKIE_SECURE=1
 ```
 
-将 `8443` 替换为 `M01_KEYCLOAK_HTTPS_PORT`，并让 `M01_ISSUER` 与 discovery 的 `issuer` 逐字一致。`M01_REDIRECT_URI` 的 pathname 必须精确为 `/api/auth/callback`；生产必须是 HTTPS，且生产环境固定 `AEOS_COOKIE_SECURE=1`。根目录 `docker-compose.yml` 目前没有传递 `M01_*` 变量，仍是现有 Hub 的 local-dev Compose；若将 Hub 容器化运行，必须在受控部署定义中显式、安全地注入上述完整变量，不能仅复制本仓库模板后假定已切换 M01。
-
-首次登录前执行配置检查：
-
-1. 从已信任开发 CA 的浏览器或 Hub 主机访问 `https://localhost:<port>/realms/aeos/.well-known/openid-configuration`，确认 `issuer` 为预期 HTTPS URL，且 authorization、token、JWKS endpoint 都为 HTTPS。
-2. 确认 `aeos-hub-web` 的 redirect URI/web origin 无通配符，authentication method 为 `client_secret_basic`，并保存其 secret 到部署密钥库。
-3. 使用带 `tenant_id` 和允许 role 的测试用户完整登录一次；检查 Hub session 的 actor、tenant、roles，且不记录 token 或 client secret。
+生产/UAT 的 Keycloak Client 只允许对应的精确 HTTPS redirect URI 与 web origin；根目录 Compose 未提供 M01 Hub Docker TLS/CA 挂载，必须在受控部署定义中显式、安全地完成这些注入。
 
 ## 4. 运维边界
 
