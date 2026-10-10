@@ -29,6 +29,7 @@ import { buildDashboardSnapshot, type DashboardSnapshot } from './dashboard.ts';
 import { AttentionSearchRequestSchema, searchLiveDashboard } from './attention-search.ts';
 import { operatingCenter } from './operating-center.ts';
 import { McpAccessGateway } from './mcp-access-gateway.ts';
+import { McpReadinessError, waitForReadOnlyMcpTools } from './mcp-readiness.ts';
 import { loadMcpRegistry } from './mcp-registry.ts';
 import {
   loadHarbor,
@@ -837,7 +838,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
     } catch (error) {
       warnings.push(`Capability 清单读取失败：${(error as Error).message}`);
     }
-    const registry = buildCapabilityRegistry(registeredServers, runtimeInventory, warnings[0]);
+    let registry = buildCapabilityRegistry(registeredServers, runtimeInventory, warnings[0]);
 
     let orderRiskResponse: unknown;
     let shortageResponse: unknown;
@@ -854,6 +855,41 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
       });
       sessionId = session.id;
       if (useCompanyControl) {
+        const dashboardTools = [
+          'detail_orders_list',
+          'material_shortages_list',
+          'material_kitting_results_list',
+          'quality_issues_list',
+          'production_work_orders_list',
+          'production_capacity_list',
+          'production_operations_list',
+          'production_order_links_list',
+          'production_reports_list',
+        ];
+        try {
+          // Session creation triggers stdio MCP startup. The inventory read above can be
+          // too early, so only direct calls below use an inventory that proves read-only.
+          runtimeInventory = await waitForReadOnlyMcpTools({
+            readInventory: () => codexRuntime.listMcpServerStatus(),
+            server: 'company-control',
+            tools: dashboardTools,
+          });
+          registry = buildCapabilityRegistry(registeredServers, runtimeInventory, warnings[0]);
+        } catch (error) {
+          const message = error instanceof McpReadinessError
+            ? error.message
+            : '中控只读能力清单读取失败，请稍后刷新';
+          warnings.push(message);
+          const unavailable = { source: 'company-control', error: { code: 'MCP_NOT_READY', message } };
+          orderRiskResponse = unavailable;
+          shortageResponse = unavailable;
+          kittingResponse = unavailable;
+          qualityResponse = unavailable;
+        }
+        if (orderRiskResponse) {
+          // The dashboard mapper will surface the readiness warning. Do not make any
+          // unverified call merely to replace it with a misleading empty result.
+        } else {
         const readPlan = dashboardReadPlan(new Date());
         const [orders, shortages, kitting, quality, workOrders, capacity] = await Promise.allSettled([
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
@@ -927,6 +963,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             if (links.status === 'fulfilled') productionResponses.orderLinks = links.value;
             if (reports.status === 'fulfilled' && reports.value) productionResponses.reports = reports.value;
           }
+        }
         }
       } else {
         const [orders, shortages] = await Promise.allSettled([
