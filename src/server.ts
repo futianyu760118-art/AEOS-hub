@@ -57,14 +57,11 @@ import {
   BrowserSessionAuth,
   assertAuthModeAllowedInEnvironment,
   authRoutePolicy,
-  bindingCookie,
-  browserBindingFromCookie,
   buildLocalDevActor,
   cookieSecureFromEnvironment,
-  expiredBindingCookie,
-  newBrowserBinding,
+  createBrowserAuthGateway,
+  isPublicLoginResource,
   passwordFromEnvironment,
-  sessionSummary,
   usernameFromEnvironment,
 } from './web-auth.ts';
 import { M01OidcAuth, readM01Config } from './auth/m01-oidc.ts';
@@ -102,28 +99,18 @@ const webAuth = new BrowserSessionAuth(
   COOKIE_SECURE,
 );
 const m01Oidc = AUTH_MODE === 'm01' ? new M01OidcAuth(m01Config) : null;
+const authGateway = createBrowserAuthGateway({
+  authMode: AUTH_MODE,
+  webAuth,
+  ...(m01Oidc ? { oidc: m01Oidc } : {}),
+  secureCookies: COOKIE_SECURE,
+});
 function addCookie(res: ServerResponse, value: string): void {
   const current = res.getHeader('set-cookie');
   const cookies = Array.isArray(current) ? [...current.map(String)] : current ? [String(current)] : [];
   cookies.push(value);
   res.setHeader('set-cookie', cookies);
 }
-function clearAuthenticationCookies(res: ServerResponse): void {
-  const expiry = `Path=/; HttpOnly; SameSite=Lax${COOKIE_SECURE ? '; Secure' : ''}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-  addCookie(res, webAuth.expiredCookie());
-  // Clear the old share-token cookie during migration from the former scheme.
-  addCookie(res, `hub_token=; ${expiry}`);
-  addCookie(res, `aeos_session=; ${expiry}`);
-  addCookie(res, expiredBindingCookie(COOKIE_SECURE));
-}
-function isLoginPublicAsset(url: URL, method: string | undefined): boolean {
-  if (method !== 'GET') return false;
-  return url.pathname === '/' || url.pathname === '/index.html'
-    || url.pathname === '/style.css' || url.pathname === '/app.js'
-    || url.pathname === '/daily-questions.js'
-    || url.pathname === '/vendor/lucide.min.js' || url.pathname.startsWith('/brand/');
-}
-
 const codexRuntime = new CodexRuntimeAdapter({
   runtimeInstanceId: CODEX_RUNTIME_ID,
   startOptions: { cwd: root, codexHome, binary, clientName: 'aeos_hub_web' },
@@ -1169,20 +1156,15 @@ const server = createServer(async (req, res) => {
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
   if (url.pathname === '/api/auth/login') {
-    const policy = authRoutePolicy(AUTH_MODE, url.pathname)!;
-    if (req.method !== policy.method) { sendJson(res, 405, { error: 'method not allowed' }); return; }
     if (AUTH_MODE === 'm01') {
-      try {
-        const browserBinding = browserBindingFromCookie(req.headers.cookie) ?? newBrowserBinding();
-        addCookie(res, bindingCookie(browserBinding, COOKIE_SECURE));
-        const login = await m01Oidc!.beginLogin({ browserBinding });
-        res.writeHead(302, { location: login.redirectUrl }); res.end();
-      } catch {
-        addCookie(res, expiredBindingCookie(COOKIE_SECURE));
-        res.writeHead(302, { location: '/?auth_error=1' }); res.end();
-      }
+      const outcome = await authGateway.login(req.method, req.headers.cookie);
+      for (const cookie of outcome.cookies ?? []) addCookie(res, cookie);
+      if (outcome.location) { res.writeHead(outcome.status, { location: outcome.location }); res.end(); }
+      else sendJson(res, outcome.status, { error: outcome.error });
       return;
     }
+    const policy = authRoutePolicy(AUTH_MODE, url.pathname)!;
+    if (req.method !== policy.method) { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const input = await readJsonBody(req, 4 * 1024);
       const account = typeof input.account === 'string' ? input.account.trim() : '';
@@ -1200,47 +1182,30 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/auth/callback') {
-    const policy = authRoutePolicy(AUTH_MODE, url.pathname);
-    if (!policy) { sendJson(res, 404, { error: 'not found' }); return; }
-    if (req.method !== policy.method) { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    try {
-      const browserBinding = browserBindingFromCookie(req.headers.cookie);
-      if (!browserBinding) throw new Error('missing browser binding');
-      const actor = await m01Oidc!.completeLogin({
-        code: url.searchParams.get('code') ?? '',
-        state: url.searchParams.get('state') ?? '',
-        browserBinding,
-      });
-      addCookie(res, webAuth.sessionCookie(webAuth.createSession(actor)));
-      addCookie(res, expiredBindingCookie(COOKIE_SECURE));
-      res.writeHead(302, { location: '/' }); res.end();
-    } catch {
-      webAuth.revoke(req.headers.cookie);
-      clearAuthenticationCookies(res);
-      res.writeHead(302, { location: '/?auth_error=1' }); res.end();
-    }
+    const outcome = await authGateway.callback(req.method, req.headers.cookie, url.searchParams.get('code') ?? '', url.searchParams.get('state') ?? '');
+    for (const cookie of outcome.cookies ?? []) addCookie(res, cookie);
+    if (outcome.location) { res.writeHead(outcome.status, { location: outcome.location }); res.end(); }
+    else sendJson(res, outcome.status, { error: outcome.error });
     return;
   }
   if (url.pathname === '/api/auth/session') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    const actor = webAuth.actorFromCookie(req.headers.cookie);
-    if (!actor) { sendJson(res, 200, { authenticated: false, authMode: AUTH_MODE }); return; }
-    sendJson(res, 200, sessionSummary(actor, AUTH_MODE));
+    sendJson(res, 200, authGateway.session(req.headers.cookie));
     return;
   }
-  const publicAsset = isLoginPublicAsset(url, req.method);
-  if (!publicAsset && !webAuth.isAuthorized(req.headers.cookie)) {
+  const publicAsset = isPublicLoginResource(url.pathname, req.method);
+  if (!authGateway.canAccess(url.pathname, req.method, req.headers.cookie)) {
     sendJson(res, 401, { error: 'authentication required' });
     return;
   }
   if (url.pathname === '/api/auth/logout') {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    webAuth.revoke(req.headers.cookie);
-    clearAuthenticationCookies(res);
+    const outcome = authGateway.logout(req.headers.cookie);
+    for (const cookie of outcome.cookies) addCookie(res, cookie);
     sendJson(res, 200, { ok: true });
     return;
   }
-  const requestActor = publicAsset ? 'anonymous' : webAuth.actorFromCookie(req.headers.cookie)!.actorId;
+  const requestActor = publicAsset ? 'anonymous' : authGateway.actorIdFromCookie(req.headers.cookie)!;
   let rel: string;
   try {
     rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
@@ -1588,21 +1553,21 @@ const wss = new WebSocketServer({
   maxPayload: 1024 * 1024,
   verifyClient: (info: { req: IncomingMessage }) => {
     try {
-      return validOrigin(info.req.headers.origin, info.req.headers.host) && webAuth.isAuthorized(info.req.headers.cookie);
+      return validOrigin(info.req.headers.origin, info.req.headers.host) && authGateway.isAuthorized(info.req.headers.cookie);
     } catch {
       return false;
     }
   },
 });
 wss.on('connection', (ws, request) => {
-  const actor = webAuth.actorFromCookie(request.headers.cookie);
-  if (!actor) {
+  const actorId = authGateway.actorIdFromCookie(request.headers.cookie);
+  if (!actorId) {
     ws.close(1008, 'Authentication required');
     return;
   }
   allSockets.add(ws);
   viewOf.set(ws, null);
-  actorOf.set(ws, actor.actorId);
+  actorOf.set(ws, actorId);
   send(ws, { type: 'hello', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), modelOptions: buildModelOptions(), dataDir, evidenceFile });
 
   ws.on('message', async (raw) => {

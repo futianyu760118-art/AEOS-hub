@@ -47,6 +47,14 @@ export function authRoutePolicy(authMode: 'local-dev' | 'm01', pathname: string)
   return null;
 }
 
+export function isPublicLoginResource(pathname: string, method: string | undefined): boolean {
+  if (method !== 'GET') return false;
+  return pathname === '/' || pathname === '/index.html'
+    || pathname === '/style.css' || pathname === '/app.js'
+    || pathname === '/daily-questions.js'
+    || pathname === '/vendor/lucide.min.js' || pathname.startsWith('/brand/');
+}
+
 export function sessionSummary(actor: ActorContext, authMode: 'local-dev' | 'm01'): Record<string, unknown> {
   return {
     authenticated: true,
@@ -104,6 +112,85 @@ export function bindingCookie(browserBinding: string, secure = false): string {
 
 export function expiredBindingCookie(secure = false): string {
   return `${M01_BINDING_COOKIE_NAME}=; ${cookieAttributes(secure)}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+}
+
+export type M01BrowserOidc = {
+  beginLogin(input: { browserBinding: string }): Promise<{ redirectUrl: string }>;
+  completeLogin(input: { code: string; state: string; browserBinding: string }): Promise<ActorContext>;
+};
+
+export type BrowserAuthGateway = {
+  login(method: string | undefined, cookieHeader: string | undefined): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
+  callback(method: string | undefined, cookieHeader: string | undefined, code: string, state: string): Promise<{ status: number; location?: string; cookies?: string[]; error?: string }>;
+  logout(cookieHeader: string | undefined): { status: number; cookies: string[] };
+  session(cookieHeader: string | undefined): Record<string, unknown>;
+  isAuthorized(cookieHeader: string | undefined): boolean;
+  canAccess(pathname: string, method: string | undefined, cookieHeader: string | undefined): boolean;
+  actorIdFromCookie(cookieHeader: string | undefined): string | null;
+};
+
+export function createBrowserAuthGateway(input: {
+  authMode: 'local-dev' | 'm01';
+  webAuth: BrowserSessionAuth;
+  oidc?: M01BrowserOidc;
+  secureCookies: boolean;
+  browserBindingFactory?: () => string;
+}): BrowserAuthGateway {
+  const expiredAuthenticationCookies = (): string[] => {
+    const expiry = `Path=/; HttpOnly; SameSite=Lax${input.secureCookies ? '; Secure' : ''}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    return [input.webAuth.expiredCookie(), `hub_token=; ${expiry}`, `aeos_session=; ${expiry}`, expiredBindingCookie(input.secureCookies)];
+  };
+  const failure = (cookieHeader: string | undefined) => {
+    input.webAuth.revoke(cookieHeader);
+    return { status: 302, location: '/?auth_error=1', cookies: expiredAuthenticationCookies() };
+  };
+
+  return {
+    async login(method, cookieHeader) {
+      if (input.authMode !== 'm01') return { status: 404, error: 'not found' };
+      if (method !== 'GET') return { status: 405, error: 'method not allowed' };
+      try {
+        const browserBinding = browserBindingFromCookie(cookieHeader) ?? (input.browserBindingFactory ?? newBrowserBinding)();
+        const login = await input.oidc!.beginLogin({ browserBinding });
+        return { status: 302, location: login.redirectUrl, cookies: [bindingCookie(browserBinding, input.secureCookies)] };
+      } catch {
+        return { status: 302, location: '/?auth_error=1', cookies: [expiredBindingCookie(input.secureCookies)] };
+      }
+    },
+    async callback(method, cookieHeader, code, state) {
+      if (input.authMode !== 'm01') return { status: 404, error: 'not found' };
+      if (method !== 'GET') return { status: 405, error: 'method not allowed' };
+      try {
+        const browserBinding = browserBindingFromCookie(cookieHeader);
+        if (!browserBinding) throw new Error('browser binding required');
+        const actor = await input.oidc!.completeLogin({ code, state, browserBinding });
+        return {
+          status: 302,
+          location: '/',
+          cookies: [input.webAuth.sessionCookie(input.webAuth.createSession(actor)), expiredBindingCookie(input.secureCookies)],
+        };
+      } catch {
+        return failure(cookieHeader);
+      }
+    },
+    logout(cookieHeader) {
+      input.webAuth.revoke(cookieHeader);
+      return { status: 200, cookies: expiredAuthenticationCookies() };
+    },
+    session(cookieHeader) {
+      const actor = input.webAuth.actorFromCookie(cookieHeader);
+      return actor ? sessionSummary(actor, input.authMode) : { authenticated: false, authMode: input.authMode };
+    },
+    isAuthorized(cookieHeader) {
+      return input.webAuth.isAuthorized(cookieHeader);
+    },
+    canAccess(pathname, method, cookieHeader) {
+      return isPublicLoginResource(pathname, method) || input.webAuth.isAuthorized(cookieHeader);
+    },
+    actorIdFromCookie(cookieHeader) {
+      return input.webAuth.actorFromCookie(cookieHeader)?.actorId ?? null;
+    },
+  };
 }
 
 export class BrowserSessionAuth {
