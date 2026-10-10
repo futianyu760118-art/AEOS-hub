@@ -106,6 +106,12 @@ npm run demo -- "检查 MO-8821 的供应缺口"          # 自定义指令
 npm run demo -- --auto-approve                  # 放行所有审批（仅演示环境）
 ```
 
+## M01 身份接入（本地开发/测试）
+
+现有根目录 Compose 保持 Hub 的 local-dev 用途；它不会因为复制 `.env` 而自动切换到 M01。需要 Keycloak 身份接入时，使用独立的 [`deploy/m01/`](deploy/m01/) 栈：它会在 Docker 后续启动时自动创建私有 PostgreSQL 16 命名卷，并通过仅绑定本机回环地址的 Caddy HTTPS 入口暴露 Keycloak。完整的首次启动、开发 CA 信任、Realm/Client 手工配置、Hub M01 变量、轮换与验收要求见 [`docs/auth/m01-integration.md`](docs/auth/m01-integration.md)。
+
+该栈仅用于开发/测试，使用 `start-dev` 和本地内部 CA；不要把它作为生产部署。M01 client secret、Keycloak 管理员密码、PostgreSQL 密码与复制出的 `deploy/m01/.env` 都不得提交。生产必须使用正式 TLS/反向代理、受管密钥及独立备份恢复流程。
+
 退出码：`0`=agent 完整回复；`2`=协议链路通但缺模型凭证；`1`=失败。
 
 ## 🖥 Web 控制台

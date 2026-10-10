@@ -1,0 +1,10 @@
+# The hostname is provided by deploy/m01/.env. This listens on container port 443;
+# Compose maps the configurable external port to it. Caddy's internal CA is
+# intentionally for local development only; trust its root certificate on the host.
+https://{$M01_KEYCLOAK_EXTERNAL_HOSTNAME} {
+    tls internal
+
+    # reverse_proxy supplies X-Forwarded-* headers. Keycloak accepts them because
+    # KC_PROXY_HEADERS=xforwarded is set in docker-compose.yml.
+    reverse_proxy keycloak:8080
+}

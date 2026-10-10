@@ -1,0 +1,9 @@
+# Local environment and Caddy's locally generated internal CA/runtime state.
+# Keep .env.example versioned.
+.env
+!.env.example
+caddy-data/
+caddy-config/
+caddy-root.crt
+*.pem
+*.key
