@@ -26,6 +26,8 @@ test('M01 shutdown script refuses unrelated listeners and preserves volumes', as
   const script = await source('stop-m01-demo.ps1');
   assert.match(script, /Get-NetTCPConnection -LocalPort 8790 -State Listen/);
   assert.match(script, /run-m01-hub\\\.ps1/);
+  assert.match(script, /Invoke-WebRequest -UseBasicParsing -Uri 'http:\/\/127\.0\.0\.1:8790\/'/);
+  assert.match(script, /response\.Content -match 'AEOS'/);
   assert.match(script, /Refusing to stop it/);
   assert.match(script, /SupportsShouldProcess = \$true/);
   assert.match(script, /docker compose --env-file deploy\/m01\/\.env -f deploy\/m01\/docker-compose\.yml stop/);

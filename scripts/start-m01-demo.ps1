@@ -55,7 +55,14 @@ function Test-M01HubProcess {
     $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($current.ParentProcessId)" -ErrorAction SilentlyContinue
   }
   $description = $lineage -join "`n"
-  return $description -match '(?i)node(?:\.exe)?\s+src[\\/]server\.ts' -and $description -match '(?i)run-m01-hub\.ps1' -and $description.Contains($repositoryRoot)
+  if ($description -notmatch '(?i)node(?:\.exe)?\s+src[\\/]server\.ts') { return $false }
+  if ($description -match '(?i)run-m01-hub\.ps1' -and $description.Contains($repositoryRoot)) { return $true }
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8790/' -TimeoutSec 5
+    return $response.StatusCode -eq 200 -and $response.Content -match 'AEOS'
+  } catch {
+    return $false
+  }
 }
 
 $settings = Get-M01Settings -Path $environmentFile
