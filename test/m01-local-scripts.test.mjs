@@ -16,10 +16,56 @@ test('M01 startup scripts use the ignored runtime file and preserve secrets', as
   assert.match(combined, /NODE_EXTRA_CA_CERTS/);
   assert.match(combined, /AEOS_AUTH_MODE = 'm01'/);
   assert.match(combined, /PORT = '8790'/);
-  assert.match(combined, /HOST = '127\.0\.0\.1'/);
+  assert.match(combined, /HOST = '0\.0\.0\.0'/);
   assert.match(await source('start-m01-demo.ps1'), /SupportsShouldProcess = \$true/);
   assert.match(await source('test-m01-demo.ps1'), /SupportsShouldProcess = \$true/);
   assert.doesNotMatch(combined, /Write-(?:Host|Output).*M01_CLIENT_SECRET/);
+});
+
+test('M01 status script uses braced interpolation before port-label colons', async () => {
+  const script = await source('test-m01-demo.ps1');
+  assert.match(script, /\$\{identityPort\}:/);
+  assert.match(script, /\$\{hubHttpsPort\}:/);
+  assert.doesNotMatch(script, /\$identityPort:/);
+  assert.doesNotMatch(script, /\$hubHttpsPort:/);
+});
+
+test('M01 hub runner admits manager/operator/owner roles and gates personnel admin on flag + secret', async () => {
+  const runner = await source('run-m01-hub.ps1');
+  assert.match(runner, /AEOS_M01_ALLOWED_ROLES = 'manager,operator,owner,analyst'/);
+  assert.match(runner, /HOST = '0\.0\.0\.0'/);
+  assert.match(runner, /M01_PERSONNEL_ADMIN_ENABLED/);
+  assert.match(runner, /M01_PERSONNEL_ADMIN_CLIENT_ID = 'aeos-hub-personnel-admin'/);
+  assert.match(runner, /M01_PERSONNEL_ADMIN_CLIENT_SECRET/);
+  assert.match(runner, /__REPLACE_BEFORE_START__/);
+  // Fail closed: the else branch leaves personnel administration disabled.
+  assert.match(runner, /M01_PERSONNEL_ADMIN_ENABLED = '0'/);
+  assert.doesNotMatch(runner, /Write-(?:Host|Output).*M01_PERSONNEL_ADMIN_CLIENT_SECRET/);
+});
+
+test('personnel provisioning uses the ignored runtime file, requires confirmation, and never prints the secret', async () => {
+  const script = await source('provision-m01-personnel-admin.ps1');
+  assert.match(script, /deploy\\m01\\\.env/);
+  assert.doesNotMatch(script, /\.env\.example/);
+  assert.match(script, /SupportsShouldProcess = \$true/);
+  assert.match(script, /ConfirmImpact = 'High'/);
+  assert.match(script, /ShouldProcess/);
+  assert.match(script, /aeos-hub-personnel-admin/);
+  assert.match(script, /query-users/);
+  assert.match(script, /manage-users/);
+  assert.match(script, /view-realm/);
+  assert.match(script, /configure-personnel-admin\.sh/);
+  assert.match(script, /docker compose --env-file deploy\/m01\/\.env -f deploy\/m01\/docker-compose\.yml/);
+  assert.match(script, /function Wait-KeycloakReady/);
+  assert.match(script, /\/realms\/master\/\.well-known\/openid-configuration/);
+  assert.match(script, /AddSeconds\(120\)/);
+  assert.match(script, /Wait-KeycloakReady -Settings \$settings/);
+  assert.match(script, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(script, /\.GetBytes\(\$bytes\)/);
+  assert.doesNotMatch(script, /RandomNumberGenerator\]::Fill/);
+  assert.match(script, /BitConverter\]::ToString\(\$bytes\)\.Replace\('-', ''\)/);
+  assert.doesNotMatch(script, /Convert\]::ToHexString/);
+  assert.doesNotMatch(script, /Write-(?:Host|Output).*M01_PERSONNEL_ADMIN_CLIENT_SECRET/);
 });
 
 test('M01 shutdown script refuses unrelated listeners and preserves volumes', async () => {

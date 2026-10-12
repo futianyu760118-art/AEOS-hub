@@ -62,6 +62,14 @@ services:
       # even though Caddy reaches it over the private Compose network.
       KC_HOSTNAME: https://${M01_KEYCLOAK_EXTERNAL_HOSTNAME:?Set M01_KEYCLOAK_EXTERNAL_HOSTNAME in deploy/m01/.env}:${M01_KEYCLOAK_HTTPS_PORT:?Set M01_KEYCLOAK_HTTPS_PORT in deploy/m01/.env}
       KC_PROXY_HEADERS: xforwarded
+      M01_HUB_EXTERNAL_HOSTNAME: ${M01_HUB_EXTERNAL_HOSTNAME:?Set M01_HUB_EXTERNAL_HOSTNAME in deploy/m01/.env}
+      M01_HUB_HTTPS_PORT: ${M01_HUB_HTTPS_PORT:?Set M01_HUB_HTTPS_PORT in deploy/m01/.env}
+      # Personnel service-client secret, injected so configure-personnel-admin.sh
+      # can read it from the container environment instead of the command line.
+      M01_PERSONNEL_ADMIN_CLIENT_SECRET: ${M01_PERSONNEL_ADMIN_CLIENT_SECRET:-}
+    volumes:
+      - ./configure-client.sh:/opt/aeos/configure-client.sh:ro
+      - ./configure-personnel-admin.sh:/opt/aeos/configure-personnel-admin.sh:ro
 
   caddy:
     image: caddy:2.10.2-alpine
@@ -70,10 +78,15 @@ services:
       keycloak:
         condition: service_started
     ports:
-      # Do not expose Keycloak, PostgreSQL, or Caddy to a LAN/WAN interface.
-      - "127.0.0.1:${M01_KEYCLOAK_HTTPS_PORT:?Set M01_KEYCLOAK_HTTPS_PORT in deploy/m01/.env}:443"
+      # Only the Caddy TLS endpoints are published. PostgreSQL, Keycloak HTTP,
+      # and the host-side Hub port remain private.
+      - "${M01_LISTEN_ADDRESS:?Set M01_LISTEN_ADDRESS in deploy/m01/.env}:${M01_KEYCLOAK_HTTPS_PORT:?Set M01_KEYCLOAK_HTTPS_PORT in deploy/m01/.env}:443"
+      - "${M01_LISTEN_ADDRESS:?Set M01_LISTEN_ADDRESS in deploy/m01/.env}:${M01_HUB_HTTPS_PORT:?Set M01_HUB_HTTPS_PORT in deploy/m01/.env}:${M01_HUB_HTTPS_PORT:?Set M01_HUB_HTTPS_PORT in deploy/m01/.env}"
     environment:
       M01_KEYCLOAK_EXTERNAL_HOSTNAME: ${M01_KEYCLOAK_EXTERNAL_HOSTNAME:?Set M01_KEYCLOAK_EXTERNAL_HOSTNAME in deploy/m01/.env}
+      M01_KEYCLOAK_HTTPS_PORT: ${M01_KEYCLOAK_HTTPS_PORT:?Set M01_KEYCLOAK_HTTPS_PORT in deploy/m01/.env}
+      M01_HUB_EXTERNAL_HOSTNAME: ${M01_HUB_EXTERNAL_HOSTNAME:?Set M01_HUB_EXTERNAL_HOSTNAME in deploy/m01/.env}
+      M01_HUB_HTTPS_PORT: ${M01_HUB_HTTPS_PORT:?Set M01_HUB_HTTPS_PORT in deploy/m01/.env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

@@ -4,19 +4,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { HarborStore } from '../src/harbor-store.ts';
+import type { G0DecisionRegisterStore } from '../src/g0-decision-register.ts';
 import { OperatingCenterStore } from '../src/operating-center.ts';
 import { TaskApi } from '../src/task-api.ts';
 import { TaskCenterStore } from '../src/task-center.ts';
 import type { DashboardRisk } from '../src/dashboard.ts';
 
 const NOW = '2026-10-10T01:00:00.000Z';
-const manager = { actorId: 'm01:user:manager-01', actorType: 'human' as const, tenantId: 'tenant-a' };
-const otherTenantManager = { actorId: 'm01:user:manager-02', actorType: 'human' as const, tenantId: 'tenant-b' };
+const manager = { actorId: 'm01:user:manager-01', actorType: 'human' as const, tenantId: 'tenant-a', organizationId: 'org-a', roles: ['manager'] };
+const otherTenantManager = { actorId: 'm01:user:manager-02', actorType: 'human' as const, tenantId: 'tenant-b', organizationId: 'org-b', roles: ['manager'] };
 const risk: DashboardRisk = {
-  source: 'quality', orderNo: 'SO-ELIGIBILITY-01', issueNo: 'QI-ELIGIBILITY-01', summary: '来料异常待核查', customer: '', product: 'P-01',
+  source: 'order', orderNo: 'SO-ELIGIBILITY-01', issueNo: '', summary: '订单交付风险待核查', customer: '', product: 'P-01',
   orderQty: null, completedQty: null, amountCny: null, probability: null, riskScore: null, dueDate: '2026-10-16', shippingPlan: '', owner: '',
-  orderStatus: 'open', riskLevel: '高', evidenceRef: 'control-platform://quality/issue/QI-ELIGIBILITY-01@2026-10-10',
-  prompt: '核查质量异常。', kitRateByItem: null, shortageItemCount: null, shortageQty: null, estimatedFullKitDate: '', occurredAt: '2026-10-10T09:00:00+08:00',
+  orderStatus: 'open', riskLevel: '高', evidenceRef: 'control-platform://orders/SO-ELIGIBILITY-01@2026-10-10',
+  prompt: '核查订单交付风险。', kitRateByItem: null, shortageItemCount: null, shortageQty: null, estimatedFullKitDate: '', occurredAt: '2026-10-10T09:00:00+08:00',
 };
 
 function fixture(t: TestContext) {
@@ -30,9 +31,20 @@ function fixture(t: TestContext) {
   harbor.save(harborSnapshot);
   harbor.recordRuntimeVerification(harbor.load().runtimes[0]!.id, { status: 'healthy', checkedAt: NOW, message: 'ready', code: null });
   const evidence: unknown[] = [];
-  const api = new TaskApi({ operatingCenter, taskCenter, appendEvidence: (entry) => { evidence.push(entry); }, loadHarbor: () => harbor.load(), now: clock });
+  const g0DecisionStore = {
+    load: () => ({
+      readyForG1: true,
+      decisions: {
+        firstScenario: { value: 'order_delivery_risk' },
+        scope: { value: { demoTenantId: manager.tenantId, organizationScope: manager.organizationId } },
+        businessOwnerActor: { value: { actorId: 'm01:user:owner-01' } },
+      },
+    }),
+  } as unknown as Pick<G0DecisionRegisterStore, 'load'>;
+  const api = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence: (entry) => { evidence.push(entry); }, loadHarbor: () => harbor.load(), now: clock });
   const operatingCase = operatingCenter.upsertDashboardRisks([risk], 'dashboard', 1).created[0]!;
   const created = api.handle({ method: 'POST', pathname: `/api/operating-cases/${operatingCase.id}/tasks`, actor: manager, body: { priority: 'high', reason: '建立任务' } });
+  assert.equal(created?.status, 201);
   const taskId = (created?.body as { task: { taskId: string } }).task.taskId;
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return { api, taskCenter, harbor, evidence, taskId };

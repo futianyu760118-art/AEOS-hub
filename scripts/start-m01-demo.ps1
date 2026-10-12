@@ -26,13 +26,15 @@ function Get-M01Settings {
     if ($separator -lt 1) { continue }
     $settings[$line.Substring(0, $separator).Trim()] = $line.Substring($separator + 1)
   }
-  foreach ($name in @('M01_CLIENT_SECRET', 'M01_KEYCLOAK_HTTPS_PORT', 'M01_KEYCLOAK_EXTERNAL_HOSTNAME')) {
+  foreach ($name in @('M01_CLIENT_SECRET', 'M01_KEYCLOAK_HTTPS_PORT', 'M01_KEYCLOAK_EXTERNAL_HOSTNAME', 'M01_HUB_HTTPS_PORT', 'M01_HUB_EXTERNAL_HOSTNAME', 'M01_LISTEN_ADDRESS')) {
     if (-not $settings.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($settings[$name]) -or $settings[$name] -eq '__REPLACE_BEFORE_START__') {
       throw "M01 runtime configuration is incomplete: $name must be configured in deploy/m01/.env."
     }
   }
-  if ($settings['M01_KEYCLOAK_HTTPS_PORT'] -notmatch '^\d{2,5}$') {
-    throw 'M01_KEYCLOAK_HTTPS_PORT must be a valid port number in deploy/m01/.env.'
+  foreach ($name in @('M01_KEYCLOAK_HTTPS_PORT', 'M01_HUB_HTTPS_PORT')) {
+    if ($settings[$name] -notmatch '^\d{2,5}$') {
+      throw "$name must be a valid port number in deploy/m01/.env."
+    }
   }
   return $settings
 }
@@ -80,7 +82,7 @@ if ($dryRun) {
 $listener = Get-ListenerProcess
 if ($listener) {
   if (Test-M01HubProcess -Process $listener) {
-    Write-Output 'M01 Hub is already running on http://127.0.0.1:8790.'
+    Write-Output "M01 Hub is already running; use https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT'])."
     return
   }
   throw 'Port 8790 is occupied by an unknown process. Nothing was changed.'
@@ -109,4 +111,4 @@ if (-not $ready) { throw 'M01 identity service was not ready within two minutes.
 
 $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$hubRunner`""
 Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repositoryRoot -WindowStyle Hidden
-Write-Output 'M01 Hub is starting. Open http://127.0.0.1:8790 after a few seconds.'
+Write-Output "M01 Hub is starting. Open https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT']) after a few seconds."

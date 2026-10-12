@@ -29,6 +29,7 @@ export const TaskPrioritySchema = z.enum(TASK_PRIORITIES);
 export const TaskAssigneeSchema = z.object({
   kind: z.literal('responsibility_role'),
   role: text(160, 1),
+  actorId: text(160, 1),
   assignedAt: timestamp,
 }).strict();
 export const TaskRecordSchema = z.object({
@@ -74,9 +75,6 @@ export const TaskCenterSnapshotSchema = z.object({
       ctx.addIssue({ code: 'custom', path: ['tasks', index, 'taskId'], message: '任务 ID 不能重复' });
     }
     taskIds.add(task.taskId);
-    if (task.status !== 'DRAFT' && task.status !== 'CANCELLED' && !task.currentAssignee) {
-      ctx.addIssue({ code: 'custom', path: ['tasks', index, 'currentAssignee'], message: '已分派及后续状态必须保留当前责任角色' });
-    }
     if (Date.parse(task.updatedAt) < Date.parse(task.createdAt)) {
       ctx.addIssue({ code: 'custom', path: ['tasks', index, 'updatedAt'], message: 'updatedAt 不能早于 createdAt' });
     }
@@ -111,11 +109,35 @@ function defaultSnapshot(clock: () => Date): TaskCenterSnapshot {
   return { version: 1, revision: 0, updatedAt: timestampFor(clock), tasks: [], history: [] };
 }
 function parseSnapshot(value: unknown, source: string): TaskCenterSnapshot {
-  const parsed = TaskCenterSnapshotSchema.safeParse(value);
+  const parsed = TaskCenterSnapshotSchema.safeParse(migrateLegacyRoleOnlyAssignments(value));
   if (!parsed.success) {
     throw new Error(`${source} 数据无效：${parsed.error.issues.slice(0, 3).map((issue) => issue.message).join('；')}`);
   }
   return parsed.data;
+}
+function migrateLegacyRoleOnlyAssignments(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const snapshot = value as { tasks?: unknown };
+  if (!Array.isArray(snapshot.tasks)) return value;
+  let changed = false;
+  const tasks = snapshot.tasks.map((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
+    const task = candidate as { currentAssignee?: unknown; nextAction?: unknown };
+    const assignee = task.currentAssignee;
+    if (!assignee || typeof assignee !== 'object' || Array.isArray(assignee)) return candidate;
+    const legacy = assignee as { kind?: unknown; role?: unknown };
+    if (legacy.kind !== 'responsibility_role' || typeof legacy.role !== 'string' || legacy.role.trim() === '' || Object.hasOwn(assignee, 'actorId')) {
+      return candidate;
+    }
+    changed = true;
+    const historicalRole = legacy.role.trim();
+    return {
+      ...task,
+      currentAssignee: null,
+      nextAction: `历史责任角色“${historicalRole}”未绑定具体经办人；请由管理者重新分派`,
+    };
+  });
+  return changed ? { ...snapshot, tasks } : value;
 }
 function safeRead(file: string): TaskCenterSnapshot | null {
   if (!existsSync(file)) return null;
@@ -151,7 +173,8 @@ function uniqueRefs(values: unknown, required = true): string[] {
   if (result.length > 40) throw new Error('evidenceRefs最多 40 项');
   return result;
 }
-function isBlockedVerifier(actor: string): boolean { return /^(agent|system):/i.test(actor); }
+function isBlockedNonHumanActor(actor: string): boolean { return /^(?:m01:)?(?:agent|system|service):/i.test(actor); }
+function isBlockedVerifier(actor: string): boolean { return isBlockedNonHumanActor(actor); }
 function taskEventForStatus(status: TaskStatus): z.infer<typeof TaskHistoryEntrySchema>['eventType'] {
   if (status === 'ACCEPTED') return 'accepted';
   if (status === 'IN_PROGRESS') return 'started';
@@ -226,6 +249,7 @@ export class TaskCenterStore {
   assign(input: Record<string, unknown>): TaskRecord {
     const taskId = requiredString(input, 'taskId', 'taskId', 160);
     const assigneeRole = requiredString(input, 'assigneeRole', 'assigneeRole', 160);
+    const assigneeActorId = requiredString(input, 'assigneeActorId', 'assigneeActorId', 160);
     const actor = requiredString(input, 'actor', 'actor', 160);
     const reason = requiredString(input, 'reason', 'reason', 1_000);
     return this.mutate((snapshot, occurredAt) => {
@@ -233,8 +257,8 @@ export class TaskCenterStore {
       const fromStatus = task.status;
       const wasAssigned = Boolean(task.currentAssignee);
       if (task.status === 'DRAFT') task.status = 'ASSIGNED';
-      task.currentAssignee = TaskAssigneeSchema.parse({ kind: 'responsibility_role', role: assigneeRole, assignedAt: occurredAt });
-      task.nextAction = task.status === 'ASSIGNED' ? '等待责任角色接受任务' : task.nextAction;
+      task.currentAssignee = TaskAssigneeSchema.parse({ kind: 'responsibility_role', role: assigneeRole, actorId: assigneeActorId, assignedAt: occurredAt });
+      task.nextAction = task.status === 'ASSIGNED' ? '等待指定责任人接受任务' : task.nextAction;
       task.updatedAt = occurredAt;
       this.appendHistory(snapshot, task, {
         eventType: wasAssigned ? 'reassigned' : 'assigned', fromStatus, toStatus: task.status, actor, reason, evidenceRefs: task.evidenceRefs,
@@ -256,6 +280,9 @@ export class TaskCenterStore {
     return this.mutate((snapshot, occurredAt) => {
       const task = this.findOpenTask(snapshot, taskId);
       if (toStatus.data === 'FAILED' && !nextAction) throw new Error('失败任务必须说明下一步动作');
+      if (toStatus.data === 'ACCEPTED' || toStatus.data === 'IN_PROGRESS' || toStatus.data === 'FAILED') {
+        this.requireAssignedHumanOperator(task, actor);
+      }
       return this.transitionTask(snapshot, task, toStatus.data, actor, reason, occurredAt, taskEventForStatus(toStatus.data), nextAction || undefined);
     });
   }
@@ -267,6 +294,7 @@ export class TaskCenterStore {
     const additions = uniqueRefs(input.evidenceRefs);
     return this.mutate((snapshot, occurredAt) => {
       const task = this.findOpenTask(snapshot, taskId);
+      this.requireAssignedHumanOperator(task, actor);
       task.evidenceRefs = uniqueRefs([...task.evidenceRefs, ...additions]);
       task.updatedAt = occurredAt;
       this.appendHistory(snapshot, task, {
@@ -317,6 +345,7 @@ export class TaskCenterStore {
     const refs = uniqueRefs(input.evidenceRefs);
     return this.mutate((snapshot, occurredAt) => {
       const task = this.findOpenTask(snapshot, taskId);
+      this.requireAssignedHumanOperator(task, actor);
       if (task.resultId) throw new Error('任务已有待核验或已核验结果，不能重复提交');
       task.resultId = resultId;
       task.evidenceRefs = uniqueRefs([...task.evidenceRefs, ...refs]);
@@ -357,6 +386,14 @@ export class TaskCenterStore {
     return task;
   }
 
+  private requireAssignedHumanOperator(task: TaskRecord, actor: string): void {
+    if (isBlockedNonHumanActor(actor)) {
+      throw new Error('Agent 或系统身份不能执行人工任务操作');
+    }
+    if (!task.currentAssignee) throw new Error('任务尚未分派具体责任人');
+    if (task.currentAssignee.actorId !== actor) throw new Error('任务只能由被分派的具体责任人操作');
+  }
+
   private transitionTask(
     snapshot: TaskCenterSnapshot, task: TaskRecord, toStatus: TaskStatus, actor: string, reason: string,
     occurredAt: string, eventType: TaskHistoryEntry['eventType'], nextAction?: string, eventEvidenceRefs?: string[],
@@ -364,7 +401,7 @@ export class TaskCenterStore {
     const fromStatus = task.status;
     if (!TRANSITIONS[fromStatus].includes(toStatus)) throw new Error(`不允许从 ${fromStatus} 流转到 ${toStatus}`);
     if (toStatus !== 'CANCELLED' && toStatus !== 'DRAFT' && !task.currentAssignee) {
-      throw new Error('任务尚未分派责任角色');
+      throw new Error('任务尚未分派具体责任人');
     }
     task.status = toStatus;
     task.nextAction = nextAction ?? (toStatus === 'ACCEPTED' ? '责任角色开始处理任务' : toStatus === 'IN_PROGRESS' ? '继续处理并补充证据' : task.nextAction);

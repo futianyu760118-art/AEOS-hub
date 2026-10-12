@@ -1,7 +1,8 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
-import { taskDisplayState, taskInteractionPolicy } from './task-center.js';
+import { buildTaskAssignmentPayload, canCreateTaskFromCase, g1TaskUiMutationGate, taskDisplayState, taskUiCapabilities } from './task-center.js';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
+import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -38,8 +39,32 @@ const els = {
   btnCasesRefresh: $('#btn-cases-refresh'), inboxList: $('#inbox-list'),
   navTaskCount: $('#nav-task-count'), taskDraftCount: $('#task-draft-count'), taskActiveCount: $('#task-active-count'),
   taskVerifyCount: $('#task-verify-count'), taskAttentionCount: $('#task-attention-count'), taskCaseSelect: $('#task-case-select'),
-  taskPriority: $('#task-priority'), taskCreateHint: $('#task-create-hint'), btnTaskCreate: $('#btn-task-create'),
+  taskPriority: $('#task-priority'), taskCreateControls: $('#task-create-controls'), taskCreateHint: $('#task-create-hint'), taskReadonlyNote: $('#task-readonly-note'), btnTaskCreate: $('#btn-task-create'),
   btnTasksRefresh: $('#btn-tasks-refresh'), taskListCount: $('#task-list-count'), taskList: $('#task-list'),
+  btnG0Refresh: $('#btn-g0-refresh'), g0Readiness: $('#g0-readiness'), g0DecisionStatus: $('#g0-decision-status'),
+  g0ConfigEntry: $('#g0-config-entry'), btnOpenG0Governance: $('#btn-open-g0-governance'),
+  g0Form: $('#g0-decision-form'), g0FormAccess: $('#g0-form-access'), g0FormStatus: $('#g0-form-status'), btnG0Save: $('#btn-g0-save'),
+  g0FirstScenario: $('#g0-first-scenario'), g0BusinessOwner: $('#g0-business-owner'), g0VerifyActor: $('#g0-verify-actor'),
+  g0DemoTenant: $('#g0-demo-tenant'), g0OrganizationScope: $('#g0-organization-scope'), g0ManagerActor: $('#g0-manager-actor'),
+  g0OperatorActor: $('#g0-operator-actor'), g0OwnerActor: $('#g0-owner-actor'), g0M02Owner: $('#g0-m02-owner'),
+  g0TaskStore: $('#g0-task-store'), g0G4Admission: $('#g0-g4-admission'), g0DecisionNote: $('#g0-decision-note'),
+  g0HistoryCount: $('#g0-history-count'), g0DecisionHistory: $('#g0-decision-history'),
+  personnelConfigEntry: $('#personnel-config-entry'), btnOpenPersonnelAdmin: $('#btn-open-personnel-admin'),
+  btnPersonnelRefresh: $('#btn-personnel-refresh'), personnelSearch: $('#personnel-search'), btnPersonnelCreate: $('#btn-personnel-create'),
+  personnelAccess: $('#personnel-access'), personnelListCount: $('#personnel-list-count'), personnelList: $('#personnel-list'), personnelStatus: $('#personnel-status'),
+  personnelCreateModal: $('#personnel-create-modal'), personnelCreateClose: $('#personnel-create-close'), personnelCreateForm: $('#personnel-create-form'),
+  personnelCreateUsername: $('#personnel-create-username'), personnelCreatePassword: $('#personnel-create-password'), personnelCreateEmail: $('#personnel-create-email'),
+  personnelCreateFirst: $('#personnel-create-first'), personnelCreateLast: $('#personnel-create-last'), personnelCreateRoles: $('#personnel-create-roles'),
+  personnelCreateStatus: $('#personnel-create-status'), personnelCreateCancel: $('#personnel-create-cancel'), personnelCreateSubmit: $('#personnel-create-submit'),
+  personnelResetModal: $('#personnel-reset-modal'), personnelResetClose: $('#personnel-reset-close'), personnelResetForm: $('#personnel-reset-form'),
+  personnelResetTarget: $('#personnel-reset-target'), personnelResetPassword: $('#personnel-reset-password'), personnelResetStatus: $('#personnel-reset-status'),
+  personnelResetCancel: $('#personnel-reset-cancel'), personnelResetSubmit: $('#personnel-reset-submit'),
+  onboardingConfigEntry: $('#onboarding-config-entry'), btnOpenPersonnelOnboarding: $('#btn-open-personnel-onboarding'),
+  btnOpenPersonnelAdminFromOnboarding: $('#btn-open-personnel-admin-from-onboarding'),
+  onboardingCreateForm: $('#onboarding-create-form'), onboardingCreateRows: $('#onboarding-create-rows'), btnOnboardingCreate: $('#btn-onboarding-create'), onboardingCreateStatus: $('#onboarding-create-status'),
+  onboardingG0Form: $('#onboarding-g0-form'), obG0BusinessOwner: $('#ob-g0-business-owner'), obG0Verify: $('#ob-g0-verify'), obG0Operator: $('#ob-g0-operator'),
+  obG0Manager: $('#ob-g0-manager'), obG0Tenant: $('#ob-g0-tenant'), obG0Organization: $('#ob-g0-organization'), obG0Note: $('#ob-g0-note'),
+  onboardingG0Readiness: $('#onboarding-g0-readiness'), btnOnboardingG0Save: $('#btn-onboarding-g0-save'), onboardingG0Status: $('#onboarding-g0-status'),
   inboxUnreadCount: $('#inbox-unread-count'), btnInboxRefresh: $('#btn-inbox-refresh'), btnInboxReadAll: $('#btn-inbox-read-all'), inboxSearch: $('#inbox-search'), inboxFilter: $('#inbox-filter'),
   inboxUnreadMetric: $('#inbox-unread-metric'), inboxDecisionMetric: $('#inbox-decision-metric'), inboxTodayMetric: $('#inbox-today-metric'),
   inboxDetailModal: $('#inbox-detail-modal'), inboxDetailTitle: $('#inbox-detail-title'), inboxDetailMeta: $('#inbox-detail-meta'), inboxDetailBody: $('#inbox-detail-body'), inboxDetailStatus: $('#inbox-detail-status'), inboxDetailClose: $('#inbox-detail-close'), inboxDetailCancel: $('#inbox-detail-cancel'), inboxDetailRead: $('#inbox-detail-read'),
@@ -117,6 +142,7 @@ const els = {
 let ws = null;
 let reconnectTimer = null;
 let authenticated = false;
+let authSession = null;
 let convs = [];
 let curConvId = null;
 let busy = false;
@@ -146,6 +172,9 @@ let attentionLiveResult = null;
 let attentionLiveSearchBusy = false;
 let attentionResultsDismissed = false;
 let registryFilter = { query: '', source: 'all', state: 'all' };
+let personnelUsers = [];
+let personnelTargetId = null;
+let onboardingUsers = [];
 // AI 港湾仅改变浏览层级；子 Agent 的身份、记忆、动作和绑定关系仍各自独立。
 const expandedHarborBusinessSquadIds = new Set();
 // Agent 小队树默认收起子 Agent；展开仅影响展示，不影响选中项或协作数据。
@@ -153,8 +182,10 @@ const expandedSquadBusinessIds = new Set();
 let dailyQuestionConfig = null;
 let operatingCenterState = { cases: [], decisions: [], inbox: [], unreadInboxCount: 0 };
 let taskCenterState = { tasks: [], total: 0 };
+let g0DecisionSnapshot = null;
 const taskDetails = new Map();
 const taskAgentCandidates = new Map();
+let editingTaskAssignmentId = null;
 let selectedInboxItemId = null;
 let editingDailyQuestionConfig = null;
 let latestDailyQuestionConflictConfig = null;
@@ -230,7 +261,7 @@ const commands = [
 // Local experience review: keep the operating-center implementation intact
 // while temporarily removing its routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
-const VIEW_TITLES = Object.fromEntries(commands.map((item) => [item.view, item.label]));
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '人员与权限', 'personnel-onboarding': '首次人员开通' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -327,6 +358,8 @@ async function handleLogin(event) {
       showLoginError('账号或密码错误');
       return;
     }
+    const sessionResponse = await fetch('/api/auth/session', { credentials: 'same-origin' });
+    authSession = sessionResponse.ok ? await sessionResponse.json().catch(() => null) : null;
     authenticated = true;
     // Remove the old client-only marker so it cannot restore a workspace view.
     localStorage.removeItem('aeos-hub-session-v1');
@@ -473,12 +506,16 @@ function showWorkspace(entering = false, forcedView = null) {
   els.app.classList.remove('hidden');
   els.app.classList.toggle('workspace-enter', entering && !prefersReducedMotion());
   applyProfile();
+  syncG0GovernanceConfigEntry();
+  syncPersonnelConfigEntry();
+  syncOnboardingConfigEntry();
   $$('.nav-item').forEach((node, index) => node.style.setProperty('--nav-order', String(index)));
   const onboarding = parseStored(STORAGE.onboarding, { defaultView: 'dashboard' });
   const hashView = location.hash.replace(/^#/, '');
   const initialView = forcedView || (VIEW_TITLES[hashView] ? hashView : onboarding.defaultView) || 'dashboard';
   showView(initialView, { updateHash: true, animate: !entering });
   connect();
+  void loadG0DecisionView({ silent: true });
   loadEvidence();
   loadOperatingCenter({ silent: true });
   loadHarbor({ silent: true });
@@ -511,6 +548,7 @@ async function logout() {
   // Exit the browser workspace first. A stalled network request must never
   // make the user appear to remain logged in.
   authenticated = false;
+  authSession = null;
   localStorage.removeItem('aeos-hub-session-v1');
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
@@ -571,6 +609,9 @@ function showView(view, options = {}) {
   if (view === 'dashboard' || view === 'attention') loadDashboard({ silent: true });
   if (view === 'cases') loadOperatingCenter();
   if (view === 'tasks') loadTasks();
+  if (view === 'g0-governance') loadG0DecisionView();
+  if (view === 'personnel-admin') loadPersonnelAdminView();
+  if (view === 'personnel-onboarding') loadPersonnelOnboardingView();
   if (view === 'inbox') loadInbox();
   if (view === 'registry' || view === 'chat') loadCapabilityRegistry({ silent: view === 'chat' });
   if (view === 'harbor') loadHarbor();
@@ -2582,6 +2623,535 @@ async function loadInbox(options = {}) {
   if (!data && !options.silent) toast('Inbox 加载失败，请稍后重试', true);
 }
 
+export function g0CanRecord(session) {
+  return Array.isArray(session?.roles) && session.roles.includes('manager');
+}
+
+export function g0ConfigEntryVisible(session) {
+  return g0CanRecord(session);
+}
+
+export function g0DecisionDisplay(snapshot) {
+  const decisions = snapshot?.decisions || {};
+  return {
+    ready: snapshot?.readyForG1 === true,
+    entries: [
+      ['首个闭环场景', decisions.firstScenario], ['业务 Owner', decisions.businessOwnerActor], ['Verify 人', decisions.verifyActor],
+      ['试点租户与组织范围', decisions.scope], ['三账号授权安排决策', decisions.threeAccountAuthorization], ['M02 责任安排', decisions.m02Responsibility],
+      ['任务中心决策', decisions.taskStoreDecision], ['G4 准入门禁', decisions.g4Admission],
+    ],
+    history: Array.isArray(snapshot?.history) ? [...snapshot.history].reverse() : [],
+  };
+}
+
+export function escapeG0Text(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+}
+
+export function renderG0HistoryMarkup(history, formatTime = (value) => value) {
+  return history.length ? history.map((entry) => `<li><div><b>${escapeG0Text(entry.field)}</b><span>${escapeG0Text(formatTime(entry.decidedAt))}</span></div><p>${escapeG0Text(entry.note)}</p><small>${escapeG0Text(entry.actorId)} · ${escapeG0Text(entry.tenantId)} · 修订 ${escapeG0Text(entry.revision)}</small></li>`).join('') : '<li class="dashboard-loading">暂无登记历史</li>';
+}
+
+export function buildG0DecisionRequest(fields) {
+  const value = (name) => String(fields?.[name] || '').trim();
+  const patch = {};
+  const firstScenario = value('firstScenario');
+  const businessOwnerActorId = value('businessOwnerActorId');
+  const verifyActorId = value('verifyActorId');
+  const demoTenantId = value('demoTenantId');
+  const organizationScope = value('organizationScope');
+  const managerActorId = value('managerActorId');
+  const operatorActorId = value('operatorActorId');
+  const ownerActorId = value('ownerActorId');
+  const m02OwnerActorId = value('m02OwnerActorId');
+  const note = value('note');
+  if (!note) throw new Error('请填写登记说明。');
+  if (firstScenario) patch.firstScenario = firstScenario;
+  if (businessOwnerActorId) patch.businessOwnerActorId = businessOwnerActorId;
+  if (verifyActorId) patch.verifyActorId = verifyActorId;
+  if (businessOwnerActorId && verifyActorId && businessOwnerActorId === verifyActorId) throw new Error('订单交付风险的 Owner 与 Verify 人必须不同。');
+  if (demoTenantId || organizationScope) {
+    if (!demoTenantId || !organizationScope) throw new Error('请同时填写试点租户范围与组织范围。');
+    patch.scope = { demoTenantId, organizationScope };
+  }
+  if (managerActorId || operatorActorId || ownerActorId) {
+    if (!managerActorId || !operatorActorId || !ownerActorId) throw new Error('请完整填写三账号授权安排。');
+    patch.threeAccountAuthorization = { managerActorId, operatorActorId, ownerActorId, decision: 'approved_for_g1' };
+  }
+  if (m02OwnerActorId) patch.m02Responsibility = { ownerActorId: m02OwnerActorId, status: 'assigned' };
+  if (value('taskStoreDecision')) patch.taskStoreDecision = 'reuse_existing_task_center';
+  if (value('g4Admission')) patch.g4Admission = 'blocked_until_g1';
+  if (!Object.keys(patch).length) throw new Error('请至少填写一项 G0 决策。');
+  return { patch, note };
+}
+
+export function g0ApiFailureReason(data, status) {
+  const reason = typeof data?.error === 'string' ? data.error.trim() : '';
+  return reason || `HTTP ${status}`;
+}
+
+export function g0SaveFeedback(auditStatus) {
+  return auditStatus === 'failed'
+    ? { status: '决策已登记，但 Evidence 留痕未确认；请联系管理员核查。', toast: 'G0 决策已登记，Evidence 留痕待核查', isError: true }
+    : { status: '决策登记已保存并提交服务端审计。', toast: 'G0 决策登记已保存', isError: false };
+}
+
+function g0ManagerCanRecord() { return g0CanRecord(authSession); }
+
+function syncG0GovernanceConfigEntry() {
+  els.g0ConfigEntry?.classList.toggle('hidden', !g0ConfigEntryVisible(authSession));
+}
+
+function personnelManagerCanManage() { return personnelConfigEntryVisible(authSession, g0DecisionSnapshot); }
+
+function syncPersonnelConfigEntry() {
+  els.personnelConfigEntry?.classList.toggle('hidden', !personnelConfigEntryVisible(authSession, g0DecisionSnapshot));
+}
+
+function onboardingManagerCanManage() { return onboardingConfigEntryVisible(authSession, g0DecisionSnapshot); }
+
+function syncOnboardingConfigEntry() {
+  els.onboardingConfigEntry?.classList.toggle('hidden', !onboardingConfigEntryVisible(authSession, g0DecisionSnapshot));
+}
+
+async function loadPersonnelOnboardingView(options = {}) {
+  const ready = g0DecisionSnapshot?.readyForG1 === true;
+  els.onboardingG0Readiness.textContent = ready ? '已具备进入 G1 的决策条件' : '尚未就绪';
+  els.onboardingG0Readiness.className = `status-pill ${ready ? 'ok' : 'neutral'}`;
+  els.obG0Manager.textContent = authSession?.actorId || '—';
+  els.obG0Tenant.textContent = authSession?.tenantId || '—';
+  els.obG0Organization.textContent = authSession?.organizationId || '—';
+  await loadOnboardingUsers(options);
+}
+
+async function loadOnboardingUsers(options = {}) {
+  try {
+    const response = await personnelApiRequest('/api/system/personnel/onboarding/users');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    onboardingUsers = Array.isArray(data.users) ? data.users : [];
+    renderOnboardingG0Options();
+  } catch (error) {
+    els.onboardingG0Status.textContent = `人员列表加载失败：${error.message}`;
+    if (!options.silent) toast(`人员列表加载失败：${error.message}`, true);
+  }
+}
+
+function onboardingOptionLabel(user) {
+  const name = user.firstName || user.lastName || user.username;
+  const role = (user.roles || []).join(',');
+  return `${name} · ${user.actorId}${role ? ` · ${role}` : ''}`;
+}
+
+function renderOnboardingG0Options(selections = {}) {
+  const options = onboardingUsers
+    .map((user) => `<option value="${esc(user.actorId)}">${esc(onboardingOptionLabel(user))}</option>`)
+    .join('');
+  const placeholder = '<option value="">请选择账号</option>';
+  for (const select of [els.obG0BusinessOwner, els.obG0Verify, els.obG0Operator]) {
+    select.innerHTML = placeholder + options;
+  }
+  const selectByName = (select, name) => {
+    const chosen = selections[name] || onboardingUsers.find((user) => (user.firstName || user.username) === name)?.actorId;
+    if (chosen) select.value = chosen;
+  };
+  selectByName(els.obG0BusinessOwner, '张三');
+  selectByName(els.obG0Verify, '李四');
+  selectByName(els.obG0Operator, '王五');
+}
+
+async function submitOnboardingCreate(event) {
+  event.preventDefault();
+  if (!onboardingManagerCanManage()) { els.onboardingCreateStatus.textContent = '当前会话无权进行首次开通。'; return; }
+  const rows = $$('.onboarding-create-row', els.onboardingCreateRows);
+  const accounts = rows.map((row) => ({
+    firstName: $('.ob-first-name', row).value.trim(),
+    username: $('.ob-username', row).value.trim(),
+    role: row.dataset.pilotRole || 'operator',
+    temporaryPassword: $('.ob-password', row).value,
+  }));
+  if (accounts.some((account) => !account.username || !account.temporaryPassword)) {
+    els.onboardingCreateStatus.textContent = '请为每个账号填写登录名与临时密码。';
+    return;
+  }
+  els.btnOnboardingCreate.disabled = true;
+  els.onboardingCreateStatus.textContent = '正在创建账号…';
+  const selections = {};
+  try {
+    for (let index = 0; index < accounts.length; index++) {
+      const account = accounts[index];
+      const response = await personnelApiRequest('/api/system/personnel/onboarding/users', 'POST', {
+        username: account.username,
+        ...(account.firstName ? { firstName: account.firstName } : {}),
+        roles: [account.role],
+        temporaryPassword: account.temporaryPassword,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+      if (account.firstName && data.user?.actorId) selections[account.firstName] = data.user.actorId;
+      $('.ob-password', rows[index]).value = '';
+    }
+    els.onboardingCreateStatus.textContent = '账号已创建；请在第 2 步登记 G0。';
+    await loadOnboardingUsers({ silent: true });
+    renderOnboardingG0Options(selections);
+  } catch (error) {
+    els.onboardingCreateStatus.textContent = `创建失败：${error.message}`;
+    toast(`创建账号失败：${error.message}`, true);
+  } finally {
+    els.btnOnboardingCreate.disabled = false;
+  }
+}
+
+async function submitOnboardingG0(event) {
+  event.preventDefault();
+  if (!onboardingManagerCanManage()) { els.onboardingG0Status.textContent = '当前会话无权登记 G0。'; return; }
+  const businessOwner = els.obG0BusinessOwner.value;
+  const verify = els.obG0Verify.value;
+  const operator = els.obG0Operator.value;
+  if (!businessOwner || !verify || !operator) {
+    els.onboardingG0Status.textContent = '请选择业务 Owner、Verify 人与 operator。';
+    return;
+  }
+  const manager = authSession?.actorId || '';
+  const tenantId = authSession?.tenantId || '';
+  const organizationScope = authSession?.organizationId || '';
+  if (!manager || !tenantId || !organizationScope) {
+    els.onboardingG0Status.textContent = '当前会话缺少可信 manager / 租户 / 组织范围，无法登记。';
+    return;
+  }
+  try {
+    const request = buildG0DecisionRequest({
+      firstScenario: 'order_delivery_risk',
+      businessOwnerActorId: businessOwner,
+      verifyActorId: verify,
+      demoTenantId: tenantId,
+      organizationScope,
+      managerActorId: manager,
+      operatorActorId: operator,
+      ownerActorId: businessOwner,
+      m02OwnerActorId: businessOwner,
+      taskStoreDecision: 'reuse_existing_task_center',
+      g4Admission: 'blocked_until_g1',
+      note: els.obG0Note.value,
+    });
+    els.btnOnboardingG0Save.disabled = true;
+    els.onboardingG0Status.textContent = '正在保存 G0 决策…';
+    const response = await personnelApiRequest('/api/governance/g0-decisions', 'PUT', request);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(g0ApiFailureReason(data, response.status));
+    g0DecisionSnapshot = data.snapshot;
+    const ready = data.snapshot?.readyForG1 === true;
+    els.onboardingG0Readiness.textContent = ready ? '已具备进入 G1 的决策条件' : '尚未具备进入 G1 的决策条件';
+    els.onboardingG0Readiness.className = `status-pill ${ready ? 'ok' : 'warn'}`;
+    syncPersonnelConfigEntry();
+    syncOnboardingConfigEntry();
+    if (ready) {
+      toast('G0 已就绪，人员与权限入口已启用');
+      showView('personnel-admin');
+    } else {
+      els.onboardingG0Status.textContent = 'G0 已保存但尚未就绪，请核对三账号与 Owner/Verify 是否不同。';
+    }
+  } catch (error) {
+    els.onboardingG0Status.textContent = `保存失败：${error.message}`;
+    toast(`G0 登记失败：${error.message}`, true);
+  } finally {
+    els.btnOnboardingG0Save.disabled = false;
+  }
+}
+
+function personnelApiRequest(path, method = 'GET', body) {
+  return fetch(path, {
+    method,
+    headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+}
+
+async function loadPersonnelAdminView(options = {}) {
+  const canManage = personnelManagerCanManage();
+  els.personnelAccess.textContent = canManage ? '当前会话可管理人员与角色' : '当前会话无权管理人员与权限';
+  els.personnelAccess.className = `status-pill ${canManage ? 'ok' : 'neutral'}`;
+  els.btnPersonnelCreate.disabled = !canManage;
+  if (!canManage) {
+    els.personnelList.innerHTML = '<div class="dashboard-loading">仅具备 manager 角色且处于 G0 就绪范围的会话可管理人员。</div>';
+    els.personnelListCount.textContent = '';
+    return;
+  }
+  const search = els.personnelSearch.value.trim();
+  const query = search ? `?search=${encodeURIComponent(search)}` : '';
+  try {
+    const response = await personnelApiRequest(`/api/system/personnel/users${query}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    personnelUsers = Array.isArray(data.users) ? data.users : [];
+    renderPersonnelAdminView();
+    return personnelUsers;
+  } catch (error) {
+    els.personnelList.innerHTML = `<div class="dashboard-loading">人员列表加载失败：${esc(error.message)}</div>`;
+    els.personnelListCount.textContent = '';
+    if (!options.silent) toast(`人员列表加载失败：${error.message}`, true);
+    return null;
+  }
+}
+
+function personnelUserMarkup(user) {
+  const displayName = (user.firstName && user.lastName) ? `${user.firstName} ${user.lastName}` : (user.firstName || user.lastName || user.username);
+  const badges = ['manager', 'operator', 'owner']
+    .filter((role) => user.roles.includes(role))
+    .map((role) => `<span class="role-badge role-badge-${esc(role)}">${esc(PERSONNEL_ROLE_LABELS[role] || role)}</span>`)
+    .join('');
+  const roleChecks = ['manager', 'operator', 'owner']
+    .map((role) => `<label class="personnel-role-check"><input type="checkbox" name="role" value="${esc(role)}" ${user.roles.includes(role) ? 'checked' : ''} data-user-role data-user-id="${esc(user.id)}" data-role="${esc(role)}" /> ${esc(PERSONNEL_ROLE_LABELS[role] || role)}</label>`)
+    .join('');
+  return `<div class="personnel-row" data-user-id="${esc(user.id)}">
+    <div class="personnel-row-main">
+      <b class="personnel-row-name">${esc(displayName)}</b>
+      <span class="personnel-role-badges">${badges}</span>
+      <span class="status-pill ${user.enabled ? 'ok' : 'danger'}">${user.enabled ? '已启用' : '已停用'}</span>
+    </div>
+    <div class="personnel-row-meta">登录名 <code>${esc(user.username)}</code> · <code>${esc(user.actorId)}</code>${user.email ? ` · ${esc(user.email)}` : ''}</div>
+    <div class="personnel-row-actions">
+      <span class="personnel-role-group">${roleChecks}</span>
+      <button type="button" class="btn secondary compact" data-personnel-role-save data-user-id="${esc(user.id)}">保存角色</button>
+      <button type="button" class="btn secondary compact" data-personnel-toggle data-user-id="${esc(user.id)}" data-enabled="${user.enabled ? 'false' : 'true'}">${user.enabled ? '停用' : '启用'}</button>
+      <button type="button" class="btn secondary compact" data-personnel-reset data-user-id="${esc(user.id)}" data-username="${esc(user.username)}">重置密码</button>
+      <button type="button" class="btn danger compact" data-personnel-delete data-user-id="${esc(user.id)}" data-name="${esc(displayName)}">删除</button>
+    </div>
+  </div>`;
+}
+
+function renderPersonnelAdminView() {
+  els.personnelListCount.textContent = `共 ${personnelUsers.length} 位试点范围内用户`;
+  els.personnelList.innerHTML = personnelUsers.length
+    ? personnelUsers.map((user) => personnelUserMarkup(user)).join('')
+    : '<div class="dashboard-loading">试点范围内暂无用户</div>';
+  refreshIcons($('#view-personnel-admin'));
+}
+
+function openPersonnelCreateModal() {
+  if (!personnelManagerCanManage()) { toast('当前会话无权创建用户。', true); return; }
+  els.personnelCreateForm.reset();
+  els.personnelCreateStatus.textContent = '';
+  els.personnelCreateModal.classList.remove('hidden');
+}
+
+function closePersonnelCreateModal() {
+  els.personnelCreateModal.classList.add('hidden');
+  els.personnelCreatePassword.value = '';
+}
+
+function openPersonnelResetModal(user) {
+  personnelTargetId = user.id;
+  els.personnelResetTarget.value = user.username;
+  els.personnelResetPassword.value = '';
+  els.personnelResetStatus.textContent = '';
+  els.personnelResetModal.classList.remove('hidden');
+}
+
+function closePersonnelResetModal() {
+  els.personnelResetModal.classList.add('hidden');
+  personnelTargetId = null;
+  els.personnelResetPassword.value = '';
+}
+
+function personnelCreateRolesChecked() {
+  return $$('input[name="role"]:checked', els.personnelCreateRoles).map((node) => node.value);
+}
+
+async function submitPersonnelCreate(event) {
+  event.preventDefault();
+  if (!personnelManagerCanManage()) { els.personnelCreateStatus.textContent = '当前会话无权创建用户。'; return; }
+  try {
+    const request = buildPersonnelCreateRequest({
+      username: els.personnelCreateUsername.value,
+      temporaryPassword: els.personnelCreatePassword.value,
+      email: els.personnelCreateEmail.value,
+      firstName: els.personnelCreateFirst.value,
+      lastName: els.personnelCreateLast.value,
+      roles: personnelCreateRolesChecked(),
+    });
+    els.personnelCreatePassword.value = '';
+    els.personnelCreateSubmit.disabled = true;
+    els.personnelCreateStatus.textContent = '正在创建用户…';
+    const response = await personnelApiRequest('/api/system/personnel/users', 'POST', request);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    els.personnelCreateUsername.value = '';
+    els.personnelCreateEmail.value = '';
+    els.personnelCreateFirst.value = '';
+    els.personnelCreateLast.value = '';
+    closePersonnelCreateModal();
+    const feedback = personnelSaveFeedback(data.auditStatus);
+    toast(feedback.toast, feedback.isError);
+    await loadPersonnelAdminView({ silent: true });
+  } catch (error) {
+    els.personnelCreateStatus.textContent = `创建失败：${error.message}`;
+    toast(`创建用户失败：${error.message}`, true);
+  } finally {
+    els.personnelCreateSubmit.disabled = false;
+  }
+}
+
+async function submitPersonnelReset(event) {
+  event.preventDefault();
+  const userId = personnelTargetId;
+  if (!userId) return;
+  try {
+    const request = buildPersonnelResetRequest({ temporaryPassword: els.personnelResetPassword.value });
+    els.personnelResetPassword.value = '';
+    els.personnelResetSubmit.disabled = true;
+    els.personnelResetStatus.textContent = '正在重置密码…';
+    const response = await personnelApiRequest(`/api/system/personnel/users/${encodeURIComponent(userId)}/reset-password`, 'POST', request);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    closePersonnelResetModal();
+    const feedback = personnelSaveFeedback(data.auditStatus);
+    toast(feedback.toast, feedback.isError);
+  } catch (error) {
+    els.personnelResetStatus.textContent = `重置失败：${error.message}`;
+    toast(`重置密码失败：${error.message}`, true);
+  } finally {
+    els.personnelResetSubmit.disabled = false;
+  }
+}
+
+async function togglePersonnelEnabled(userId, enabled) {
+  if (enabled === false && !window.confirm('确认停用该用户？')) return;
+  try {
+    const response = await personnelApiRequest(`/api/system/personnel/users/${encodeURIComponent(userId)}`, 'PATCH', { enabled });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    const feedback = personnelSaveFeedback(data.auditStatus);
+    toast(feedback.toast, feedback.isError);
+    await loadPersonnelAdminView({ silent: true });
+  } catch (error) {
+    toast(`更新用户失败：${error.message}`, true);
+  }
+}
+
+async function savePersonnelRoles(userId) {
+  if (!window.confirm('确认替换该用户的角色？')) return;
+  const checked = $$(`input[data-user-role][data-user-id="${userId}"]:checked`).map((node) => node.value);
+  try {
+    const request = buildPersonnelRolesRequest({ roles: checked });
+    const response = await personnelApiRequest(`/api/system/personnel/users/${encodeURIComponent(userId)}/roles`, 'PUT', request);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    const feedback = personnelSaveFeedback(data.auditStatus);
+    toast(feedback.toast, feedback.isError);
+    await loadPersonnelAdminView({ silent: true });
+  } catch (error) {
+    toast(`保存角色失败：${error.message}`, true);
+  }
+}
+
+async function deletePersonnelUser(userId, displayName) {
+  if (!window.confirm(`确认删除账号「${displayName}」？该操作不可撤销。`)) return;
+  try {
+    const response = await personnelApiRequest(`/api/system/personnel/users/${encodeURIComponent(userId)}`, 'DELETE');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    const feedback = personnelSaveFeedback(data.auditStatus);
+    toast(feedback.toast, feedback.isError);
+    await loadPersonnelAdminView({ silent: true });
+  } catch (error) {
+    toast(`删除账号失败：${error.message}`, true);
+  }
+}
+
+function g0ChoiceValue(choice, fallback = '') { return choice?.value ?? fallback; }
+
+function setG0Field(field, value) {
+  if (field && document.activeElement !== field) field.value = value || '';
+}
+
+function renderG0DecisionView() {
+  const snapshot = g0DecisionSnapshot;
+  if (!snapshot) return;
+  const display = g0DecisionDisplay(snapshot);
+  const decisions = snapshot.decisions || {};
+  els.g0Readiness.textContent = display.ready ? '已具备进入 G1 的决策条件' : '尚未具备进入 G1 的决策条件';
+  els.g0Readiness.className = `status-pill ${display.ready ? 'ok' : 'warn'}`;
+  els.g0DecisionStatus.innerHTML = display.entries.map(([label, choice]) => `<div class="g0-status-item ${choice ? 'recorded' : 'missing'}"><i data-lucide="${choice ? 'check-circle-2' : 'circle'}"></i><span>${esc(label)}</span><b>${choice ? '已登记' : '尚未登记'}</b></div>`).join('');
+
+  setG0Field(els.g0FirstScenario, g0ChoiceValue(decisions.firstScenario));
+  setG0Field(els.g0BusinessOwner, g0ChoiceValue(decisions.businessOwnerActor)?.actorId);
+  setG0Field(els.g0VerifyActor, g0ChoiceValue(decisions.verifyActor)?.actorId);
+  setG0Field(els.g0DemoTenant, g0ChoiceValue(decisions.scope)?.demoTenantId || authSession?.tenantId || '');
+  setG0Field(els.g0OrganizationScope, g0ChoiceValue(decisions.scope)?.organizationScope || authSession?.organizationId || '');
+  setG0Field(els.g0ManagerActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.managerActorId);
+  setG0Field(els.g0OperatorActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.operatorActorId);
+  setG0Field(els.g0OwnerActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.ownerActorId);
+  setG0Field(els.g0M02Owner, g0ChoiceValue(decisions.m02Responsibility)?.ownerActorId);
+  setG0Field(els.g0TaskStore, g0ChoiceValue(decisions.taskStoreDecision));
+  setG0Field(els.g0G4Admission, g0ChoiceValue(decisions.g4Admission));
+
+  const canRecord = g0ManagerCanRecord();
+  els.g0Form.querySelectorAll('input, select, textarea').forEach((field) => { field.disabled = !canRecord; });
+  els.btnG0Save.disabled = !canRecord;
+  els.g0FormAccess.textContent = canRecord ? '当前会话可登记' : '当前会话仅可查看';
+  els.g0FormAccess.className = `status-pill ${canRecord ? 'ok' : 'neutral'}`;
+  els.g0FormStatus.textContent = canRecord ? '提交后将作为治理决策登记；服务端会再次验证 manager 权限。' : '当前会话不具备 manager 角色，只能查看已登记的决策与历史。';
+  els.g0HistoryCount.textContent = `${display.history.length} 条`;
+  els.g0DecisionHistory.innerHTML = renderG0HistoryMarkup(display.history, formatHarborTime);
+  refreshIcons($('#view-g0-governance'));
+}
+
+function g0TrimmedValue(field) { return String(field?.value || '').trim(); }
+
+function collectG0DecisionRequest() {
+  return buildG0DecisionRequest({
+    firstScenario: g0TrimmedValue(els.g0FirstScenario), businessOwnerActorId: g0TrimmedValue(els.g0BusinessOwner), verifyActorId: g0TrimmedValue(els.g0VerifyActor),
+    demoTenantId: g0TrimmedValue(els.g0DemoTenant), organizationScope: g0TrimmedValue(els.g0OrganizationScope), managerActorId: g0TrimmedValue(els.g0ManagerActor),
+    operatorActorId: g0TrimmedValue(els.g0OperatorActor), ownerActorId: g0TrimmedValue(els.g0OwnerActor), m02OwnerActorId: g0TrimmedValue(els.g0M02Owner),
+    taskStoreDecision: g0TrimmedValue(els.g0TaskStore), g4Admission: g0TrimmedValue(els.g0G4Admission), note: g0TrimmedValue(els.g0DecisionNote),
+  });
+}
+
+async function loadG0DecisionView(options = {}) {
+  try {
+    const response = await fetch('/api/governance/g0-decisions', { headers: { accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(g0ApiFailureReason(data, response.status));
+    g0DecisionSnapshot = data.snapshot;
+    renderG0DecisionView();
+    syncPersonnelConfigEntry();
+    syncOnboardingConfigEntry();
+    return data.snapshot;
+  } catch (error) {
+    els.g0DecisionStatus.innerHTML = `<div class="dashboard-loading">G0 决策登记加载失败：${esc(error.message)}</div>`;
+    if (!options.silent) toast(`G0 决策登记加载失败：${error.message}`, true);
+    return null;
+  }
+}
+
+async function saveG0DecisionView(event) {
+  event.preventDefault();
+  if (!g0ManagerCanRecord()) { els.g0FormStatus.textContent = '当前会话没有 manager 角色，无法保存。'; return; }
+  try {
+    const request = collectG0DecisionRequest();
+    els.btnG0Save.disabled = true;
+    els.g0FormStatus.textContent = '正在保存决策登记…';
+    const response = await fetch('/api/governance/g0-decisions', {
+      method: 'PUT', headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(request),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(g0ApiFailureReason(data, response.status));
+    g0DecisionSnapshot = data.snapshot;
+    els.g0DecisionNote.value = '';
+    renderG0DecisionView();
+    const feedback = g0SaveFeedback(data.auditStatus);
+    els.g0FormStatus.textContent = feedback.status;
+    toast(feedback.toast, feedback.isError);
+  } catch (error) {
+    els.g0FormStatus.textContent = `保存失败：${error.message}`;
+    toast(`G0 决策登记保存失败：${error.message}`, true);
+  } finally {
+    if (g0ManagerCanRecord()) els.btnG0Save.disabled = false;
+  }
+}
+
 async function taskRequest(path, method = 'GET', body) {
   const response = await fetch(path, {
     method,
@@ -2593,21 +3163,52 @@ async function taskRequest(path, method = 'GET', body) {
   return data;
 }
 
+function registeredTaskOwnerActorId() {
+  const actorId = g0DecisionSnapshot?.decisions?.businessOwnerActor?.value?.actorId;
+  return typeof actorId === 'string' ? actorId : '';
+}
+
+function taskMutationGateMessage(gate) {
+  if (gate.code === 'G0_DECISION_UNAVAILABLE') return 'G0 决策登记暂时无法读取，任务台账保持只读；请恢复读取后再执行变更。';
+  if (gate.code === 'G0_NOT_READY') return 'G0 尚未具备进入 G1 的决策条件，任务台账保持只读。';
+  if (gate.code === 'G0_SCOPE_MISMATCH') return '当前会话的租户或组织不在 G0 登记范围内，任务台账保持只读。';
+  if (gate.code === 'HUMAN_ACTOR_REQUIRED') return '非人工会话只能查看任务台账，不能执行任务变更。';
+  return '当前会话可查看任务台账；创建、分派和改派由 manager 人工账号执行。';
+}
+
+async function loadTaskG0Context() {
+  try {
+    const response = await fetch('/api/governance/g0-decisions', { headers: { accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    g0DecisionSnapshot = data.snapshot;
+  } catch {
+    // Failure to read the registered Owner must fail closed in the browser;
+    // TaskApi remains the authoritative authorization boundary.
+    g0DecisionSnapshot = null;
+  }
+}
+
 function renderTaskCenter() {
   const tasks = Array.isArray(taskCenterState.tasks) ? taskCenterState.tasks : [];
   const today = localDateKey();
-  const openCases = (operatingCenterState.cases || []).filter((item) => item.status !== 'closed' && Array.isArray(item.evidenceRefs) && item.evidenceRefs.length);
+  const openCases = (operatingCenterState.cases || []).filter((item) => item.status !== 'closed' && item.source === 'order' && Array.isArray(item.evidenceRefs) && item.evidenceRefs.length);
+  const taskMutationGate = g1TaskUiMutationGate(authSession, g0DecisionSnapshot);
+  const canCreate = canCreateTaskFromCase(authSession, { source: 'order', evidenceRefs: ['ui-projection'] }, g0DecisionSnapshot);
   const selectedCase = els.taskCaseSelect.value;
   els.taskCaseSelect.innerHTML = openCases.length
     ? `<option value="">请选择经营事项</option>${openCases.map((item) => `<option value="${esc(item.id)}">${esc(item.entityId)} · ${esc(item.title)}</option>`).join('')}`
     : '<option value="">暂无带 Evidence 的未闭环经营事项</option>';
   if (openCases.some((item) => item.id === selectedCase)) els.taskCaseSelect.value = selectedCase;
-  els.btnTaskCreate.disabled = !openCases.length;
-  els.taskCreateHint.textContent = openCases.length
-    ? '创建后先分派一个责任角色；分析结果必须由业务 Owner 进行核验。'
-    : '暂无可建任务事项。请先从风险详情纳入经营事项，并确保其包含 Evidence。';
+  els.taskCreateControls.classList.toggle('hidden', !canCreate);
+  els.taskReadonlyNote.classList.toggle('hidden', canCreate);
+  els.btnTaskCreate.disabled = !canCreate || !openCases.length;
+  els.taskCreateHint.textContent = canCreate
+    ? (openCases.length ? '创建后由 manager 分派具体 M01 actor ID；分析结果必须由业务 Owner 核验。' : '暂无可建任务事项。请先从订单风险详情纳入经营事项，并确保其包含 Evidence。')
+    : taskMutationGateMessage(taskMutationGate);
 
-  const display = tasks.map((task) => ({ task, state: taskDisplayState(task, today), policy: taskInteractionPolicy(task) }));
+  const ownerActorId = registeredTaskOwnerActorId();
+  const display = tasks.map((task) => ({ task, state: taskDisplayState(task, today), capabilities: taskUiCapabilities(task, authSession, ownerActorId, g0DecisionSnapshot) }));
   const draft = display.filter(({ task }) => task.status === 'DRAFT').length;
   const active = display.filter(({ task }) => ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'AWAITING_DECISION'].includes(task.status)).length;
   const verifying = display.filter(({ task }) => task.status === 'AWAITING_VERIFY').length;
@@ -2622,28 +3223,28 @@ function renderTaskCenter() {
   els.taskListCount.textContent = `${tasks.length} 项任务`;
   els.taskListCount.className = `status-pill ${attention ? 'warn' : 'neutral'}`;
 
-  els.taskList.innerHTML = display.length ? display.map(({ task, state, policy }) => {
+  els.taskList.innerHTML = display.length ? display.map(({ task, state, capabilities }) => {
     const details = taskDetails.get(task.taskId);
     const agentCandidates = taskAgentCandidates.get(task.taskId);
     const history = Array.isArray(details?.history) ? details.history : [];
     const actions = [
       `<button class="btn ghost compact" type="button" data-task-action="detail" data-task-id="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起历史' : '查看历史'}</button>`,
       `<button class="btn ghost compact" type="button" data-task-action="agent-candidates" data-task-id="${esc(task.taskId)}"><i data-lucide="shield-check"></i>${agentCandidates ? '收起接手条件' : '查看 Agent 接手条件'}</button>`,
-      policy.canAssign ? `<button class="btn secondary compact" type="button" data-task-action="assign" data-task-id="${esc(task.taskId)}"><i data-lucide="user-round-check"></i>${task.currentAssignee ? '改派责任' : '分派责任'}</button>` : '',
-      task.status === 'ASSIGNED' ? `<button class="btn secondary compact" type="button" data-task-action="accept" data-task-id="${esc(task.taskId)}"><i data-lucide="handshake"></i>记录接受</button>` : '',
-      ['ACCEPTED', 'AWAITING_DECISION'].includes(task.status) ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
-      policy.canSupplementEvidence ? `<button class="btn ghost compact" type="button" data-task-action="evidence" data-task-id="${esc(task.taskId)}"><i data-lucide="paperclip"></i>补充证据</button>` : '',
-      policy.canEscalate ? `<button class="btn ghost compact" type="button" data-task-action="escalate" data-task-id="${esc(task.taskId)}"><i data-lucide="triangle-alert"></i>升级决策</button>` : '',
-      policy.canSubmitPendingResult ? `<button class="btn secondary compact" type="button" data-task-action="result" data-task-id="${esc(task.taskId)}"><i data-lucide="file-check-2"></i>登记待核验结果</button>` : '',
-      policy.canVerify ? `<button class="btn primary compact" type="button" data-task-action="verify" data-task-id="${esc(task.taskId)}"><i data-lucide="badge-check"></i>业务核验</button>` : '',
+      capabilities.canAssign ? `<button class="btn secondary compact" type="button" data-task-action="assign" data-task-id="${esc(task.taskId)}"><i data-lucide="user-round-check"></i>${task.currentAssignee ? '改派责任' : '分派责任'}</button>` : '',
+      capabilities.canAccept ? `<button class="btn secondary compact" type="button" data-task-action="accept" data-task-id="${esc(task.taskId)}"><i data-lucide="handshake"></i>记录接受</button>` : '',
+      capabilities.canStart ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
+      capabilities.canSupplementEvidence ? `<button class="btn ghost compact" type="button" data-task-action="evidence" data-task-id="${esc(task.taskId)}"><i data-lucide="paperclip"></i>补充证据</button>` : '',
+      capabilities.canSubmitPendingResult ? `<button class="btn secondary compact" type="button" data-task-action="result" data-task-id="${esc(task.taskId)}"><i data-lucide="file-check-2"></i>登记待核验结果</button>` : '',
+      capabilities.canVerify ? `<button class="btn primary compact" type="button" data-task-action="verify" data-task-id="${esc(task.taskId)}"><i data-lucide="badge-check"></i>业务核验</button>` : '',
     ].filter(Boolean).join('');
     return `<article class="task-card${state.needsAttention ? ' needs-attention' : ''}">
       <div class="task-card-top"><span class="case-source ${esc(task.source)}">${esc(operatingSourceLabel(task.source))}</span><code>${esc(task.taskId.slice(-12))}</code><span class="task-card-spacer"></span><b class="status-pill ${esc(state.tone)}">${esc(state.label)}${state.overdue ? ' · 已逾期' : ''}</b></div>
       <strong>${esc(task.title)}</strong><p class="task-source-line">来源事项：${esc(task.caseId)} · Evidence ${task.evidenceRefs.length} 条</p>
-      <div class="task-meta"><span><i data-lucide="user-round-check"></i>责任：${esc(state.assigneeLabel)}</span><span><i data-lucide="calendar-clock"></i>时限：${esc(task.dueAt)}</span><span><i data-lucide="circle-dot-dashed"></i>优先级：${esc(task.priority)}</span></div>
+      <div class="task-meta"><span><i data-lucide="user-round-check"></i>责任：${esc(state.assigneeLabel)}</span><span><i data-lucide="fingerprint"></i>经办：${esc(task.currentAssignee?.actorId || '待 manager 指定')}</span><span><i data-lucide="calendar-clock"></i>时限：${esc(task.dueAt)}</span><span><i data-lucide="circle-dot-dashed"></i>优先级：${esc(task.priority)}</span></div>
       <div class="task-next-action"><i data-lucide="arrow-right"></i><span><b>下一步：</b>${esc(state.nextAction)}</span></div>
       ${state.awaitingBusinessVerification ? '<div class="task-verify-note"><i data-lucide="shield-check"></i>分析结果仍为待核验状态，只有业务 Owner 的核验记录才能完成任务。</div>' : ''}
       <div class="case-actions task-actions">${actions}</div>
+      ${editingTaskAssignmentId === task.taskId && capabilities.canAssign ? `<form class="task-assignment-form" data-task-assignment-form data-task-id="${esc(task.taskId)}"><input name="assigneeRole" maxlength="120" required value="${esc(task.currentAssignee?.role || '')}" placeholder="责任角色" aria-label="责任角色" /><input name="assigneeActorId" maxlength="160" required value="${esc(task.currentAssignee?.actorId || '')}" placeholder="目标稳定 M01 actor ID" aria-label="目标稳定 M01 actor ID" /><input name="reason" maxlength="1000" required placeholder="分派/改派说明（将留痕）" aria-label="分派说明" /><button class="btn primary compact" type="submit">保存分派</button><button class="btn ghost compact" type="button" data-task-action="cancel-assign" data-task-id="${esc(task.taskId)}">取消</button></form>` : ''}
       ${agentCandidates ? renderAgentCandidatePanel(agentCandidates) : ''}
       ${details ? `<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
     </article>`;
@@ -2653,7 +3254,7 @@ function renderTaskCenter() {
 
 async function loadTasks(options = {}) {
   try {
-    await loadOperatingCenter({ silent: true });
+    await Promise.all([loadOperatingCenter({ silent: true }), loadTaskG0Context()]);
     taskCenterState = await taskRequest('/api/tasks');
     renderTaskCenter();
     return taskCenterState;
@@ -2666,7 +3267,8 @@ async function loadTasks(options = {}) {
 
 async function createTaskFromCase() {
   const caseId = els.taskCaseSelect.value;
-  if (!caseId) { toast('请先选择经营事项', true); return; }
+  const operatingCase = (operatingCenterState.cases || []).find((item) => item.id === caseId);
+  if (!canCreateTaskFromCase(authSession, operatingCase, g0DecisionSnapshot)) { toast('当前会话无权创建订单交付风险任务。', true); return; }
   const reason = window.prompt('建任务说明（将留痕到 Evidence，不会执行任何业务动作）：', '建立经营风险责任闭环任务。');
   if (!reason?.trim()) return;
   els.btnTaskCreate.disabled = true;
@@ -2695,20 +3297,53 @@ async function loadTaskAgentCandidates(taskId) {
   renderTaskCenter();
 }
 
+async function submitTaskAssignment(event) {
+  const form = event.target.closest('[data-task-assignment-form]');
+  if (!form) return;
+  event.preventDefault();
+  const taskId = form.dataset.taskId;
+  const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
+  if (!task || !taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot).canAssign) {
+    toast('当前会话无权分派该任务。', true);
+    return;
+  }
+  const submit = $('button[type="submit"]', form);
+  try {
+    const payload = buildTaskAssignmentPayload(Object.fromEntries(new FormData(form).entries()));
+    submit.disabled = true;
+    await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/assignments`, 'POST', payload);
+    editingTaskAssignmentId = null;
+    taskDetails.delete(taskId);
+    taskAgentCandidates.delete(taskId);
+    await loadTasks({ silent: true });
+    toast('任务分派已留痕。');
+  } catch (error) {
+    toast(`分派任务失败：${error.message}`, true);
+  } finally {
+    if (submit.isConnected) submit.disabled = false;
+  }
+}
+
 async function performTaskAction(taskId, action) {
   const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
   if (!task) return;
   if (action === 'detail') { await loadTaskDetail(taskId); return; }
   if (action === 'agent-candidates') { await loadTaskAgentCandidates(taskId); return; }
+  if (action === 'cancel-assign') { editingTaskAssignmentId = null; renderTaskCenter(); return; }
+  if (action === 'assign') {
+    if (!taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot).canAssign) { toast('当前会话无权分派该任务。', true); return; }
+    editingTaskAssignmentId = taskId;
+    renderTaskCenter();
+    return;
+  }
+  const capabilities = taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot);
+  const requiredCapability = {
+    accept: 'canAccept', start: 'canStart', evidence: 'canSupplementEvidence', result: 'canSubmitPendingResult', verify: 'canVerify',
+  }[action];
+  if (requiredCapability && !capabilities[requiredCapability]) { toast('当前会话无权更新该任务。', true); return; }
   let path = `/api/tasks/${encodeURIComponent(taskId)}`;
   let body;
-  if (action === 'assign') {
-    const assigneeRole = window.prompt('责任角色：', task.currentAssignee?.role || '');
-    if (!assigneeRole?.trim()) return;
-    const reason = window.prompt('分派/改派说明：', task.currentAssignee ? '根据当前事项调整责任角色。' : '指定责任角色跟进该任务。');
-    if (!reason?.trim()) return;
-    path += '/assignments'; body = { assigneeRole, reason };
-  } else if (action === 'accept' || action === 'start') {
+  if (action === 'accept' || action === 'start') {
     const reason = window.prompt(action === 'accept' ? '接受任务说明：' : '开始/恢复处理说明：', action === 'accept' ? '责任角色已接受该任务。' : '责任角色开始处理任务。');
     if (!reason?.trim()) return;
     path += '/transitions'; body = { toStatus: action === 'accept' ? 'ACCEPTED' : 'IN_PROGRESS', reason };
@@ -4217,6 +4852,7 @@ function connect() {
 
 function showLoginRequired(message = '') {
   authenticated = false;
+  authSession = null;
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
   if (ws) {
@@ -4247,6 +4883,7 @@ async function bootstrapAuthentication() {
     setLoginMode(session?.authMode);
     if (session?.authenticated === true) {
       authenticated = true;
+      authSession = session;
       showWorkspace(false);
       return;
     }
@@ -4331,12 +4968,51 @@ els.dailyQuestionForm.addEventListener('submit', saveDailyQuestions);
 els.dailyQuestionModal.addEventListener('mousedown', (event) => { if (event.target === els.dailyQuestionModal) closeDailyQuestionModal(); });
 els.btnCasesRefresh.addEventListener('click', () => loadOperatingCenter());
 els.btnTasksRefresh.addEventListener('click', () => loadTasks());
+els.btnG0Refresh.addEventListener('click', () => loadG0DecisionView());
+els.btnOpenG0Governance?.addEventListener('click', () => {
+  if (!g0ConfigEntryVisible(authSession)) return;
+  showView('g0-governance');
+});
+els.g0Form.addEventListener('submit', (event) => { void saveG0DecisionView(event); });
+els.btnPersonnelRefresh?.addEventListener('click', () => loadPersonnelAdminView());
+els.btnOpenPersonnelAdmin?.addEventListener('click', () => {
+  if (!personnelConfigEntryVisible(authSession, g0DecisionSnapshot)) return;
+  showView('personnel-admin');
+});
+els.personnelSearch?.addEventListener('input', () => loadPersonnelAdminView({ silent: true }));
+els.btnPersonnelCreate?.addEventListener('click', openPersonnelCreateModal);
+els.personnelCreateClose?.addEventListener('click', closePersonnelCreateModal);
+els.personnelCreateCancel?.addEventListener('click', closePersonnelCreateModal);
+els.personnelCreateForm?.addEventListener('submit', (event) => { void submitPersonnelCreate(event); });
+els.personnelCreateModal?.addEventListener('mousedown', (event) => { if (event.target === els.personnelCreateModal) closePersonnelCreateModal(); });
+els.personnelResetClose?.addEventListener('click', closePersonnelResetModal);
+els.personnelResetCancel?.addEventListener('click', closePersonnelResetModal);
+els.personnelResetForm?.addEventListener('submit', (event) => { void submitPersonnelReset(event); });
+els.personnelResetModal?.addEventListener('mousedown', (event) => { if (event.target === els.personnelResetModal) closePersonnelResetModal(); });
+els.personnelList?.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-personnel-toggle]');
+  if (toggle) { void togglePersonnelEnabled(toggle.dataset.userId, toggle.dataset.enabled === 'true'); return; }
+  const reset = event.target.closest('[data-personnel-reset]');
+  if (reset) { openPersonnelResetModal({ id: reset.dataset.userId, username: reset.dataset.username }); return; }
+  const roleSave = event.target.closest('[data-personnel-role-save]');
+  if (roleSave) { void savePersonnelRoles(roleSave.dataset.userId); return; }
+  const del = event.target.closest('[data-personnel-delete]');
+  if (del) { void deletePersonnelUser(del.dataset.userId, del.dataset.name); return; }
+});
+els.btnOpenPersonnelOnboarding?.addEventListener('click', () => {
+  if (!onboardingConfigEntryVisible(authSession, g0DecisionSnapshot)) return;
+  showView('personnel-onboarding');
+});
+els.btnOpenPersonnelAdminFromOnboarding?.addEventListener('click', () => showView('personnel-admin'));
+els.onboardingCreateForm?.addEventListener('submit', (event) => { void submitOnboardingCreate(event); });
+els.onboardingG0Form?.addEventListener('submit', (event) => { void submitOnboardingG0(event); });
 els.btnTaskCreate.addEventListener('click', () => { void createTaskFromCase().catch((error) => toast(`创建任务失败：${error.message}`, true)); });
 els.taskList.addEventListener('click', (event) => {
   const button = event.target.closest('[data-task-action]');
   if (!button) return;
   void performTaskAction(button.dataset.taskId, button.dataset.taskAction).catch((error) => toast(`更新任务失败：${error.message}`, true));
 });
+els.taskList.addEventListener('submit', (event) => { void submitTaskAssignment(event); });
 els.btnInboxRefresh.addEventListener('click', () => loadInbox());
 els.btnInboxReadAll?.addEventListener('click', () => { void markAllInboxRead(); });
 els.inboxSearch?.addEventListener('input', renderInbox);

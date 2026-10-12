@@ -31,6 +31,8 @@ import { AttentionSearchRequestSchema, searchLiveDashboard } from './attention-s
 import { operatingCenter } from './operating-center.ts';
 import { taskCenter } from './task-center.ts';
 import { TaskApi } from './task-api.ts';
+import { G0DecisionApi } from './g0-decision-api.ts';
+import { G0DecisionRegisterStore } from './g0-decision-register.ts';
 import { McpAccessGateway } from './mcp-access-gateway.ts';
 import { McpReadinessError, waitForReadOnlyMcpTools } from './mcp-readiness.ts';
 import { loadMcpRegistry } from './mcp-registry.ts';
@@ -70,6 +72,8 @@ import {
   usernameFromEnvironment,
 } from './web-auth.ts';
 import { M01OidcAuth, derivePostLogoutRedirectUri, readM01Config } from './auth/m01-oidc.ts';
+import { KeycloakPersonnelAdmin, readPersonnelAdminConfig } from './keycloak-personnel-admin.ts';
+import { PersonnelApi } from './personnel-api.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -129,7 +133,16 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // this policy boundary.  Chat-agent calls are constrained by the same registry
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
-const taskApi = new TaskApi({ operatingCenter, taskCenter, appendEvidence });
+const g0DecisionStore = new G0DecisionRegisterStore();
+const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence });
+const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
+const personnelAdminConfig = AUTH_MODE === 'm01'
+  ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)
+  : ({ enabled: false } as const);
+const personnelAdmin = personnelAdminConfig.enabled
+  ? new KeycloakPersonnelAdmin({ issuer: personnelAdminConfig.issuer, clientId: personnelAdminConfig.clientId, clientSecret: personnelAdminConfig.clientSecret })
+  : null;
+const personnelApi = new PersonnelApi({ admin: personnelAdmin, g0DecisionStore, appendEvidence });
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
@@ -1261,6 +1274,53 @@ const server = createServer(async (req, res) => {
   } catch {
     res.writeHead(400); res.end('bad request'); return;
   }
+  if (url.pathname === '/api/governance/g0-decisions') {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'PUT') {
+        try { body = await readJsonBody(req); }
+        catch { bodyParseFailed = true; }
+      }
+      const g0Response = g0DecisionApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        actor: requestActorContext,
+        body,
+        bodyParseFailed,
+      });
+      if (!g0Response) { sendJson(res, 404, { error: 'governance endpoint not found' }); }
+      else sendJson(res, g0Response.status, g0Response.body);
+    } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
+    return;
+  }
+  if (url.pathname.startsWith('/api/system/personnel/')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method !== 'GET') {
+        try { body = await readJsonBody(req); }
+        catch { bodyParseFailed = true; }
+      }
+      const personnelResponse = await personnelApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        actor: requestActorContext ? {
+          actorId: requestActorContext.actorId,
+          actorType: requestActorContext.actorType,
+          tenantId: requestActorContext.tenantId,
+          organizationId: requestActorContext.organizationId,
+          roles: requestActorContext.roles,
+        } : null,
+        body,
+        bodyParseFailed,
+        search: url.searchParams.get('search') ?? undefined,
+      });
+      if (!personnelResponse) { sendJson(res, 404, { error: 'personnel endpoint not found' }); }
+      else sendJson(res, personnelResponse.status, personnelResponse.body);
+    } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
+    return;
+  }
   if (url.pathname === '/api/harbor') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
@@ -1362,6 +1422,8 @@ const server = createServer(async (req, res) => {
           actorId: requestActorContext.actorId,
           actorType: requestActorContext.actorType,
           tenantId: requestActorContext.tenantId,
+          organizationId: requestActorContext.organizationId,
+          roles: requestActorContext.roles,
         } : null,
         body,
       });

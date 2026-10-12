@@ -42,3 +42,76 @@ export function taskInteractionPolicy(task) {
     allowsAgentSelfVerification: false,
   };
 }
+
+function hasRole(session, role) {
+  return Array.isArray(session?.roles) && session.roles.includes(role);
+}
+
+function isHumanSession(session) {
+  return session?.actorType === 'human' && typeof session?.actorId === 'string' && session.actorId.trim().length > 0;
+}
+
+/**
+ * G0 establishes the only browser-visible scope for G1 mutations. The server
+ * remains authoritative, but the UI must not invite requests that are known
+ * to fail when its governing decision is unavailable, incomplete, or scoped
+ * to a different M01 tenant or organization.
+ */
+export function g1TaskUiMutationGate(session, snapshot) {
+  if (!isHumanSession(session)) return { allowed: false, code: 'HUMAN_ACTOR_REQUIRED' };
+  if (!snapshot || typeof snapshot !== 'object') return { allowed: false, code: 'G0_DECISION_UNAVAILABLE' };
+  if (snapshot.readyForG1 !== true) return { allowed: false, code: 'G0_NOT_READY' };
+  const scope = snapshot.decisions?.scope?.value;
+  if (!scope || scope.demoTenantId !== session.tenantId || scope.organizationScope !== session.organizationId) {
+    return { allowed: false, code: 'G0_SCOPE_MISMATCH' };
+  }
+  return { allowed: true, code: 'ALLOWED' };
+}
+
+/**
+ * Browser-only projection of the G1 policy. This improves the task-center
+ * experience, but never replaces the server-side authorization boundary.
+ */
+export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g0Snapshot = null) {
+  const human = isHumanSession(session);
+  const gate = g1TaskUiMutationGate(session, g0Snapshot);
+  const manager = gate.allowed && human && hasRole(session, 'manager');
+  const operator = gate.allowed && human && hasRole(session, 'operator')
+    && task?.currentAssignee?.actorId === session.actorId;
+  const owner = gate.allowed && human && hasRole(session, 'owner')
+    && Boolean(registeredOwnerActorId)
+    && registeredOwnerActorId === session.actorId;
+  const policy = taskInteractionPolicy(task);
+
+  return {
+    canCreate: manager,
+    canAssign: manager && policy.canAssign,
+    canAccept: operator && task?.status === 'ASSIGNED',
+    canStart: operator && ['ACCEPTED', 'AWAITING_DECISION'].includes(task?.status),
+    canSupplementEvidence: operator && policy.canSupplementEvidence,
+    canSubmitPendingResult: operator && policy.canSubmitPendingResult,
+    canVerify: owner && policy.canVerify,
+    canReject: owner && policy.canVerify,
+    isReadOnly: !gate.allowed || (!manager && !operator && !owner),
+    mutationGate: gate.code,
+  };
+}
+
+export function canCreateTaskFromCase(session, operatingCase, g0Snapshot = null) {
+  return g1TaskUiMutationGate(session, g0Snapshot).allowed
+    && hasRole(session, 'manager')
+    && operatingCase?.source === 'order'
+    && Array.isArray(operatingCase.evidenceRefs)
+    && operatingCase.evidenceRefs.length > 0;
+}
+
+/** Keeps browser identity claims out of assignment requests. */
+export function buildTaskAssignmentPayload(fields) {
+  const assigneeRole = String(fields?.assigneeRole ?? '').trim();
+  const assigneeActorId = String(fields?.assigneeActorId ?? '').trim();
+  const reason = String(fields?.reason ?? '').trim();
+  if (!assigneeRole) throw new Error('请填写责任角色。');
+  if (!assigneeActorId) throw new Error('请填写目标 M01 actor ID。');
+  if (!reason) throw new Error('请填写分派说明。');
+  return { assigneeRole, assigneeActorId, reason };
+}

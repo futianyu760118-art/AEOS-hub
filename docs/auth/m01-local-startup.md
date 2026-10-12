@@ -1,6 +1,6 @@
 # M01 本机启动与停止
 
-本说明只针对本机 M01 演示环境：Hub 位于 `http://127.0.0.1:8790`，Keycloak 位于 `https://localhost:9443`。它不开放局域网访问，也不创建第二个数据库；账号、密码和身份数据仍由现有的 Keycloak PostgreSQL 容器管理。
+本说明保留给仅本机的 M01 演示环境。当前已配置的私有局域网演示环境请使用 [m01-lan-demo.md](m01-lan-demo.md)：Hub 位于 `https://aeos-hub.test:9444`，Keycloak 位于 `https://aeos-hub.test:9443`。账号、密码和身份数据仍由现有的 Keycloak PostgreSQL 容器管理，不创建第二个数据库。
 
 ## 使用前检查
 

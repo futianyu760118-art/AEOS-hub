@@ -1,10 +1,24 @@
-# The hostname is provided by deploy/m01/.env. This listens on container port 443;
-# Compose maps the configurable external port to it. Caddy's internal CA is
-# intentionally for local development only; trust its root certificate on the host.
+{
+    # Both private-LAN sites share this hostname certificate. A hostname avoids
+    # the missing-SNI handshake problem that occurs with browser IP literals.
+    default_sni {$M01_KEYCLOAK_EXTERNAL_HOSTNAME}
+}
+
+# Both externally reachable services terminate TLS here. Caddy's internal CA
+# must be trusted by every browser that participates in the private LAN demo.
+# Keycloak keeps Caddy's standard container HTTPS port 443. Compose maps the
+# configurable host port (9443 in this demo) to it.
 https://{$M01_KEYCLOAK_EXTERNAL_HOSTNAME} {
     tls internal
 
     # reverse_proxy supplies X-Forwarded-* headers. Keycloak accepts them because
     # KC_PROXY_HEADERS=xforwarded is set in docker-compose.yml.
     reverse_proxy keycloak:8080
+}
+
+# The Hub remains a host-side Node process. Docker Desktop resolves this name
+# to the Windows host; port 8790 is never published by Compose or firewall.
+https://{$M01_HUB_EXTERNAL_HOSTNAME}:{$M01_HUB_HTTPS_PORT} {
+    tls internal
+    reverse_proxy host.docker.internal:8790
 }

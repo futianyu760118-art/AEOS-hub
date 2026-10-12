@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -41,9 +41,9 @@ function createTask(store: TaskCenterStore) {
 }
 
 function assignAndStart(store: TaskCenterStore, taskId: string) {
-  store.assign({ taskId, assigneeRole: '订单交付负责人', actor: 'user:manager-01', reason: '指定责任角色' });
-  store.transition({ taskId, toStatus: 'ACCEPTED', actor: 'user:delivery-01', reason: '接受任务' });
-  return store.transition({ taskId, toStatus: 'IN_PROGRESS', actor: 'user:delivery-01', reason: '开始核查' });
+  store.assign({ taskId, assigneeRole: '订单交付负责人', assigneeActorId: 'm01:user:delivery-01', actor: 'user:manager-01', reason: '指定责任角色' });
+  store.transition({ taskId, toStatus: 'ACCEPTED', actor: 'm01:user:delivery-01', reason: '接受任务' });
+  return store.transition({ taskId, toStatus: 'IN_PROGRESS', actor: 'm01:user:delivery-01', reason: '开始核查' });
 }
 
 test('creates one evidence-bound task per open operating case and enforces the core state path', (t) => {
@@ -68,7 +68,7 @@ test('creates one evidence-bound task per open operating case and enforces the c
   const awaitingVerify = store.recordPendingResult({
     taskId: created.taskId,
     resultId: 'result-1001',
-    actor: 'agent:order-analysis',
+    actor: 'm01:user:delivery-01',
     reason: '已提交只读分析结果，等待业务核验',
     evidenceRefs: ['analysis:result-1001'],
   });
@@ -96,6 +96,7 @@ test('preserves reassignment and evidence history, requires escalation action, a
   const reassigned = store.assign({
     taskId: task.taskId,
     assigneeRole: '供应链负责人',
+    assigneeActorId: 'm01:user:supply-01',
     actor: 'user:manager-01',
     reason: '需要供应协同处理',
   });
@@ -106,7 +107,7 @@ test('preserves reassignment and evidence history, requires escalation action, a
   const supplemented = store.supplementEvidence({
     taskId: task.taskId,
     evidenceRefs: ['quality:QI-09', 'supplier:SUP-20'],
-    actor: 'user:manager-01',
+    actor: 'm01:user:supply-01',
     reason: '补充供应商证据',
   });
   assert.deepEqual(supplemented.evidenceRefs, ['order:SO-1001', 'quality:QI-09', 'supplier:SUP-20']);
@@ -125,9 +126,9 @@ test('preserves reassignment and evidence history, requires escalation action, a
   assert.equal(escalated.nextAction, '由供应链总监在今日 17:00 前确认供应优先级');
   assert.equal(escalated.currentAssignee?.role, '供应链负责人');
 
-  store.transition({ taskId: task.taskId, toStatus: 'IN_PROGRESS', actor: 'user:supply-01', reason: '协调结论已下达' });
+  store.transition({ taskId: task.taskId, toStatus: 'IN_PROGRESS', actor: 'm01:user:supply-01', reason: '协调结论已下达' });
   store.recordPendingResult({
-    taskId: task.taskId, resultId: 'result-1002', actor: 'agent:supply-analysis', reason: '等待业务负责人核验', evidenceRefs: ['analysis:result-1002'],
+    taskId: task.taskId, resultId: 'result-1002', actor: 'm01:user:supply-01', reason: '等待业务负责人核验', evidenceRefs: ['analysis:result-1002'],
   });
   assert.throws(
     () => store.verifyResult({
@@ -142,19 +143,85 @@ test('preserves reassignment and evidence history, requires escalation action, a
   assert.equal(rejected.currentAssignee?.role, '供应链负责人');
 });
 
+test('binds each assignment to a specific operator and rejects a role-only assignment', (t) => {
+  const store = fixture(t);
+  const task = createTask(store);
+
+  assert.throws(
+    () => store.assign({ taskId: task.taskId, assigneeRole: '订单交付负责人', actor: 'user:manager-01', reason: '缺少指定人员' }),
+    /assigneeActorId不能为空/,
+  );
+
+  const assigned = store.assign({
+    taskId: task.taskId,
+    assigneeRole: '订单交付负责人',
+    assigneeActorId: 'm01:user:delivery-01',
+    actor: 'user:manager-01',
+    reason: '指定具体经办人',
+  });
+  assert.deepEqual(assigned.currentAssignee, {
+    kind: 'responsibility_role',
+    role: '订单交付负责人',
+    actorId: 'm01:user:delivery-01',
+    assignedAt: FIXED_NOW,
+  });
+});
+
+test('migrates persisted role-only assignments to a safe unassigned state requiring reassignment', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'aeos-task-center-legacy-'));
+  const file = join(dir, 'data', 'task-center.json');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'data'));
+  writeFileSync(file, `${JSON.stringify({
+    version: 1,
+    revision: 4,
+    updatedAt: FIXED_NOW,
+    tasks: [{
+      taskId: 'task-legacy-01', tenantId: 'pilot-tenant', businessObjectRef: 'business://order/SO-1001',
+      caseId: 'case-order-1001', source: 'order', title: '历史订单风险', evidenceRefs: ['order:SO-1001'],
+      priority: 'high', dueAt: '2026-10-15', initiatedBy: 'user:manager-01',
+      currentAssignee: { kind: 'responsibility_role', role: '订单交付负责人', assignedAt: FIXED_NOW },
+      status: 'ASSIGNED', correlationId: 'corr-order-1001', nextAction: '等待责任角色接受任务', resultId: null,
+      createdAt: FIXED_NOW, updatedAt: FIXED_NOW,
+    }],
+    history: [{
+      eventId: 'task-event-legacy-01', taskId: 'task-legacy-01', eventType: 'assigned', fromStatus: 'DRAFT', toStatus: 'ASSIGNED',
+      actor: 'user:manager-01', reason: '历史分派', evidenceRefs: ['order:SO-1001'], occurredAt: FIXED_NOW,
+    }],
+  }, null, 2)}\n`, { encoding: 'utf8', flush: true });
+
+  const store = new TaskCenterStore({ file, clock: () => new Date(FIXED_NOW), tenantId: 'pilot-tenant' });
+  const migrated = store.load().tasks[0]!;
+
+  assert.equal(migrated.currentAssignee, null);
+  assert.equal(migrated.status, 'ASSIGNED');
+  assert.match(migrated.nextAction, /订单交付负责人/);
+  assert.match(migrated.nextAction, /重新分派/);
+  assert.equal(store.load().history[0]?.reason, '历史分派');
+  assert.throws(
+    () => store.transition({ taskId: migrated.taskId, toStatus: 'ACCEPTED', actor: 'm01:user:delivery-01', reason: '不能操作旧角色分派' }),
+    /尚未分派具体责任人/,
+  );
+  const reassigned = store.assign({
+    taskId: migrated.taskId, assigneeRole: '订单交付负责人', assigneeActorId: 'm01:user:delivery-01',
+    actor: 'm01:user:manager-01', reason: '迁移后重新分派',
+  });
+  assert.equal(reassigned.currentAssignee?.actorId, 'm01:user:delivery-01');
+});
+
 test('keeps the accountable role and next action visible when work fails', (t) => {
   const store = fixture(t);
   const task = createTask(store);
   assignAndStart(store, task.taskId);
 
   assert.throws(
-    () => store.transition({ taskId: task.taskId, toStatus: 'FAILED', actor: 'user:delivery-01', reason: '外部系统不可用' }),
+    () => store.transition({ taskId: task.taskId, toStatus: 'FAILED', actor: 'm01:user:delivery-01', reason: '外部系统不可用' }),
     /下一步动作/,
   );
   const failed = store.transition({
     taskId: task.taskId,
     toStatus: 'FAILED',
-    actor: 'user:delivery-01',
+    actor: 'm01:user:delivery-01',
     reason: '外部系统不可用',
     nextAction: '由信息中心在两个工作小时内恢复数据接口后重新发起任务',
   });
@@ -163,4 +230,74 @@ test('keeps the accountable role and next action visible when work fails', (t) =
   assert.equal(failed.currentAssignee?.role, '订单交付负责人');
   assert.equal(failed.nextAction, '由信息中心在两个工作小时内恢复数据接口后重新发起任务');
   assert.notEqual(failed.status, 'COMPLETED');
+});
+
+test('rejects malformed actorId values instead of treating them as legacy assignments', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'aeos-task-center-corrupt-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'data'));
+
+  for (const actorId of [null, ' ', 7]) {
+    const file = join(dir, 'data', `task-center-${String(actorId)}.json`);
+    writeFileSync(file, `${JSON.stringify({
+      version: 1, revision: 1, updatedAt: FIXED_NOW,
+      tasks: [{
+        taskId: `task-corrupt-${String(actorId)}`, tenantId: 'pilot-tenant', businessObjectRef: 'business://order/SO-1001',
+        caseId: 'case-order-1001', source: 'order', title: '损坏分派', evidenceRefs: ['order:SO-1001'], priority: 'high', dueAt: '2026-10-15',
+        initiatedBy: 'user:manager-01', currentAssignee: { kind: 'responsibility_role', role: '订单交付负责人', actorId, assignedAt: FIXED_NOW },
+        status: 'ASSIGNED', correlationId: 'corr-order-1001', nextAction: '等待处理', resultId: null, createdAt: FIXED_NOW, updatedAt: FIXED_NOW,
+      }],
+      history: [{ eventId: `event-corrupt-${String(actorId)}`, taskId: `task-corrupt-${String(actorId)}`, eventType: 'assigned', fromStatus: 'DRAFT', toStatus: 'ASSIGNED', actor: 'user:manager-01', reason: '损坏数据', evidenceRefs: ['order:SO-1001'], occurredAt: FIXED_NOW }],
+    })}\n`, { encoding: 'utf8', flush: true });
+    const store = new TaskCenterStore({ file, clock: () => new Date(FIXED_NOW), tenantId: 'pilot-tenant' });
+    assert.throws(() => store.load(), /任务中心 数据无效/);
+  }
+});
+
+test('binds operator transitions, evidence, and result submission to the assigned actor', (t) => {
+  const store = fixture(t);
+  const task = createTask(store);
+  store.assign({ taskId: task.taskId, assigneeRole: '订单交付负责人', assigneeActorId: 'm01:user:delivery-01', actor: 'm01:user:manager-01', reason: '指定经办人' });
+
+  assert.throws(
+    () => store.transition({ taskId: task.taskId, toStatus: 'ACCEPTED', actor: 'm01:user:operator-other', reason: '越权接受' }),
+    /只能由被分派的具体责任人操作/,
+  );
+  assert.throws(
+    () => store.transition({ taskId: task.taskId, toStatus: 'ACCEPTED', actor: 'agent:order-analysis', reason: 'Agent 不可接受' }),
+    /不能执行人工任务操作/,
+  );
+  store.transition({ taskId: task.taskId, toStatus: 'ACCEPTED', actor: 'm01:user:delivery-01', reason: '接受任务' });
+  store.transition({ taskId: task.taskId, toStatus: 'IN_PROGRESS', actor: 'm01:user:delivery-01', reason: '开始处理' });
+  assert.throws(
+    () => store.supplementEvidence({ taskId: task.taskId, evidenceRefs: ['analysis:other'], actor: 'm01:user:operator-other', reason: '越权补证' }),
+    /只能由被分派的具体责任人操作/,
+  );
+  assert.throws(
+    () => store.recordPendingResult({ taskId: task.taskId, resultId: 'result-other', actor: 'system:sync', reason: '系统不可提交', evidenceRefs: ['analysis:other'] }),
+    /不能执行人工任务操作/,
+  );
+});
+
+test('blocks every non-human identity format from human task execution and verification', (t) => {
+  const store = fixture(t);
+  const task = createTask(store);
+  store.assign({ taskId: task.taskId, assigneeRole: '订单交付负责人', assigneeActorId: 'service:sync', actor: 'm01:user:manager-01', reason: '错误分派服务账号' });
+  for (const actor of ['service:sync', 'm01:agent:order-analysis', 'm01:system:sync']) {
+    assert.throws(
+      () => store.transition({ taskId: task.taskId, toStatus: 'ACCEPTED', actor, reason: '非人工身份不可接受' }),
+      /不能执行人工任务操作/,
+    );
+  }
+
+  store.assign({ taskId: task.taskId, assigneeRole: '订单交付负责人', assigneeActorId: 'm01:user:delivery-01', actor: 'm01:user:manager-01', reason: '更正为人工经办人' });
+  store.transition({ taskId: task.taskId, toStatus: 'ACCEPTED', actor: 'm01:user:delivery-01', reason: '接受任务' });
+  store.transition({ taskId: task.taskId, toStatus: 'IN_PROGRESS', actor: 'm01:user:delivery-01', reason: '开始处理' });
+  store.recordPendingResult({ taskId: task.taskId, resultId: 'result-service', actor: 'm01:user:delivery-01', reason: '提交人工结果', evidenceRefs: ['analysis:service'] });
+  for (const actor of ['service:sync', 'm01:service:sync', 'm01:agent:order-analysis', 'm01:system:sync']) {
+    assert.throws(
+      () => store.verifyResult({ taskId: task.taskId, resultId: 'result-service', outcome: 'VERIFIED', actor, reason: '服务账号不可核验' }),
+      /不能核验/,
+    );
+  }
 });
