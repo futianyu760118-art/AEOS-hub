@@ -164,6 +164,7 @@ export class CodexRuntimeAdapter implements AgentRuntime {
     params.cwd = request.workingDirectory ?? this.startOptions.cwd;
     if (request.model !== undefined) params.model = request.model;
     if (request.modelProvider !== undefined) params.modelProvider = request.modelProvider;
+    if (request.developerInstructions !== undefined) params.developerInstructions = request.developerInstructions;
 
     const response = await client.request('thread/start', params);
     const session = this.sessionFromResponse(response, request.metadata, request.workingDirectory);
@@ -182,6 +183,7 @@ export class CodexRuntimeAdapter implements AgentRuntime {
     if (request.workingDirectory !== undefined) params.cwd = request.workingDirectory;
     if (request.model !== undefined) params.model = request.model;
     if (request.modelProvider !== undefined) params.modelProvider = request.modelProvider;
+    if (request.developerInstructions !== undefined) params.developerInstructions = request.developerInstructions;
 
     const response = await client.request('thread/resume', params);
     const existing = this.sessions.get(sessionId);

@@ -1,6 +1,7 @@
 import type { EvidenceInput } from './evidence.ts';
 import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
 import { recommendTaskAssignees, validateAgentAssignment } from './task-dispatch.ts';
+import { startAgentTaskRun, type AgentTaskRunDeps } from './agent-task-runner.ts';
 import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
 import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
@@ -27,6 +28,7 @@ type TaskApiDependencies = {
   appendEvidence: (input: EvidenceInput) => unknown;
   g0DecisionStore?: Pick<G0DecisionRegisterStore, 'load'>;
   loadHarbor?: () => HarborSnapshot;
+  resolveRuntime?: (runtimeId: string) => AgentTaskRunDeps['runtime'] | undefined;
   now?: () => Date;
 };
 
@@ -62,6 +64,19 @@ export class TaskApi {
     if (!request.actor) return { status: 401, body: { error: 'authentication required' } };
     try {
       return this.handleAuthorized({ ...request, actor: request.actor, body: request.body ?? {} });
+    } catch (error) {
+      const status = error instanceof TaskApiError ? error.status : 400;
+      return { status, body: { error: (error as Error).message } };
+    }
+  }
+
+  /** Async sibling of `handle` that only routes the Agent run endpoint. */
+  async handleAgentRun(request: TaskApiRequest): Promise<TaskApiResponse | null> {
+    if (!/^\/api\/tasks\/[^/]+\/agent-runs$/.test(request.pathname)) return null;
+    if (!request.actor) return { status: 401, body: { error: 'authentication required' } };
+    if (request.method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
+    try {
+      return await this.handleAgentRunAuthorized({ ...request, actor: request.actor, body: request.body ?? {} });
     } catch (error) {
       const status = error instanceof TaskApiError ? error.status : 400;
       return { status, body: { error: (error as Error).message } };
@@ -332,6 +347,90 @@ export class TaskApi {
     }
 
     throw new TaskApiError(404, 'task endpoint not found');
+  }
+
+  /**
+   * Runs a governed Agent task and folds the run outcome back into the task
+   * state machine. The Agent identity, instructions, and runtime are all
+   * resolved server-side from persisted data — the caller may only name a task.
+   */
+  private async handleAgentRunAuthorized(request: TaskApiRequest & { actor: TaskApiActor; body: Record<string, unknown> }): Promise<TaskApiResponse> {
+    const { actor } = request;
+    const match = request.pathname.match(/^\/api\/tasks\/([^/]+)\/agent-runs$/);
+    const taskId = decoded(match?.[1] ?? '');
+    if (!this.requireG1Scope(actor)) return this.denied(actor, 'agent_run', 'G0_SCOPE_REQUIRED');
+    const task = this.requireMutationTask(taskId, actor, 'agent_run');
+    if (task.currentAssignee?.kind !== 'agent') return this.denied(actor, 'agent_run', 'AGENT_ASSIGNMENT_REQUIRED', task);
+
+    const harbor = (this.dependencies.loadHarbor ?? loadHarbor)();
+    const assignee = task.currentAssignee;
+    const agent = assignee?.kind === 'agent' ? harbor.agents.find((candidate) => candidate.id === assignee.agentId) : undefined;
+    if (!agent) return this.denied(actor, 'agent_run', 'AGENT_NOT_FOUND', task);
+
+    const runtimeId = agent.runtimeId;
+    if (!runtimeId) return this.denied(actor, 'agent_run', 'RUNTIME_NOT_BOUND', task);
+    const runtime = this.dependencies.resolveRuntime?.(runtimeId);
+    if (!runtime) return this.denied(actor, 'agent_run', 'RUNTIME_NOT_FOUND', task);
+
+    const evaluatedAt = (this.dependencies.now ?? (() => new Date()))().toISOString();
+    const taskType = controlledTaskTypeForM04Task(task);
+    const harborRuntime = harbor.runtimes.find((candidate) => candidate.id === runtimeId) ?? null;
+    const eligibility = evaluateAgentTaskEligibility({ taskId: task.taskId, tenantId: task.tenantId, taskType, agent, runtime: harborRuntime, evaluatedAt });
+    if (!eligibility.eligible) return this.denied(actor, 'agent_run', 'AGENT_INELIGIBLE', task);
+
+    const run = await startAgentTaskRun(
+      {
+        taskId: task.taskId,
+        correlationId: task.correlationId,
+        title: task.title,
+        businessObjectRef: task.businessObjectRef,
+        evidenceRefs: task.evidenceRefs,
+      },
+      {
+        id: agent.id,
+        name: agent.name,
+        role: agent.role,
+        registration: {
+          allowedRuntimeCapabilities: agent.registration.allowedRuntimeCapabilities,
+          taskServiceProfile: { dataFreshnessMinutes: agent.registration.taskServiceProfile.dataFreshnessMinutes },
+        },
+      },
+      { runtime, now: this.dependencies.now },
+    );
+
+    const outcome = run.outcome;
+    let resultId: string | undefined;
+    let evidenceRefs: string[] = task.evidenceRefs;
+    if (outcome.state === 'completed') {
+      const operatingCase = this.requireCase(task.caseId);
+      const result = this.dependencies.operatingCenter.createPendingResult({
+        caseId: operatingCase.id,
+        resultType: 'agent_analysis',
+        summary: `Agent「${agent.name}」完成分析：${task.title}`,
+        actor: actor.actorId,
+        tenantId: actor.tenantId,
+      });
+      resultId = result.result_id;
+      evidenceRefs = result.evidence_refs;
+    }
+    const reason = outcome.state === 'completed'
+      ? 'Agent 运行完成，等待业务 Owner 核验'
+      : outcome.state === 'failed' ? `Agent 运行失败：${outcome.reason}` : `Agent 运行需人工决策：${outcome.reason}`;
+    const nextAction = outcome.state === 'completed'
+      ? '等待业务 Owner 核验结果'
+      : outcome.state === 'failed' ? '请人工接管或重新派单' : outcome.reason;
+    const updated = this.dependencies.taskCenter.recordAgentRunOutcome({
+      taskId: task.taskId,
+      agentId: agent.id,
+      actor: actor.actorId,
+      reason,
+      outcome: outcome.state,
+      resultId,
+      evidenceRefs,
+      nextAction,
+    });
+    const auditStatus = this.audit(updated, actor, 'agent_task_run_recorded', resultId);
+    return { status: 200, body: { task: updated, run, resultId, committed: true, auditStatus } };
   }
 
   private method(actual: string | undefined, expected: string): void {

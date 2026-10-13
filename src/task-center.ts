@@ -594,6 +594,39 @@ export class TaskCenterStore {
     });
   }
 
+  /** Records a governed Agent run outcome without using the human-operator transition path. */
+  recordAgentRunOutcome(input: Record<string, unknown>): TaskRecord {
+    const taskId = requiredString(input, 'taskId', 'taskId', 160);
+    const agentId = requiredString(input, 'agentId', 'agentId', 160);
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const reason = requiredString(input, 'reason', 'reason', 1_000);
+    const outcome = input.outcome === 'completed' || input.outcome === 'failed' || input.outcome === 'awaiting_decision' ? input.outcome : null;
+    if (!outcome) throw new Error('outcome 只能是 completed、failed 或 awaiting_decision');
+    const refs = uniqueRefs(input.evidenceRefs);
+    return this.mutate((snapshot, occurredAt) => {
+      const task = this.findOpenTask(snapshot, taskId);
+      if (task.currentAssignee?.kind !== 'agent' || task.currentAssignee.agentId !== agentId) throw new Error('任务未分派给该 Agent');
+      if (task.resultId) throw new Error('任务已有待核验或已核验结果，不能重复提交');
+      const fromStatus = task.status;
+      const toStatus = outcome === 'completed' ? 'AWAITING_VERIFY' : outcome === 'failed' ? 'FAILED' : 'AWAITING_DECISION';
+      const nextAction = outcome === 'completed'
+        ? '等待业务 Owner 核验结果'
+        : requiredString(input, 'nextAction', '下一步动作', 500);
+      if (outcome === 'completed') {
+        task.resultId = requiredString(input, 'resultId', 'resultId', 160);
+        task.evidenceRefs = uniqueRefs([...task.evidenceRefs, ...refs]);
+      }
+      task.status = toStatus;
+      task.nextAction = nextAction;
+      task.updatedAt = occurredAt;
+      this.appendHistory(snapshot, task, {
+        eventType: outcome === 'completed' ? 'result_submitted' : outcome === 'failed' ? 'failed' : 'escalated',
+        fromStatus, toStatus, actor, reason, evidenceRefs: refs,
+      }, occurredAt);
+      return task;
+    });
+  }
+
   verifyResult(input: Record<string, unknown>): TaskRecord {
     const taskId = requiredString(input, 'taskId', 'taskId', 160);
     const resultId = requiredString(input, 'resultId', 'resultId', 160);

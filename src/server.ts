@@ -137,7 +137,7 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
 const g0DecisionStore = new G0DecisionRegisterStore();
-const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence });
+const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence, resolveRuntime: (runtimeId) => (runtimeId === CODEX_RUNTIME_ID ? codexRuntime : undefined) });
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)
@@ -1440,6 +1440,26 @@ const server = createServer(async (req, res) => {
       const snapshot = operatingCenter.load();
       sendJson(res, 200, { ...snapshot, unreadInboxCount: snapshot.inbox.filter((item) => item.state === 'unread').length });
     } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
+    return;
+  }
+  if (/^\/api\/tasks\/[^/]+\/agent-runs$/.test(url.pathname)) {
+    try {
+      const body = req.method === 'GET' ? {} : await readJsonBody(req);
+      const taskResponse = await taskApi.handleAgentRun({
+        method: req.method,
+        pathname: url.pathname,
+        actor: requestActorContext ? {
+          actorId: requestActorContext.actorId,
+          actorType: requestActorContext.actorType,
+          tenantId: requestActorContext.tenantId,
+          organizationId: requestActorContext.organizationId,
+          roles: requestActorContext.roles,
+        } : null,
+        body,
+      });
+      if (!taskResponse) { sendJson(res, 404, { error: 'task endpoint not found' }); }
+      else sendJson(res, taskResponse.status, taskResponse.body);
+    } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
   if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/') || url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/') || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(url.pathname)) {
