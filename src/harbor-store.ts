@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { validateActivationGate, validateLifecycleTransition } from './agent-lifecycle.ts';
 
 const AUTONOMY_LEVELS = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'] as const;
 const AGENT_HIERARCHY_LEVELS = ['L0', 'L1', 'L2', 'L3'] as const;
@@ -225,6 +226,17 @@ function addTimelineIssue(
   }
 }
 
+export const AgentLifecycleEventSchema = z.object({
+  eventId: z.string().trim().min(1).max(160),
+  agentId: identifierSchema,
+  from: AgentLifecycleSchema,
+  to: AgentLifecycleSchema,
+  actor: z.string().trim().min(1).max(160),
+  reason: z.string().trim().min(1).max(1_000),
+  occurredAt: timestampSchema,
+}).strict();
+export type AgentLifecycleEvent = z.infer<typeof AgentLifecycleEventSchema>;
+
 export const HarborSnapshotSchema = z.object({
   version: z.literal(1),
   revision: z.number().int().nonnegative().default(0),
@@ -232,6 +244,7 @@ export const HarborSnapshotSchema = z.object({
   runtimes: z.array(HarborRuntimeSchema).max(1_000),
   projects: z.array(HarborProjectSchema).max(5_000),
   runs: z.array(HarborRunSchema).max(50_000),
+  lifecycleEvents: z.array(AgentLifecycleEventSchema).max(50_000).default([]),
 }).strict().superRefine((snapshot, ctx) => {
   addDuplicateIssues(snapshot.agents.map((agent) => agent.id), ctx, ['agents'], 'Agent id');
   addDuplicateIssues(snapshot.agents.map((agent) => agent.registration.code), ctx, ['agents'], 'Agent code');
@@ -756,6 +769,39 @@ export class HarborStore {
     });
   }
 
+  transitionAgentLifecycle(input: Record<string, unknown>): HarborAgent {
+    return this.mutate((snapshot) => {
+      const agentId = requiredText(input, 'agentId', 160);
+      const to = AgentLifecycleSchema.safeParse(input.to);
+      if (!to.success) throw new Error('目标生命周期无效');
+      const actor = requiredText(input, 'actor', 160);
+      const reason = requiredText(input, 'reason', 1_000);
+      const agent = snapshot.agents.find((candidate) => candidate.id === agentId);
+      if (!agent) throw new HarborStoreNotFoundError(`Agent 不存在: ${agentId}`);
+      const from = agent.registration.lifecycle;
+      const transition = validateLifecycleTransition(from, to.data);
+      if (transition.allowed === false) throw new Error(transition.reason);
+      if (to.data === 'active') {
+        const runtime = agent.runtimeId ? snapshot.runtimes.find((candidate) => candidate.id === agent.runtimeId) ?? null : null;
+        const gate = validateActivationGate(agent, runtime);
+        if (gate.allowed === false) throw new Error(`发布门禁未通过：${gate.reasons.join('；')}`);
+      }
+      const occurredAt = this.now();
+      agent.registration.lifecycle = to.data;
+      agent.updatedAt = occurredAt;
+      snapshot.lifecycleEvents.push(AgentLifecycleEventSchema.parse({
+        eventId: `lifecycle-${this.idFactory()}`,
+        agentId,
+        from,
+        to: to.data,
+        actor,
+        reason,
+        occurredAt,
+      }));
+      return agent;
+    });
+  }
+
   createProject(input: HarborProjectCreateInput): HarborProject {
     return this.mutate((snapshot) => {
       const timestamp = this.now();
@@ -1131,6 +1177,10 @@ export function createHarborAgent(input: HarborAgentCreateInput): HarborAgent {
 
 export function deleteHarborAgent(input: HarborAgentDeleteInput): HarborAgent {
   return defaultStore.deleteAgent(input);
+}
+
+export function transitionHarborAgentLifecycle(input: Record<string, unknown>): HarborAgent {
+  return defaultStore.transitionAgentLifecycle(input);
 }
 
 export function createHarborRuntime(input: HarborRuntimeCreateInput): HarborRuntime {

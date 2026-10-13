@@ -40,6 +40,7 @@ import {
   loadHarbor,
   createHarborAgent,
   deleteHarborAgent,
+  transitionHarborAgentLifecycle,
   createHarborRuntime,
   createHarborProject,
   recordHarborRuntimeVerification,
@@ -1624,6 +1625,21 @@ const server = createServer(async (req, res) => {
     } catch (error) {
       const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
       sendJson(res, status, { error: (error as Error).message, code: errorCode(error) });
+    }
+    return;
+  }
+  const harborLifecycleMatch = url.pathname.match(/^\/api\/harbor\/agents\/([^/]+)\/lifecycle$/);
+  if (harborLifecycleMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const agentId = decodeURIComponent(harborLifecycleMatch[1] ?? '').trim();
+      if (!agentId) throw new Error('Agent id 无效');
+      const input = await readJsonBody(req);
+      const item = transitionHarborAgentLifecycle({ agentId, to: input.to, reason: input.reason, actor: typeof input.actor === 'string' && input.actor.trim() ? input.actor.trim() : 'local-operator' });
+      sendJson(res, 200, { item });
+    } catch (error) {
+      const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
+      sendJson(res, status, { error: (error as Error).message });
     }
     return;
   }
