@@ -335,7 +335,7 @@
         </section>
 
         <section id="view-permission-admin" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">系统配置 / 权限管理</span><h1>权限管理</h1><p>维护 Hub 页面与能力资源树，以及每个资源允许授予的 create / read / update / delete 操作。</p></div><div class="page-actions"><button id="btn-permission-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button id="btn-permission-create" class="btn primary" type="button"><i data-lucide="plus"></i>新增顶级权限</button></div></div>
+          <div class="page-head"><div><span class="page-module">系统配置 / 权限管理</span><h1>权限管理</h1><p>维护 Hub 页面与能力资源树，以及每个资源允许授予的 新增 / 查看 / 编辑 / 删除 操作。</p></div><div class="page-actions"><button id="btn-permission-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button id="btn-permission-create" class="btn primary" type="button"><i data-lucide="plus"></i>新增顶级权限</button></div></div>
           <div id="permission-summary" class="form-hint"></div>
           <div id="permission-list" class="access-table-wrap"><div class="dashboard-loading">正在读取权限树…</div></div>
           <p id="permission-status" class="form-hint"></p>
@@ -618,7 +618,7 @@
         <label><span>路由（可选）</span><input id="permission-edit-route" maxlength="240" placeholder="/dashboard" /></label>
         <label><span>排序</span><input id="permission-edit-sort" type="number" min="0" max="10000" value="10" required /></label>
         <label class="access-inline-check"><input id="permission-edit-enabled" type="checkbox" checked /> 启用</label>
-        <fieldset class="wide"><legend>操作集</legend><div id="permission-edit-operations" class="personnel-role-picker"><label><input type="checkbox" value="create" /> create</label><label><input type="checkbox" value="read" checked /> read</label><label><input type="checkbox" value="update" /> update</label><label><input type="checkbox" value="delete" /> delete</label></div></fieldset>
+        <fieldset class="wide"><legend>操作集</legend><div id="permission-edit-operations" class="personnel-role-picker"><label><input type="checkbox" value="create" /> 新增</label><label><input type="checkbox" value="read" checked /> 查看</label><label><input type="checkbox" value="update" /> 编辑</label><label><input type="checkbox" value="delete" /> 删除</label></div></fieldset>
       </div><div class="modal-foot"><span id="permission-edit-status"></span><button id="permission-edit-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit">保存</button></div></form>
     </div>
   </div>

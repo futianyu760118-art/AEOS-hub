@@ -185,6 +185,7 @@ let registryFilter = { query: '', source: 'all', state: 'all' };
 let personnelUsers = [];
 let personnelTargetId = null;
 let accessRoles = [];
+const OPERATION_LABELS = { create: '新增', read: '查看', update: '编辑', delete: '删除' };
 let accessResources = [];
 let accessRoleTarget = null;
 let accessResourceTarget = null;
@@ -2954,6 +2955,7 @@ function personnelUserMarkup(user) {
     .map((role) => `<span class="role-badge role-badge-${esc(role)}">${esc(PERSONNEL_ROLE_LABELS[role] || roleMap.get(role)?.name || role)}</span>`)
     .join('');
   const roleChecks = accessRoles
+    .filter((role) => role.code !== 'owner')
     .map((role) => `<label class="personnel-role-check"><input type="checkbox" name="role" value="${esc(role.code)}" ${user.roles.includes(role.code) ? 'checked' : ''} data-user-role data-user-id="${esc(user.id)}" data-role="${esc(role.code)}" /> ${esc(PERSONNEL_ROLE_LABELS[role.code] || role.name || role.code)}</label>`)
     .join('');
   const oaMeta = user.identitySource === 'oa' ? ` · OA ${user.externalEmployeeId ? `<code>${esc(user.externalEmployeeId)}</code>` : '已同步'}${user.departmentName ? ` · ${esc(user.departmentName)}` : ''}${user.positionName ? ` / ${esc(user.positionName)}` : ''}` : ' · Hub 应急账号';
@@ -3213,7 +3215,7 @@ async function openRolePermissionModal(roleCode, roleName) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
     const grants = new Map((data.grants || []).map((grant) => [grant.resourceCode, grant.operations || []]));
-    els.rolePermissionGrid.innerHTML = flatAccessResources(accessResources).map((resource) => `<div class="access-grant-row" data-grant-resource="${esc(resource.code)}"><div class="access-grant-resource"><span class="access-indent" style="--depth:${resource.depth}"></span><b>${esc(resource.name)}</b> <code>${esc(resource.code)}</code></div>${['create', 'read', 'update', 'delete'].map((operation) => `<label><input type="checkbox" value="${operation}" ${resource.operations.includes(operation) ? '' : 'disabled'} ${grants.get(resource.code)?.includes(operation) ? 'checked' : ''} />${operation}</label>`).join('')}</div>`).join('');
+    els.rolePermissionGrid.innerHTML = flatAccessResources(accessResources).map((resource) => `<div class="access-grant-row" data-grant-resource="${esc(resource.code)}"><div class="access-grant-resource"><span class="access-indent" style="--depth:${resource.depth}"></span><b>${esc(resource.name)}</b> <code>${esc(resource.code)}</code></div>${['create', 'read', 'update', 'delete'].map((operation) => `<label><input type="checkbox" value="${operation}" ${resource.operations.includes(operation) ? '' : 'disabled'} ${grants.get(resource.code)?.includes(operation) ? 'checked' : ''} />${OPERATION_LABELS[operation] || operation}</label>`).join('')}</div>`).join('');
     els.rolePermissionStatus.textContent = '';
   } catch (error) { els.rolePermissionStatus.textContent = `读取失败：${error.message}`; }
 }
@@ -3243,7 +3245,7 @@ async function loadPermissionAdminView(options = {}) {
     const resources = visibleAccessResources(accessResources);
     els.permissionSummary.textContent = `共 ${allResources.length} 个权限节点 · 启用 ${allResources.filter((item) => item.enabled).length} · 停用 ${allResources.filter((item) => !item.enabled).length}`;
     els.permissionList.innerHTML = `<table class="access-table"><thead><tr><th>名称</th><th>编码</th><th>路由</th><th>操作集</th><th>排序</th><th>启用</th><th>操作</th></tr></thead><tbody>${resources.map((resource) => `<tr>
-      <td><span class="access-indent" style="--depth:${resource.depth}"></span>${resource.children?.length ? `<button class="icon-btn access-expand" type="button" data-permission-expand="${esc(resource.code)}" aria-label="展开或收起">${collapsedAccessResources.has(resource.code) ? '+' : '−'}</button>` : '<span class="access-expand-placeholder"></span>'}<b>${esc(resource.name)}</b></td><td><code class="access-code">${esc(resource.code)}</code></td><td>${resource.route ? `<code>${esc(resource.route)}</code>` : '—'}</td><td>${resource.operations.map((operation) => `<span class="access-op">${operation}</span>`).join('')}</td><td>${esc(resource.sort)}</td><td><button class="btn secondary compact" type="button" data-permission-toggle="${esc(resource.code)}">${resource.enabled ? '启用' : '停用'}</button></td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-permission-child="${esc(resource.code)}">子级</button><button class="btn secondary compact" type="button" data-permission-edit="${esc(resource.code)}">编辑</button><button class="btn danger compact" type="button" data-permission-delete="${esc(resource.code)}">删除</button></div></td>
+      <td><span class="access-indent" style="--depth:${resource.depth}"></span>${resource.children?.length ? `<button class="icon-btn access-expand" type="button" data-permission-expand="${esc(resource.code)}" aria-label="展开或收起">${collapsedAccessResources.has(resource.code) ? '+' : '−'}</button>` : '<span class="access-expand-placeholder"></span>'}<b>${esc(resource.name)}</b></td><td><code class="access-code">${esc(resource.code)}</code></td><td>${resource.route ? `<code>${esc(resource.route)}</code>` : '—'}</td><td>${resource.operations.map((operation) => `<span class="access-op">${OPERATION_LABELS[operation] || operation}</span>`).join('')}</td><td>${esc(resource.sort)}</td><td><button class="btn secondary compact" type="button" data-permission-toggle="${esc(resource.code)}">${resource.enabled ? '启用' : '停用'}</button></td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-permission-child="${esc(resource.code)}">子级</button><button class="btn secondary compact" type="button" data-permission-edit="${esc(resource.code)}">编辑</button><button class="btn danger compact" type="button" data-permission-delete="${esc(resource.code)}">删除</button></div></td>
     </tr>`).join('')}</tbody></table>`;
     els.permissionStatus.textContent = '删除父权限前须先删除其子级；删除权限会同步清理角色中的对应授权。';
     refreshIcons($('#view-permission-admin'));
