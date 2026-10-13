@@ -998,6 +998,8 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .project-workspace-layout { display: grid; grid-template-columns: minmax(0, 1fr) 255px; }
 .project-task-board { display: grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 8px; overflow-x: auto; padding: 10px; background: #f7f8fa; }
 .project-task-board .collaboration-column { min-width: 180px; min-height: 280px; }
+.project-empty-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; color: var(--text-3); text-align: center; }
+.project-empty-state p { margin: 0; font-size: 11px; }
 .project-detail-panel { border-left: 1px solid var(--line-subtle); background: #fff; padding: 14px; }
 .project-detail-panel h3 { margin: 0; color: var(--text-2); font-size: 13px; }
 .project-detail-panel dl { display: flex; flex-direction: column; gap: 9px; margin: 13px 0; }

@@ -3519,9 +3519,20 @@ function renderProjectWorkspace() {
   if (!project) { els.projectWorkspace.classList.add('hidden'); els.projectWorkspace.innerHTML = ''; return; }
   const display = projectDisplayState(project, taskCenterState.tasks || []);
   const tasks = (taskCenterState.tasks || []).filter((task) => task.projectId === project.projectId);
+  const boardBody = tasks.length
+    ? collaborationBoardGroups(tasks).map((column) => `<section class="collaboration-column"><header><span>${esc(column.label)}</span><b>${column.tasks.length}</b></header><div class="collaboration-column-body">${column.tasks.map((task) => renderCollaborationCard(task, true)).join('') || '<p class="empty-column">暂无任务</p>'}</div></section>`).join('')
+    : `<div class="project-empty-state"><p>此项目还没有协同任务。</p>${collaborationManager() ? `<button class="btn primary compact" data-project-new-task="${esc(project.projectId)}" type="button"><i data-lucide="plus"></i>在此项目新建任务</button>` : `<p class="empty-column">仅 manager 角色可新建协同任务。</p>`}</div>`;
   els.projectWorkspace.classList.remove('hidden');
-  els.projectWorkspace.innerHTML = `<section class="surface project-workspace-board"><div class="surface-head"><div><h2><i data-lucide="folder-open"></i>${esc(project.name)}</h2><p>${esc(project.description || '未填写项目描述')}</p></div><button class="btn ghost compact" data-project-close type="button">返回项目列表</button></div><div class="project-workspace-layout"><div class="project-task-board">${collaborationBoardGroups(tasks).map((column) => `<section class="collaboration-column"><header><span>${esc(column.label)}</span><b>${column.tasks.length}</b></header><div class="collaboration-column-body">${column.tasks.map((task) => renderCollaborationCard(task, true)).join('') || '<p class="empty-column">暂无任务</p>'}</div></section>`).join('')}</div><aside class="project-detail-panel"><h3>项目属性</h3><dl><div><dt>状态</dt><dd><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></dd></div><div><dt>优先级</dt><dd>${esc(project.priority)}</dd></div><div><dt>负责人</dt><dd>${esc(project.ownerActorId)}</dd></div><div><dt>成员</dt><dd>${esc((project.memberActorIds || []).join('、'))}</dd></div><div><dt>开始日期</dt><dd>${esc(project.startDate || '—')}</dd></div><div><dt>截止日期</dt><dd>${esc(project.dueDate || '—')}</dd></div></dl><div class="project-progress"><span>进度 ${display.progress.percent}%</span><i><b style="width:${display.progress.percent}%"></b></i><small>${display.progress.completed}/${display.progress.total} 项任务已完成</small></div>${collaborationManager() ? `<div class="project-detail-actions"><button class="btn secondary compact" data-project-edit="${esc(project.projectId)}" type="button">编辑属性</button><button class="btn secondary compact" data-project-status="IN_PROGRESS" data-project-id="${esc(project.projectId)}" type="button">设为进行中</button><button class="btn ghost compact" data-project-status="COMPLETED" data-project-id="${esc(project.projectId)}" type="button">标记完成</button></div>` : ''}</aside></div></section>`;
+  els.projectWorkspace.innerHTML = `<section class="surface project-workspace-board"><div class="surface-head"><div><h2><i data-lucide="folder-open"></i>${esc(project.name)}</h2><p>${esc(project.description || '未填写项目描述')}</p></div><button class="btn ghost compact" data-project-close type="button">返回项目列表</button></div><div class="project-workspace-layout"><div class="project-task-board">${boardBody}</div><aside class="project-detail-panel"><h3>项目属性</h3><dl><div><dt>状态</dt><dd><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></dd></div><div><dt>优先级</dt><dd>${esc(project.priority)}</dd></div><div><dt>负责人</dt><dd>${esc(project.ownerActorId)}</dd></div><div><dt>成员</dt><dd>${esc((project.memberActorIds || []).join('、'))}</dd></div><div><dt>开始日期</dt><dd>${esc(project.startDate || '—')}</dd></div><div><dt>截止日期</dt><dd>${esc(project.dueDate || '—')}</dd></div></dl><div class="project-progress"><span>进度 ${display.progress.percent}%</span><i><b style="width:${display.progress.percent}%"></b></i><small>${display.progress.completed}/${display.progress.total} 项任务已完成</small></div>${collaborationManager() ? `<div class="project-detail-actions"><button class="btn secondary compact" data-project-edit="${esc(project.projectId)}" type="button">编辑属性</button><button class="btn secondary compact" data-project-status="IN_PROGRESS" data-project-id="${esc(project.projectId)}" type="button">设为进行中</button><button class="btn ghost compact" data-project-status="COMPLETED" data-project-id="${esc(project.projectId)}" type="button">标记完成</button></div>` : ''}</aside></div></section>`;
   refreshIcons(els.projectWorkspace);
+}
+
+function openProjectTaskCreate(projectId) {
+  if (!collaborationManager()) { toast('只有 manager 人工账号可以创建协同任务。', true); return; }
+  showView('tasks');
+  els.manualTaskCreatePanel.classList.remove('hidden');
+  if (els.manualTaskProject) els.manualTaskProject.value = projectId;
+  els.manualTaskForm.elements.title.focus();
 }
 
 async function updateCollaborationTaskStatus(taskId, status) {
@@ -5514,6 +5525,8 @@ els.projectList?.addEventListener('click', (event) => {
   els.projectWorkspace.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 els.projectWorkspace?.addEventListener('click', (event) => {
+  const newTask = event.target.closest('[data-project-new-task]');
+  if (newTask) { openProjectTaskCreate(newTask.dataset.projectNewTask); return; }
   const close = event.target.closest('[data-project-close]');
   if (close) { selectedProjectId = null; renderProjectWorkspace(); return; }
   const status = event.target.closest('[data-project-status]');
