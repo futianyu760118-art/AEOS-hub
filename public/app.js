@@ -506,16 +506,28 @@ function initials(name) {
   return cleaned.slice(0, 1) || '管';
 }
 
+function m01RoleLabel(session) {
+  const roles = Array.isArray(session?.roles) ? session.roles : [];
+  for (const role of ['manager', 'supervisor', 'operator', 'owner']) {
+    if (roles.includes(role)) return PERSONNEL_ROLE_LABELS[role] || role;
+  }
+  return '已登录';
+}
+
 function applyProfile() {
+  const m01 = authSession?.authMode === 'm01';
   const profile = parseStored(STORAGE.profile, { name: '管理者', role: '决策责任人', avatar: '' });
-  els.sidebarUserName.textContent = profile.name || '管理者';
-  els.sidebarUserRole.textContent = profile.role || '决策责任人';
-  els.menuUserName.textContent = profile.name || '管理者';
-  els.menuUserRole.textContent = profile.role || '决策责任人';
-  const label = initials(profile.name);
+  const name = m01 ? 'M01 用户' : (profile.name || '管理者');
+  const role = m01 ? m01RoleLabel(authSession) : (profile.role || '决策责任人');
+  const avatarUrl = m01 ? '' : (profile.avatar || '');
+  els.sidebarUserName.textContent = name;
+  els.sidebarUserRole.textContent = role;
+  els.menuUserName.textContent = name;
+  els.menuUserRole.textContent = role;
+  const label = m01 ? role.slice(0, 1) : initials(profile.name);
   [els.sidebarAvatar, els.headerAvatar].forEach((avatar) => {
-    avatar.textContent = profile.avatar ? '' : label;
-    avatar.style.backgroundImage = profile.avatar ? `url("${String(profile.avatar).replace(/"/g, '%22')}")` : '';
+    avatar.textContent = avatarUrl ? '' : label;
+    avatar.style.backgroundImage = avatarUrl ? `url("${String(avatarUrl).replace(/"/g, '%22')}")` : '';
     avatar.style.backgroundSize = 'cover';
     avatar.style.backgroundPosition = 'center';
   });
