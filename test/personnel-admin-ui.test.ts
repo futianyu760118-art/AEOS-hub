@@ -71,8 +71,8 @@ test('keeps browser identity and scope claims out of every request payload', () 
 });
 
 test('limits account creation to pilot roles but permits safe custom-role assignment', () => {
-  assert.deepEqual(PERSONNEL_PILOT_ROLES, ['manager', 'supervisor', 'operator', 'owner']);
-  assert.equal(personnelRolesAllowed(['manager', 'supervisor', 'operator', 'owner']), true);
+  assert.deepEqual(PERSONNEL_PILOT_ROLES, ['manager', 'supervisor', 'operator']);
+  assert.equal(personnelRolesAllowed(['manager', 'supervisor', 'operator']), true);
   assert.equal(personnelRolesAllowed(['realm-admin']), false);
   assert.equal(personnelRolesAllowed([]), false);
   assert.equal(personnelRolesAllowed('manager'), false);

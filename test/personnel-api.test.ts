@@ -274,7 +274,7 @@ test('onboarding creates G0-needed accounts in the session scope before G0 is re
   const response = await api.handle({
     method: 'POST', pathname: '/api/system/personnel/onboarding/users', actor: manager,
     body: {
-      username: 'zhangsan', temporaryPassword: 'onboard-pw', roles: ['owner'], firstName: '张三',
+      username: 'zhangsan', temporaryPassword: 'onboard-pw', roles: ['operator'], firstName: '张三',
       // Forged scope must be ignored.
       tenantId: 'forged-tenant', organizationId: 'forged-org', actorId: 'agent:forged',
     },

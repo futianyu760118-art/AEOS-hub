@@ -12,8 +12,8 @@ import type { DashboardRisk } from '../src/dashboard.ts';
 const manager: TaskApiActor = { actorId: 'm01:user:manager-01', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['manager'] };
 const operator: TaskApiActor = { actorId: 'm01:user:operator-01', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['operator'] };
 const otherOperator: TaskApiActor = { actorId: 'm01:user:operator-02', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['operator'] };
-const owner: TaskApiActor = { actorId: 'm01:user:owner-01', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['owner'] };
-const otherOwner: TaskApiActor = { actorId: 'm01:user:owner-02', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['owner'] };
+const owner: TaskApiActor = { actorId: 'm01:user:owner-01', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['supervisor'] };
+const otherOwner: TaskApiActor = { actorId: 'm01:user:owner-02', actorType: 'human', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['supervisor'] };
 const agent: TaskApiActor = { actorId: 'agent:delivery-analysis', actorType: 'agent', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['manager', 'operator', 'owner'] };
 const system: TaskApiActor = { actorId: 'system:delivery-analysis', actorType: 'system', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['owner'] };
 const service: TaskApiActor = { actorId: 'm01:service:delivery-analysis', actorType: 'service', tenantId: 'tenant-a', organizationId: 'org-a', roles: ['manager', 'operator', 'owner'] };
@@ -124,7 +124,7 @@ test('allows only the assigned human operator to accept, start, supplement evide
   assert.equal((result?.body as { task: { status: string } }).task.status, 'AWAITING_VERIFY');
 });
 
-test('permits only the G0-registered human owner with owner role to verify or reject', (t) => {
+test('permits only the G0-registered human supervisor to verify or reject', (t) => {
   const { api, evidence, operatingCase } = fixture(t);
   const created = post(api, `/api/operating-cases/${operatingCase.id}/tasks`, manager, { priority: 'high', reason: '建立闭环' });
   const taskId = (created?.body as { task: { taskId: string } }).task.taskId;

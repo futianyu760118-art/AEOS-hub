@@ -2,7 +2,7 @@
 // the System Configuration experience but never replaces the server-side
 // authorization boundary. It mirrors src/personnel-authorization.ts.
 
-export const PERSONNEL_PILOT_ROLES = ['manager', 'supervisor', 'operator', 'owner'];
+export const PERSONNEL_PILOT_ROLES = ['manager', 'supervisor', 'operator'];
 
 export const PERSONNEL_ROLE_LABELS = {
   manager: '总经理',
@@ -67,7 +67,7 @@ export function buildPersonnelCreateRequest(fields) {
   const roles = Array.isArray(fields?.roles) ? fields.roles : [];
   if (!username) throw new Error('请填写用户名。');
   if (!temporaryPassword) throw new Error('请填写临时密码。');
-  if (!personnelRolesAllowed(roles)) throw new Error('只能分配 manager、supervisor、operator、owner 四种角色。');
+  if (!personnelRolesAllowed(roles)) throw new Error('只能分配 manager、supervisor、operator 三种角色。');
   return {
     username,
     temporaryPassword,

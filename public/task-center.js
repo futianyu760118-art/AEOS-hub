@@ -84,7 +84,7 @@ export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g
   const manager = gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'supervisor'));
   const operator = gate.allowed && human && hasRole(session, 'operator')
     && task?.currentAssignee?.actorId === session.actorId;
-  const verifier = gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'supervisor') || hasRole(session, 'owner'))
+  const verifier = gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'supervisor'))
     && Boolean(registeredOwnerActorId)
     && registeredOwnerActorId === session.actorId;
   const policy = taskInteractionPolicy(task);

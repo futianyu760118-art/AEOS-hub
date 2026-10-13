@@ -66,7 +66,7 @@ export function authorizeTaskAction(input: TaskAuthorizationInput): Authorizatio
   }
 
   if (OWNER_ACTIONS.has(action)) {
-    if (!canManageBusiness(actor.roles) && !actor.roles.includes('owner')) return { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
+    if (!canManageBusiness(actor.roles)) return { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
     return input.registeredOwnerActorId?.trim() === actor.actorId
       ? { allowed: true, code: 'ALLOWED' }
       : { allowed: false, code: 'REGISTERED_OWNER_MISMATCH' };

@@ -61,15 +61,15 @@ test('projects operator actions only onto the assigned human actor', () => {
   assert.equal(other.canStart, false);
 });
 
-test('projects Owner verification only onto the registered Owner actor', () => {
+test('projects verification only onto the registered supervisor/manager actor', () => {
   const awaiting = { ...baseTask, status: 'AWAITING_VERIFY', resultId: 'result-01' };
-  const owner = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:owner-demo', roles: ['owner'] }, 'm01:user:owner-demo', g0Ready);
-  const wrongOwner = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:other-owner', roles: ['owner'] }, 'm01:user:owner-demo', g0Ready);
+  const verifier = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:supervisor-demo', roles: ['supervisor'] }, 'm01:user:supervisor-demo', g0Ready);
+  const wrongVerifier = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:other-supervisor', roles: ['supervisor'] }, 'm01:user:supervisor-demo', g0Ready);
 
-  assert.equal(owner.canVerify, true);
-  assert.equal(owner.canReject, true);
-  assert.equal(wrongOwner.canVerify, false);
-  assert.equal(wrongOwner.canReject, false);
+  assert.equal(verifier.canVerify, true);
+  assert.equal(verifier.canReject, true);
+  assert.equal(wrongVerifier.canVerify, false);
+  assert.equal(wrongVerifier.canReject, false);
 });
 
 test('keeps agent and system sessions read-only and only lets manager create an order task', () => {

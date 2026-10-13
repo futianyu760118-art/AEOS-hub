@@ -2936,7 +2936,7 @@ async function loadPersonnelAdminView(options = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
     personnelUsers = Array.isArray(data.users) ? data.users : [];
-    try { await loadAccessRoles(); } catch { accessRoles = ['manager', 'operator', 'owner'].map((code) => ({ code, name: PERSONNEL_ROLE_LABELS[code] || code, protected: true, userCount: 0, permissionCount: 0 })); }
+    try { await loadAccessRoles(); } catch { accessRoles = ['manager', 'supervisor', 'operator'].map((code) => ({ code, name: PERSONNEL_ROLE_LABELS[code] || code, protected: true, userCount: 0, permissionCount: 0 })); }
     renderPersonnelAdminView();
     return personnelUsers;
   } catch (error) {
@@ -2951,10 +2951,10 @@ function personnelUserMarkup(user) {
   const displayName = (user.firstName && user.lastName) ? `${user.firstName} ${user.lastName}` : (user.firstName || user.lastName || user.username);
   const roleMap = new Map(accessRoles.map((role) => [role.code, role]));
   const badges = user.roles
-    .map((role) => `<span class="role-badge role-badge-${esc(role)}">${esc(roleMap.get(role)?.name || PERSONNEL_ROLE_LABELS[role] || role)}</span>`)
+    .map((role) => `<span class="role-badge role-badge-${esc(role)}">${esc(PERSONNEL_ROLE_LABELS[role] || roleMap.get(role)?.name || role)}</span>`)
     .join('');
   const roleChecks = accessRoles
-    .map((role) => `<label class="personnel-role-check"><input type="checkbox" name="role" value="${esc(role.code)}" ${user.roles.includes(role.code) ? 'checked' : ''} data-user-role data-user-id="${esc(user.id)}" data-role="${esc(role.code)}" /> ${esc(role.name || PERSONNEL_ROLE_LABELS[role.code] || role.code)}</label>`)
+    .map((role) => `<label class="personnel-role-check"><input type="checkbox" name="role" value="${esc(role.code)}" ${user.roles.includes(role.code) ? 'checked' : ''} data-user-role data-user-id="${esc(user.id)}" data-role="${esc(role.code)}" /> ${esc(PERSONNEL_ROLE_LABELS[role.code] || role.name || role.code)}</label>`)
     .join('');
   const oaMeta = user.identitySource === 'oa' ? ` · OA ${user.externalEmployeeId ? `<code>${esc(user.externalEmployeeId)}</code>` : '已同步'}${user.departmentName ? ` · ${esc(user.departmentName)}` : ''}${user.positionName ? ` / ${esc(user.positionName)}` : ''}` : ' · Hub 应急账号';
   return `<div class="personnel-row" data-user-id="${esc(user.id)}">
@@ -3160,8 +3160,8 @@ async function loadRoleAdminView(options = {}) {
       ['角色总数', accessRoles.length], ['使用中', inUse], ['未使用', accessRoles.length - inUse], ['系统保护', protectedCount],
     ].map(([label, value]) => `<div class="access-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
     els.roleList.innerHTML = `<table class="access-table"><thead><tr><th>角色编码</th><th>角色名称</th><th>使用人数</th><th>权限概览</th><th>操作</th></tr></thead><tbody>${roles.map((role) => `<tr>
-      <td><code class="access-code">${esc(role.code)}</code></td><td><b>${esc(role.name)}</b>${role.protected ? ' <span class="status-pill neutral">系统保护</span>' : ''}${role.description ? `<div class="form-hint">${esc(role.description)}</div>` : ''}</td>
-      <td>${esc(role.userCount)} 人</td><td>${esc(role.permissionCount)} 个权限节点</td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-role-permission="${esc(role.code)}" data-role-name="${esc(role.name)}">权限</button><button class="btn danger compact" type="button" data-role-delete="${esc(role.code)}" data-role-name="${esc(role.name)}" ${role.protected || role.userCount > 0 ? 'disabled' : ''}>删除</button></div></td>
+      <td><code class="access-code">${esc(role.code)}</code></td><td><b>${esc(PERSONNEL_ROLE_LABELS[role.code] || role.name)}</b>${role.protected ? ' <span class="status-pill neutral">系统保护</span>' : ''}${role.description ? `<div class="form-hint">${esc(role.description)}</div>` : ''}</td>
+      <td>${esc(role.userCount)} 人</td><td>${esc(role.permissionCount)} 个权限节点</td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-role-permission="${esc(role.code)}" data-role-name="${esc(PERSONNEL_ROLE_LABELS[role.code] || role.name)}">权限</button><button class="btn danger compact" type="button" data-role-delete="${esc(role.code)}" data-role-name="${esc(PERSONNEL_ROLE_LABELS[role.code] || role.name)}" ${role.protected || role.userCount > 0 ? 'disabled' : ''}>删除</button></div></td>
     </tr>`).join('')}</tbody></table>`;
     els.roleStatus.textContent = `当前范围共 ${accessRoles.length} 个角色；保护角色和仍有用户的角色不可删除。`;
     refreshIcons($('#view-role-admin'));

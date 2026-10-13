@@ -1,6 +1,6 @@
 # 角色权限映射表（三级：总经理 / 主管 / 普通用户）
 
-> 状态：已确认（2026-10-13）· 待实现
+> 状态：已实现（2026-10-13）
 > 数据权威：角色分配与权限边界是 Hub/Keycloak 权威，不依赖 OA；OA 只同步显示名/部门/岗位等人员属性（见 `oa-identity-sync-contract.md`）。
 
 ## 1. 角色模型
@@ -61,7 +61,7 @@
 
 ## 5. 实现要点
 
-- **角色 code**：`manager` → 总经理、`operator` → 普通用户；新增 `supervisor`（主管）。`owner`/`analyst` 保留枚举但不再默认分配。
+- **角色 code**：`manager` → 总经理、`operator` → 普通用户；新增 `supervisor`（主管）。`owner` 已从可分配 pilot 角色移除（核验归 `manager`+`supervisor`）；`analyst` 保留登录准入但不参与分配。
 - **受保护角色**：`manager`、`operator` 维持 protected；`supervisor` 作为可分配 pilot 角色加入（待定是否 protected）。
 - **菜单级显隐**：新增 `viewVisibleForRole(view, session)`，在导航渲染与 `showView` 处按 §2 裁剪。
 - **动作级门禁**：现有 `collaborationManager()`（建/分派/核验）扩展到 `manager` + `supervisor`；用户/角色/权限管理仅 `manager`。

@@ -40,11 +40,11 @@ else
 fi
 test -n "$client_key"
 
-# The Hub can only assign roles which exist in the realm. Reconcile the four
+# The Hub can only assign roles which exist in the realm. Reconcile the three
 # protected pilot roles before the service account or the Hub manages users.
 # Do not alter an existing role: its membership and any Keycloak metadata stay
 # intact.
-for role in manager supervisor operator owner; do
+for role in manager supervisor operator; do
   if ! /opt/keycloak/bin/kcadm.sh get "roles/$role" -r aeos >/dev/null 2>&1; then
     /opt/keycloak/bin/kcadm.sh create roles -r aeos \
       -s "name=$role" \
