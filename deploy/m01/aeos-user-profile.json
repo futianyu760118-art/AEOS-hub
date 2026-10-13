@@ -1,0 +1,125 @@
+{
+  "unmanagedAttributePolicy": "ADMIN_EDIT",
+  "attributes": [
+    {
+      "name": "username",
+      "displayName": "${username}",
+      "permissions": {
+        "view": ["admin", "user"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "email",
+      "displayName": "${email}",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      },
+      "validations": {
+        "email": {},
+        "length": {
+          "max": 320
+        }
+      }
+    },
+    {
+      "name": "firstName",
+      "displayName": "${firstName}",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      },
+      "validations": {
+        "length": {
+          "max": 320
+        }
+      }
+    },
+    {
+      "name": "lastName",
+      "displayName": "${lastName}",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      },
+      "validations": {
+        "length": {
+          "max": 320
+        }
+      }
+    },
+    {
+      "name": "tenant_id",
+      "displayName": "租户范围",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "organization_id",
+      "displayName": "组织范围",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "external_employee_id",
+      "displayName": "OA 人员唯一标识",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "department_id",
+      "displayName": "部门标识",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "department_name",
+      "displayName": "部门名称",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "position_code",
+      "displayName": "岗位编码",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "position_name",
+      "displayName": "岗位名称",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "identity_source",
+      "displayName": "身份来源",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    },
+    {
+      "name": "last_synced_at",
+      "displayName": "最近同步时间",
+      "permissions": {
+        "view": ["admin"],
+        "edit": ["admin"]
+      }
+    }
+  ]
+}

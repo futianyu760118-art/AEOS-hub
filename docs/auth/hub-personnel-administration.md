@@ -26,8 +26,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/provision-m01-person
 该脚本只会：
 
 - 创建或收敛机密客户端 `aeos-hub-personnel-admin`（`serviceAccountsEnabled=true`、`publicClient=false`、关闭标准流/直连授权）；
+- 确保 `manager`、`operator`、`owner` 三个保护角色存在；已有角色的成员和 Keycloak 元数据不受影响；
 - 写入 `deploy/m01/.env` 中被忽略的 `M01_PERSONNEL_ADMIN_CLIENT_SECRET`；
 - 授予其服务账号 `query-users`、`manage-users`、`view-realm`、`manage-realm`；其中 `manage-realm` 仅用于 Hub 业务角色生命周期，绝不授予 `realm-admin`。
+- 收敛 `aeos` Realm 的 Employee User Profile：邮箱、姓名、租户、组织、部门、岗位和 OA 同步属性均作为**显式声明的管理员/API 专用字段**维护；员工首次登录只需修改临时密码，不能查看或修改这些系统属性。
 
 它**不会**创建业务用户、修改浏览器 OIDC 客户端 `aeos-hub-web`、授予 `realm-admin`。
 
@@ -46,7 +48,7 @@ M01_PERSONNEL_ADMIN_ENABLED=1
 在 Hub 进入「系统配置」：
 
 - **查询**：按用户名搜索当前 G0 试点租户 + 组织范围内的用户。
-- **创建**：设置用户名 + 临时密码（必填，强制 `temporary`）与 `manager/operator/owner` 角色；租户/组织固定为当前 G0 scope。
+- **创建**：设置用户名 + 临时密码（必填，强制 `temporary`）与 `manager/operator/owner` 角色；租户/组织固定为当前 G0 scope。员工首次登录只会进入“修改密码”，不会填写租户、组织或姓名等系统属性。
 - **启用/停用**：停用需二次确认。
 - **用户管理**：查询、应急创建、启停、角色分配与临时密码重置；OA 来源的人员字段只读，OA 用户不可在 Hub 删除。
 - **角色管理**：新增自定义业务角色，逐角色配置权限，删除未使用且非保护的角色。

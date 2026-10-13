@@ -77,7 +77,7 @@ $needsSecret = [string]::IsNullOrWhiteSpace($existingSecret) -or $existingSecret
 $secretAction = if ($needsSecret) { 'generate a new secret and write it to deploy/m01/.env' } else { 'reuse the existing secret in deploy/m01/.env' }
 
 if ($WhatIfPreference) {
-  Write-Output "WhatIf: would reconcile Keycloak confidential client '$clientId' (service accounts enabled; realm-management roles: query-users, manage-users, view-realm, manage-realm; never realm-admin) and would $secretAction. No secret value is printed."
+  Write-Output "WhatIf: would reconcile Keycloak confidential client '$clientId', ensure protected roles manager/operator/owner exist, reconcile the employee User Profile so system-managed attributes stay admin-only (service accounts enabled; realm-management roles: query-users, manage-users, view-realm, manage-realm; never realm-admin), and would $secretAction. No secret value is printed."
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Write-Output 'WhatIf: Docker Desktop is not available; no container command was run.' }
   return
 }
@@ -106,4 +106,4 @@ try {
   Pop-Location
 }
 
-Write-Output "Personnel admin client '$clientId' is provisioned. Enable the Hub console by setting M01_PERSONNEL_ADMIN_ENABLED=1 in deploy/m01/.env, then restart the Hub."
+Write-Output "Personnel admin client '$clientId', protected pilot roles, and employee User Profile are provisioned. Employee first sign-in only changes the temporary password; system-managed attributes stay admin-only. Enable the Hub console by setting M01_PERSONNEL_ADMIN_ENABLED=1 in deploy/m01/.env, then restart the Hub."

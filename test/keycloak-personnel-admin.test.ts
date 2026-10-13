@@ -137,6 +137,7 @@ test('createUser sends credentials and scope attributes but returns a redacted p
   assert.equal((posted[0] as Record<string, unknown>).username, 'newbie');
   assert.deepEqual((posted[0] as Record<string, unknown>).attributes, { tenant_id: ['demo-tenant'], organization_id: ['订单交付组'] });
   assert.deepEqual((posted[0] as Record<string, unknown>).credentials, [{ type: 'password', value: 's3cret-pw', temporary: true }]);
+  assert.deepEqual((posted[0] as Record<string, unknown>).requiredActions, ['UPDATE_PASSWORD']);
 
   assert.equal(user.actorId, 'm01:user:u9');
   assert.doesNotMatch(JSON.stringify(user), /s3cret-pw|attributes|credentials|access_token/);

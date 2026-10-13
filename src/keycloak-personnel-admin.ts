@@ -253,6 +253,10 @@ export class KeycloakPersonnelAdmin {
         [ORGANIZATION_ATTRIBUTE]: [scope.organizationScope],
       },
       credentials: [{ type: 'password', value: input.temporaryPassword, temporary: true }],
+      // Keep the employee journey comprehensible: the provisioning policy
+      // hides system-managed profile attributes, and the first sign-in only
+      // asks the employee to replace this temporary password.
+      requiredActions: ['UPDATE_PASSWORD'],
     };
     const response = await this.adminRequest('POST', '/users', { body });
     const location = response.location;

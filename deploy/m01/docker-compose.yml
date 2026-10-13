@@ -70,6 +70,7 @@ services:
     volumes:
       - ./configure-client.sh:/opt/aeos/configure-client.sh:ro
       - ./configure-personnel-admin.sh:/opt/aeos/configure-personnel-admin.sh:ro
+      - ./aeos-user-profile.json:/opt/aeos/aeos-user-profile.json:ro
 
   caddy:
     image: caddy:2.10.2-alpine

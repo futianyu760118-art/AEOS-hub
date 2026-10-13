@@ -40,6 +40,18 @@ else
 fi
 test -n "$client_key"
 
+# The Hub can only assign roles which exist in the realm. Reconcile the three
+# protected pilot roles before the service account or the Hub manages users.
+# Do not alter an existing role: its membership and any Keycloak metadata stay
+# intact.
+for role in manager operator owner; do
+  if ! /opt/keycloak/bin/kcadm.sh get "roles/$role" -r aeos >/dev/null 2>&1; then
+    /opt/keycloak/bin/kcadm.sh create roles -r aeos \
+      -s "name=$role" \
+      -s "description=AEOS Hub protected pilot role: $role" >/dev/null
+  fi
+done
+
 # Minimum built-in realm-management permissions for scoped user administration
 # and Hub business-role lifecycle. Never grant realm-admin.
 # role lookup. No realm-admin, no client/role/mapper/group management.
@@ -50,4 +62,12 @@ for role in query-users manage-users view-realm manage-realm; do
     --rolename "$role" >/dev/null
 done
 
-echo "personnel-admin client reconciled"
+# The employee-facing Account Console must not become a second source of truth
+# for tenant/organization/OA attributes. ADMIN_EDIT allows Hub and OA sync to
+# maintain unlisted attributes through the Admin API, while users cannot see or
+# edit them. The standard fields below are deliberately optional and admin-only.
+profile_file="/opt/aeos/aeos-user-profile.json"
+test -r "$profile_file"
+/opt/keycloak/bin/kcadm.sh update users/profile -r aeos -f "$profile_file" >/dev/null
+
+echo "personnel-admin client and employee user profile reconciled"

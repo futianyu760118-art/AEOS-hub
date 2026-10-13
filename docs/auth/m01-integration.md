@@ -33,13 +33,15 @@ PostgreSQL 与 Keycloak 均没有宿主机端口；只有 Caddy 的 `127.0.0.1:<
 2. 在 `aeos` 创建浏览器 Client **`aeos-hub-web`**：类型 confidential，启用 Client authentication 和 Standard Flow，token endpoint authentication method 为 **`client_secret_basic`**。关闭不需要的 implicit、direct grant、device 等 flow。
 3. 每个部署环境的 `Valid redirect URIs` 与 `Web origins` 必须精确匹配其 Hub：本地端到端开发只填写 `http://127.0.0.1:8787/api/auth/callback` 与 `http://127.0.0.1:8787`；生产/UAT 只填写 `https://<hub-host>/api/auth/callback` 与 `https://<hub-host>`。不得用 `*`、通配域或仅主机路径。不要在生产 Client 中保留本地 HTTP 地址。
 4. 为浏览器 Client 的专用 client scope 配置并加入 **ID token** 的 mapper：
-   - `tenant_id`：User Attribute mapper，claim 名称 `tenant_id`，单值；同时在 Realm User Profile 中把该属性设为必填。Hub 缺少或为空时会拒绝登录。
-   - `organization_id`：User Attribute mapper，claim 名称 `organization_id`，单值、可选；未设置时不要伪造值。
+   - `tenant_id`：User Attribute mapper，claim 名称 `tenant_id`，单值。Hub 缺少或为空时会拒绝登录；该属性由 Hub/OA 管理 API 写入，不能让员工在 Keycloak Account Console 编辑。
+   - `organization_id`：User Attribute mapper，claim 名称 `organization_id`，单值。该属性由 Hub/OA 管理 API 写入；未设置时不要伪造值，也不能让员工编辑。
    - `roles`：Realm Role mapper，claim 名称 `roles`，JSON 类型 `String`、multivalued；Hub 只读取顶层 `roles` 数组。每个进入 Hub 的用户至少须拥有一个与 `AEOS_M01_ALLOWED_ROLES` 相交的角色。
    - audience：Audience mapper，把 `aeos-hub-web` 加入 ID token 的 `aud`。本接入把 `M01_AUDIENCE` 设为同一值，Hub 会同时验证 client ID 与 audience。
 5. 仅对服务账号 Client 的专用 scope 添加 Hardcoded claim mapper：`aeos_actor_type=service`。不要把该 mapper 加到人类浏览器 Client；服务 token 还必须包含该 Client 的 `client_id` 或 `azp`、`tenant_id`、正确 audience 和最小 roles。
 
 每个智能体使用一个独立 Client + Service Account + 最小角色集合；禁止共享 browser Client secret、共享服务账号或授予 realm-admin。创建/修改 mapper 后取得一个 ID token，确认顶层 claims 与上述名称、类型完全一致，再允许 Hub 接入。
+
+对 M01 的人员管理开通，运行 `scripts/provision-m01-personnel-admin.ps1` 会将 Realm User Profile 收敛为 `ADMIN_EDIT`：未列出的自定义属性只能由管理员 API 写入，标准的邮箱和姓名也仅管理员可见/编辑且均非必填。因此员工首次登录只修改临时密码，不会看到或填写 `tenant_id`、`organization_id` 等系统范围字段。
 
 ## 3. Hub M01 环境变量与本地端到端开发
 

@@ -73,7 +73,9 @@ PowerShell 会要求确认。确认后，脚本会：
 1. 在 `deploy\m01\.env` 生成或复用服务客户端密钥；
 2. 只重建/启动 Keycloak 容器以读取该密钥；
 3. 在 Keycloak 中创建或更新 `aeos-hub-personnel-admin`；
-4. 为其服务账号授予 `query-users`、`manage-users`、`view-realm`、`manage-realm`；不授予 `realm-admin`。
+4. 确保 `manager`、`operator`、`owner` 三个 Hub 保护角色存在；
+5. 为其服务账号授予 `query-users`、`manage-users`、`view-realm`、`manage-realm`；不授予 `realm-admin`。
+6. 收敛员工 User Profile：员工不能查看或修改邮箱、姓名、租户、组织和 OA 同步属性；新账号首次登录只修改临时密码。
 
 成功后会提示将 `M01_PERSONNEL_ADMIN_ENABLED` 设为 `1`。不要复制、打印或查看生成的密钥值。
 
@@ -123,6 +125,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-m01-demo.ps1
 3. 打开“系统配置”，可以看到“用户管理”“角色管理”“权限管理”三个入口。
 4. 创建测试用户时，只能选择 `manager`、`operator`、`owner` 三种角色。
 5. 重置密码后，密码输入框会被清空；页面、审计记录和接口响应均不应显示该密码。
+6. 用新建账号登录时只会看到临时密码修改页面，不应看到“更新账户信息”或 `tenant_id`、`organization_id` 输入项。
 
 如果 G0 未就绪，或当前 manager 的租户/组织与 G0 scope 不一致，人员管理应保持不可用/只读。这是预期的安全行为。
 

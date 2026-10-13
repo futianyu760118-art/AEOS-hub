@@ -45,6 +45,9 @@ test('M01 hub runner admits manager/operator/owner roles and gates personnel adm
 
 test('personnel provisioning uses the ignored runtime file, requires confirmation, and never prints the secret', async () => {
   const script = await source('provision-m01-personnel-admin.ps1');
+  const profile = JSON.parse(await readFile(path.join(root, 'deploy', 'm01', 'aeos-user-profile.json'), 'utf8'));
+  const compose = await readFile(path.join(root, 'deploy', 'm01', 'docker-compose.yml'), 'utf8');
+  const config = await readFile(path.join(root, 'deploy', 'm01', 'configure-personnel-admin.sh'), 'utf8');
   assert.match(script, /deploy\\m01\\\.env/);
   assert.doesNotMatch(script, /\.env\.example/);
   assert.match(script, /SupportsShouldProcess = \$true/);
@@ -68,6 +71,20 @@ test('personnel provisioning uses the ignored runtime file, requires confirmatio
   assert.match(script, /BitConverter\]::ToString\(\$bytes\)\.Replace\('-', ''\)/);
   assert.doesNotMatch(script, /Convert\]::ToHexString/);
   assert.doesNotMatch(script, /Write-(?:Host|Output).*M01_PERSONNEL_ADMIN_CLIENT_SECRET/);
+  assert.match(compose, /aeos-user-profile\.json:\/opt\/aeos\/aeos-user-profile\.json:ro/);
+  assert.match(config, /update users\/profile -r aeos -f/);
+  assert.match(config, /for role in manager operator owner/);
+  assert.match(config, /kcadm\.sh create roles -r aeos/);
+  assert.equal(profile.unmanagedAttributePolicy, 'ADMIN_EDIT');
+  for (const name of [
+    'email', 'firstName', 'lastName', 'tenant_id', 'organization_id',
+    'external_employee_id', 'department_id', 'department_name',
+    'position_code', 'position_name', 'identity_source', 'last_synced_at',
+  ]) {
+    const attribute = profile.attributes.find((entry) => entry.name === name);
+    assert.deepEqual(attribute?.permissions, { view: ['admin'], edit: ['admin'] });
+    assert.equal(Object.hasOwn(attribute ?? {}, 'required'), false);
+  }
 });
 
 test('M01 shutdown script refuses unrelated listeners and preserves volumes', async () => {
