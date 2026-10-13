@@ -59,6 +59,13 @@ const els = {
   personnelResetModal: $('#personnel-reset-modal'), personnelResetClose: $('#personnel-reset-close'), personnelResetForm: $('#personnel-reset-form'),
   personnelResetTarget: $('#personnel-reset-target'), personnelResetPassword: $('#personnel-reset-password'), personnelResetStatus: $('#personnel-reset-status'),
   personnelResetCancel: $('#personnel-reset-cancel'), personnelResetSubmit: $('#personnel-reset-submit'),
+  roleConfigEntry: $('#role-config-entry'), permissionConfigEntry: $('#permission-config-entry'),
+  btnOpenRoleAdmin: $('#btn-open-role-admin'), btnOpenPermissionAdmin: $('#btn-open-permission-admin'),
+  btnRoleRefresh: $('#btn-role-refresh'), btnRoleCreate: $('#btn-role-create'), roleSearch: $('#role-search'), roleMetrics: $('#role-metrics'), roleList: $('#role-list'), roleStatus: $('#role-status'),
+  roleCreateModal: $('#role-create-modal'), roleCreateClose: $('#role-create-close'), roleCreateCancel: $('#role-create-cancel'), roleCreateForm: $('#role-create-form'), roleCreateCode: $('#role-create-code'), roleCreateName: $('#role-create-name'), roleCreateDescription: $('#role-create-description'), roleCreateStatus: $('#role-create-status'),
+  rolePermissionModal: $('#role-permission-modal'), rolePermissionClose: $('#role-permission-close'), rolePermissionCancel: $('#role-permission-cancel'), rolePermissionForm: $('#role-permission-form'), rolePermissionTitle: $('#role-permission-title'), rolePermissionGrid: $('#role-permission-grid'), rolePermissionStatus: $('#role-permission-status'),
+  btnPermissionRefresh: $('#btn-permission-refresh'), btnPermissionCreate: $('#btn-permission-create'), permissionSummary: $('#permission-summary'), permissionList: $('#permission-list'), permissionStatus: $('#permission-status'),
+  permissionEditModal: $('#permission-edit-modal'), permissionEditClose: $('#permission-edit-close'), permissionEditCancel: $('#permission-edit-cancel'), permissionEditForm: $('#permission-edit-form'), permissionEditTitle: $('#permission-edit-title'), permissionEditCode: $('#permission-edit-code'), permissionEditName: $('#permission-edit-name'), permissionEditParent: $('#permission-edit-parent'), permissionEditRoute: $('#permission-edit-route'), permissionEditSort: $('#permission-edit-sort'), permissionEditEnabled: $('#permission-edit-enabled'), permissionEditOperations: $('#permission-edit-operations'), permissionEditStatus: $('#permission-edit-status'),
   onboardingConfigEntry: $('#onboarding-config-entry'), btnOpenPersonnelOnboarding: $('#btn-open-personnel-onboarding'),
   btnOpenPersonnelAdminFromOnboarding: $('#btn-open-personnel-admin-from-onboarding'),
   onboardingCreateForm: $('#onboarding-create-form'), onboardingCreateRows: $('#onboarding-create-rows'), btnOnboardingCreate: $('#btn-onboarding-create'), onboardingCreateStatus: $('#onboarding-create-status'),
@@ -174,6 +181,11 @@ let attentionResultsDismissed = false;
 let registryFilter = { query: '', source: 'all', state: 'all' };
 let personnelUsers = [];
 let personnelTargetId = null;
+let accessRoles = [];
+let accessResources = [];
+let accessRoleTarget = null;
+let accessResourceTarget = null;
+const collapsedAccessResources = new Set();
 let onboardingUsers = [];
 // AI 港湾仅改变浏览层级；子 Agent 的身份、记忆、动作和绑定关系仍各自独立。
 const expandedHarborBusinessSquadIds = new Set();
@@ -261,7 +273,7 @@ const commands = [
 // Local experience review: keep the operating-center implementation intact
 // while temporarily removing its routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '人员与权限', 'personnel-onboarding': '首次人员开通' };
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -611,6 +623,8 @@ function showView(view, options = {}) {
   if (view === 'tasks') loadTasks();
   if (view === 'g0-governance') loadG0DecisionView();
   if (view === 'personnel-admin') loadPersonnelAdminView();
+  if (view === 'role-admin') loadRoleAdminView();
+  if (view === 'permission-admin') loadPermissionAdminView();
   if (view === 'personnel-onboarding') loadPersonnelOnboardingView();
   if (view === 'inbox') loadInbox();
   if (view === 'registry' || view === 'chat') loadCapabilityRegistry({ silent: view === 'chat' });
@@ -2705,7 +2719,10 @@ function syncG0GovernanceConfigEntry() {
 function personnelManagerCanManage() { return personnelConfigEntryVisible(authSession, g0DecisionSnapshot); }
 
 function syncPersonnelConfigEntry() {
-  els.personnelConfigEntry?.classList.toggle('hidden', !personnelConfigEntryVisible(authSession, g0DecisionSnapshot));
+  const hidden = !personnelConfigEntryVisible(authSession, g0DecisionSnapshot);
+  els.personnelConfigEntry?.classList.toggle('hidden', hidden);
+  els.roleConfigEntry?.classList.toggle('hidden', hidden);
+  els.permissionConfigEntry?.classList.toggle('hidden', hidden);
 }
 
 function onboardingManagerCanManage() { return onboardingConfigEntryVisible(authSession, g0DecisionSnapshot); }
@@ -2884,6 +2901,7 @@ async function loadPersonnelAdminView(options = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
     personnelUsers = Array.isArray(data.users) ? data.users : [];
+    try { await loadAccessRoles(); } catch { accessRoles = ['manager', 'operator', 'owner'].map((code) => ({ code, name: PERSONNEL_ROLE_LABELS[code] || code, protected: true, userCount: 0, permissionCount: 0 })); }
     renderPersonnelAdminView();
     return personnelUsers;
   } catch (error) {
@@ -2896,26 +2914,27 @@ async function loadPersonnelAdminView(options = {}) {
 
 function personnelUserMarkup(user) {
   const displayName = (user.firstName && user.lastName) ? `${user.firstName} ${user.lastName}` : (user.firstName || user.lastName || user.username);
-  const badges = ['manager', 'operator', 'owner']
-    .filter((role) => user.roles.includes(role))
-    .map((role) => `<span class="role-badge role-badge-${esc(role)}">${esc(PERSONNEL_ROLE_LABELS[role] || role)}</span>`)
+  const roleMap = new Map(accessRoles.map((role) => [role.code, role]));
+  const badges = user.roles
+    .map((role) => `<span class="role-badge role-badge-${esc(role)}">${esc(roleMap.get(role)?.name || PERSONNEL_ROLE_LABELS[role] || role)}</span>`)
     .join('');
-  const roleChecks = ['manager', 'operator', 'owner']
-    .map((role) => `<label class="personnel-role-check"><input type="checkbox" name="role" value="${esc(role)}" ${user.roles.includes(role) ? 'checked' : ''} data-user-role data-user-id="${esc(user.id)}" data-role="${esc(role)}" /> ${esc(PERSONNEL_ROLE_LABELS[role] || role)}</label>`)
+  const roleChecks = accessRoles
+    .map((role) => `<label class="personnel-role-check"><input type="checkbox" name="role" value="${esc(role.code)}" ${user.roles.includes(role.code) ? 'checked' : ''} data-user-role data-user-id="${esc(user.id)}" data-role="${esc(role.code)}" /> ${esc(role.name || PERSONNEL_ROLE_LABELS[role.code] || role.code)}</label>`)
     .join('');
+  const oaMeta = user.identitySource === 'oa' ? ` · OA ${user.externalEmployeeId ? `<code>${esc(user.externalEmployeeId)}</code>` : '已同步'}${user.departmentName ? ` · ${esc(user.departmentName)}` : ''}${user.positionName ? ` / ${esc(user.positionName)}` : ''}` : ' · Hub 应急账号';
   return `<div class="personnel-row" data-user-id="${esc(user.id)}">
     <div class="personnel-row-main">
       <b class="personnel-row-name">${esc(displayName)}</b>
       <span class="personnel-role-badges">${badges}</span>
       <span class="status-pill ${user.enabled ? 'ok' : 'danger'}">${user.enabled ? '已启用' : '已停用'}</span>
     </div>
-    <div class="personnel-row-meta">登录名 <code>${esc(user.username)}</code> · <code>${esc(user.actorId)}</code>${user.email ? ` · ${esc(user.email)}` : ''}</div>
+    <div class="personnel-row-meta">登录名 <code>${esc(user.username)}</code> · <code>${esc(user.actorId)}</code>${user.email ? ` · ${esc(user.email)}` : ''}${oaMeta}</div>
     <div class="personnel-row-actions">
       <span class="personnel-role-group">${roleChecks}</span>
       <button type="button" class="btn secondary compact" data-personnel-role-save data-user-id="${esc(user.id)}">保存角色</button>
       <button type="button" class="btn secondary compact" data-personnel-toggle data-user-id="${esc(user.id)}" data-enabled="${user.enabled ? 'false' : 'true'}">${user.enabled ? '停用' : '启用'}</button>
       <button type="button" class="btn secondary compact" data-personnel-reset data-user-id="${esc(user.id)}" data-username="${esc(user.username)}">重置密码</button>
-      <button type="button" class="btn danger compact" data-personnel-delete data-user-id="${esc(user.id)}" data-name="${esc(displayName)}">删除</button>
+      <button type="button" class="btn danger compact" data-personnel-delete data-user-id="${esc(user.id)}" data-name="${esc(displayName)}" ${user.identitySource === 'oa' ? 'disabled title="OA 同步用户不可在 Hub 删除"' : ''}>删除</button>
     </div>
   </div>`;
 }
@@ -3057,6 +3076,201 @@ async function deletePersonnelUser(userId, displayName) {
   } catch (error) {
     toast(`删除账号失败：${error.message}`, true);
   }
+}
+
+function flatAccessResources(resources = [], depth = 0, output = []) {
+  for (const resource of resources) {
+    output.push({ ...resource, depth });
+    flatAccessResources(resource.children || [], depth + 1, output);
+  }
+  return output;
+}
+
+function visibleAccessResources(resources = [], depth = 0, output = []) {
+  for (const resource of resources) {
+    output.push({ ...resource, depth });
+    if (!collapsedAccessResources.has(resource.code)) visibleAccessResources(resource.children || [], depth + 1, output);
+  }
+  return output;
+}
+
+async function loadAccessRoles() {
+  const response = await personnelApiRequest('/api/system/access-control/roles');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+  accessRoles = Array.isArray(data.roles) ? data.roles : [];
+  return accessRoles;
+}
+
+async function loadAccessResources() {
+  const response = await personnelApiRequest('/api/system/access-control/resources');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+  accessResources = Array.isArray(data.resources) ? data.resources : [];
+  return accessResources;
+}
+
+async function loadRoleAdminView(options = {}) {
+  if (!personnelManagerCanManage()) {
+    els.roleList.innerHTML = '<div class="dashboard-loading">仅当前 G0 范围内的 manager 可管理角色。</div>';
+    return;
+  }
+  try {
+    await loadAccessRoles();
+    const query = els.roleSearch.value.trim().toLowerCase();
+    const roles = accessRoles.filter((role) => !query || `${role.code} ${role.name}`.toLowerCase().includes(query));
+    const inUse = accessRoles.filter((role) => role.userCount > 0).length;
+    const protectedCount = accessRoles.filter((role) => role.protected).length;
+    els.roleMetrics.innerHTML = [
+      ['角色总数', accessRoles.length], ['使用中', inUse], ['未使用', accessRoles.length - inUse], ['系统保护', protectedCount],
+    ].map(([label, value]) => `<div class="access-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
+    els.roleList.innerHTML = `<table class="access-table"><thead><tr><th>角色编码</th><th>角色名称</th><th>使用人数</th><th>权限概览</th><th>操作</th></tr></thead><tbody>${roles.map((role) => `<tr>
+      <td><code class="access-code">${esc(role.code)}</code></td><td><b>${esc(role.name)}</b>${role.protected ? ' <span class="status-pill neutral">系统保护</span>' : ''}${role.description ? `<div class="form-hint">${esc(role.description)}</div>` : ''}</td>
+      <td>${esc(role.userCount)} 人</td><td>${esc(role.permissionCount)} 个权限节点</td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-role-permission="${esc(role.code)}" data-role-name="${esc(role.name)}">权限</button><button class="btn danger compact" type="button" data-role-delete="${esc(role.code)}" data-role-name="${esc(role.name)}" ${role.protected || role.userCount > 0 ? 'disabled' : ''}>删除</button></div></td>
+    </tr>`).join('')}</tbody></table>`;
+    els.roleStatus.textContent = `当前范围共 ${accessRoles.length} 个角色；保护角色和仍有用户的角色不可删除。`;
+    refreshIcons($('#view-role-admin'));
+  } catch (error) {
+    els.roleList.innerHTML = `<div class="dashboard-loading">角色加载失败：${esc(error.message)}</div>`;
+    if (!options.silent) toast(`角色加载失败：${error.message}`, true);
+  }
+}
+
+function openRoleCreateModal() {
+  els.roleCreateForm.reset();
+  els.roleCreateStatus.textContent = '';
+  els.roleCreateModal.classList.remove('hidden');
+}
+function closeRoleCreateModal() { els.roleCreateModal.classList.add('hidden'); }
+
+async function submitRoleCreate(event) {
+  event.preventDefault();
+  try {
+    els.roleCreateStatus.textContent = '正在创建角色…';
+    const response = await personnelApiRequest('/api/system/access-control/roles', 'POST', {
+      code: els.roleCreateCode.value.trim(), name: els.roleCreateName.value.trim(), description: els.roleCreateDescription.value.trim(),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    closeRoleCreateModal(); toast('角色已创建'); await loadRoleAdminView({ silent: true });
+  } catch (error) { els.roleCreateStatus.textContent = `创建失败：${error.message}`; }
+}
+
+async function deleteAccessRole(roleCode, roleName) {
+  if (!window.confirm(`确认删除角色「${roleName}」？`)) return;
+  try {
+    const response = await personnelApiRequest(`/api/system/access-control/roles/${encodeURIComponent(roleCode)}`, 'DELETE');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    toast('角色已删除'); await loadRoleAdminView({ silent: true });
+  } catch (error) { toast(`删除角色失败：${error.message}`, true); }
+}
+
+async function openRolePermissionModal(roleCode, roleName) {
+  accessRoleTarget = roleCode;
+  els.rolePermissionTitle.textContent = `配置权限 · ${roleName}`;
+  els.rolePermissionStatus.textContent = '正在读取权限…';
+  els.rolePermissionGrid.innerHTML = '';
+  els.rolePermissionModal.classList.remove('hidden');
+  try {
+    if (!accessResources.length) await loadAccessResources();
+    const response = await personnelApiRequest(`/api/system/access-control/roles/${encodeURIComponent(roleCode)}/permissions`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    const grants = new Map((data.grants || []).map((grant) => [grant.resourceCode, grant.operations || []]));
+    els.rolePermissionGrid.innerHTML = flatAccessResources(accessResources).map((resource) => `<div class="access-grant-row" data-grant-resource="${esc(resource.code)}"><div class="access-grant-resource"><span class="access-indent" style="--depth:${resource.depth}"></span><b>${esc(resource.name)}</b> <code>${esc(resource.code)}</code></div>${['create', 'read', 'update', 'delete'].map((operation) => `<label><input type="checkbox" value="${operation}" ${resource.operations.includes(operation) ? '' : 'disabled'} ${grants.get(resource.code)?.includes(operation) ? 'checked' : ''} />${operation}</label>`).join('')}</div>`).join('');
+    els.rolePermissionStatus.textContent = '';
+  } catch (error) { els.rolePermissionStatus.textContent = `读取失败：${error.message}`; }
+}
+function closeRolePermissionModal() { els.rolePermissionModal.classList.add('hidden'); accessRoleTarget = null; }
+
+async function submitRolePermissions(event) {
+  event.preventDefault();
+  if (!accessRoleTarget) return;
+  const grants = $$('[data-grant-resource]', els.rolePermissionGrid).map((row) => ({ resourceCode: row.dataset.grantResource, operations: $$('input:checked', row).map((input) => input.value) })).filter((grant) => grant.operations.length);
+  try {
+    els.rolePermissionStatus.textContent = '正在保存权限…';
+    const response = await personnelApiRequest(`/api/system/access-control/roles/${encodeURIComponent(accessRoleTarget)}/permissions`, 'PUT', { grants });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    closeRolePermissionModal(); toast('角色权限已保存'); await loadRoleAdminView({ silent: true });
+  } catch (error) { els.rolePermissionStatus.textContent = `保存失败：${error.message}`; }
+}
+
+async function loadPermissionAdminView(options = {}) {
+  if (!personnelManagerCanManage()) {
+    els.permissionList.innerHTML = '<div class="dashboard-loading">仅当前 G0 范围内的 manager 可管理权限。</div>';
+    return;
+  }
+  try {
+    await loadAccessResources();
+    const allResources = flatAccessResources(accessResources);
+    const resources = visibleAccessResources(accessResources);
+    els.permissionSummary.textContent = `共 ${allResources.length} 个权限节点 · 启用 ${allResources.filter((item) => item.enabled).length} · 停用 ${allResources.filter((item) => !item.enabled).length}`;
+    els.permissionList.innerHTML = `<table class="access-table"><thead><tr><th>名称</th><th>编码</th><th>路由</th><th>操作集</th><th>排序</th><th>启用</th><th>操作</th></tr></thead><tbody>${resources.map((resource) => `<tr>
+      <td><span class="access-indent" style="--depth:${resource.depth}"></span>${resource.children?.length ? `<button class="icon-btn access-expand" type="button" data-permission-expand="${esc(resource.code)}" aria-label="展开或收起">${collapsedAccessResources.has(resource.code) ? '+' : '−'}</button>` : '<span class="access-expand-placeholder"></span>'}<b>${esc(resource.name)}</b></td><td><code class="access-code">${esc(resource.code)}</code></td><td>${resource.route ? `<code>${esc(resource.route)}</code>` : '—'}</td><td>${resource.operations.map((operation) => `<span class="access-op">${operation}</span>`).join('')}</td><td>${esc(resource.sort)}</td><td><button class="btn secondary compact" type="button" data-permission-toggle="${esc(resource.code)}">${resource.enabled ? '启用' : '停用'}</button></td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-permission-child="${esc(resource.code)}">子级</button><button class="btn secondary compact" type="button" data-permission-edit="${esc(resource.code)}">编辑</button><button class="btn danger compact" type="button" data-permission-delete="${esc(resource.code)}">删除</button></div></td>
+    </tr>`).join('')}</tbody></table>`;
+    els.permissionStatus.textContent = '删除父权限前须先删除其子级；删除权限会同步清理角色中的对应授权。';
+    refreshIcons($('#view-permission-admin'));
+  } catch (error) {
+    els.permissionList.innerHTML = `<div class="dashboard-loading">权限加载失败：${esc(error.message)}</div>`;
+    if (!options.silent) toast(`权限加载失败：${error.message}`, true);
+  }
+}
+
+function openPermissionModal(resource = null, parentCode = '') {
+  accessResourceTarget = resource?.code || null;
+  els.permissionEditTitle.textContent = resource ? `编辑权限 · ${resource.name}` : (parentCode ? '新增子级权限' : '新增顶级权限');
+  els.permissionEditForm.reset();
+  const flat = flatAccessResources(accessResources);
+  els.permissionEditParent.innerHTML = '<option value="">顶级权限</option>' + flat.map((item) => `<option value="${esc(item.code)}">${'—'.repeat(item.depth)} ${esc(item.name)}</option>`).join('');
+  els.permissionEditCode.value = resource?.code || '';
+  els.permissionEditName.value = resource?.name || '';
+  els.permissionEditParent.value = parentCode || '';
+  els.permissionEditRoute.value = resource?.route || '';
+  els.permissionEditSort.value = String(resource?.sort ?? 10);
+  els.permissionEditEnabled.checked = resource?.enabled ?? true;
+  $$('input[type="checkbox"]', els.permissionEditOperations).forEach((input) => { input.checked = (resource?.operations || ['read']).includes(input.value); });
+  els.permissionEditCode.disabled = Boolean(resource);
+  els.permissionEditParent.disabled = Boolean(resource);
+  els.permissionEditStatus.textContent = '';
+  els.permissionEditModal.classList.remove('hidden');
+}
+function closePermissionModal() { els.permissionEditModal.classList.add('hidden'); accessResourceTarget = null; }
+
+async function submitPermission(event) {
+  event.preventDefault();
+  const body = { name: els.permissionEditName.value.trim(), route: els.permissionEditRoute.value.trim(), operations: $$('input:checked', els.permissionEditOperations).map((input) => input.value), sort: Number(els.permissionEditSort.value), enabled: els.permissionEditEnabled.checked };
+  if (!accessResourceTarget) { body.code = els.permissionEditCode.value.trim(); if (els.permissionEditParent.value) body.parentCode = els.permissionEditParent.value; }
+  try {
+    els.permissionEditStatus.textContent = '正在保存权限…';
+    const path = accessResourceTarget ? `/api/system/access-control/resources/${encodeURIComponent(accessResourceTarget)}` : '/api/system/access-control/resources';
+    const response = await personnelApiRequest(path, accessResourceTarget ? 'PATCH' : 'POST', body);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    closePermissionModal(); toast('权限已保存'); await loadPermissionAdminView({ silent: true });
+  } catch (error) { els.permissionEditStatus.textContent = `保存失败：${error.message}`; }
+}
+
+async function deleteAccessResource(resourceCode) {
+  if (!window.confirm(`确认删除权限「${resourceCode}」？`)) return;
+  try {
+    const response = await personnelApiRequest(`/api/system/access-control/resources/${encodeURIComponent(resourceCode)}`, 'DELETE');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    toast('权限已删除'); await loadPermissionAdminView({ silent: true });
+  } catch (error) { toast(`删除权限失败：${error.message}`, true); }
+}
+
+async function toggleAccessResource(resourceCode) {
+  const resource = flatAccessResources(accessResources).find((item) => item.code === resourceCode);
+  if (!resource) return;
+  try {
+    const response = await personnelApiRequest(`/api/system/access-control/resources/${encodeURIComponent(resourceCode)}`, 'PATCH', { name: resource.name, route: resource.route || '', operations: resource.operations, sort: resource.sort, enabled: !resource.enabled });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+    toast(`权限已${resource.enabled ? '停用' : '启用'}`); await loadPermissionAdminView({ silent: true });
+  } catch (error) { toast(`切换权限状态失败：${error.message}`, true); }
 }
 
 function g0ChoiceValue(choice, fallback = '') { return choice?.value ?? fallback; }
@@ -4979,6 +5193,43 @@ els.btnOpenPersonnelAdmin?.addEventListener('click', () => {
   if (!personnelConfigEntryVisible(authSession, g0DecisionSnapshot)) return;
   showView('personnel-admin');
 });
+els.btnOpenRoleAdmin?.addEventListener('click', () => { if (personnelManagerCanManage()) showView('role-admin'); });
+els.btnOpenPermissionAdmin?.addEventListener('click', () => { if (personnelManagerCanManage()) showView('permission-admin'); });
+els.btnRoleRefresh?.addEventListener('click', () => loadRoleAdminView());
+els.roleSearch?.addEventListener('input', () => loadRoleAdminView({ silent: true }));
+els.btnRoleCreate?.addEventListener('click', openRoleCreateModal);
+els.roleCreateClose?.addEventListener('click', closeRoleCreateModal);
+els.roleCreateCancel?.addEventListener('click', closeRoleCreateModal);
+els.roleCreateForm?.addEventListener('submit', (event) => { void submitRoleCreate(event); });
+els.roleCreateModal?.addEventListener('mousedown', (event) => { if (event.target === els.roleCreateModal) closeRoleCreateModal(); });
+els.roleList?.addEventListener('click', (event) => {
+  const permission = event.target.closest('[data-role-permission]');
+  if (permission) { void openRolePermissionModal(permission.dataset.rolePermission, permission.dataset.roleName); return; }
+  const del = event.target.closest('[data-role-delete]');
+  if (del) void deleteAccessRole(del.dataset.roleDelete, del.dataset.roleName);
+});
+els.rolePermissionClose?.addEventListener('click', closeRolePermissionModal);
+els.rolePermissionCancel?.addEventListener('click', closeRolePermissionModal);
+els.rolePermissionForm?.addEventListener('submit', (event) => { void submitRolePermissions(event); });
+els.rolePermissionModal?.addEventListener('mousedown', (event) => { if (event.target === els.rolePermissionModal) closeRolePermissionModal(); });
+els.btnPermissionRefresh?.addEventListener('click', () => loadPermissionAdminView());
+els.btnPermissionCreate?.addEventListener('click', () => openPermissionModal());
+els.permissionList?.addEventListener('click', (event) => {
+  const expand = event.target.closest('[data-permission-expand]');
+  if (expand) { const code = expand.dataset.permissionExpand; if (collapsedAccessResources.has(code)) collapsedAccessResources.delete(code); else collapsedAccessResources.add(code); void loadPermissionAdminView({ silent: true }); return; }
+  const toggle = event.target.closest('[data-permission-toggle]');
+  if (toggle) { void toggleAccessResource(toggle.dataset.permissionToggle); return; }
+  const child = event.target.closest('[data-permission-child]');
+  if (child) { openPermissionModal(null, child.dataset.permissionChild); return; }
+  const edit = event.target.closest('[data-permission-edit]');
+  if (edit) { const resource = flatAccessResources(accessResources).find((item) => item.code === edit.dataset.permissionEdit); if (resource) openPermissionModal(resource); return; }
+  const del = event.target.closest('[data-permission-delete]');
+  if (del) void deleteAccessResource(del.dataset.permissionDelete);
+});
+els.permissionEditClose?.addEventListener('click', closePermissionModal);
+els.permissionEditCancel?.addEventListener('click', closePermissionModal);
+els.permissionEditForm?.addEventListener('submit', (event) => { void submitPermission(event); });
+els.permissionEditModal?.addEventListener('mousedown', (event) => { if (event.target === els.permissionEditModal) closePermissionModal(); });
 els.personnelSearch?.addEventListener('input', () => loadPersonnelAdminView({ silent: true }));
 els.btnPersonnelCreate?.addEventListener('click', openPersonnelCreateModal);
 els.personnelCreateClose?.addEventListener('click', closePersonnelCreateModal);

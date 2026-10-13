@@ -365,6 +365,15 @@ test('actor context normalizes human claims and de-duplicates non-blank roles', 
   });
 });
 
+test('actor context projects only the current scope custom Keycloak role into its Hub role code', () => {
+  const tenant = 'tenant-a';
+  const organization = 'org-a';
+  const scoped = `hub__${Buffer.from(tenant).toString('base64url')}__${Buffer.from(organization).toString('base64url')}__quality_reviewer`;
+  const otherScope = `hub__${Buffer.from(tenant).toString('base64url')}__${Buffer.from('org-b').toString('base64url')}__quality_reviewer`;
+  const actor = normalizeActorContext({ sub: 'u1', tenant_id: tenant, organization_id: organization, roles: ['operator', scoped, otherScope] }, 'm01');
+  assert.deepEqual(actor.roles, ['operator', 'quality_reviewer']);
+});
+
 test('actor context maps service-account subjects to client-scoped service actors', () => {
   assert.deepEqual(normalizeActorContext({
     sub: 'service-account-sync', tenant_id: 'tenant-a', client_id: 'sync-service', roles: ['automation'],

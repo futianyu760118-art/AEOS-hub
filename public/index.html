@@ -314,15 +314,30 @@
         </section>
 
         <section id="view-personnel-admin" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">系统配置 / 人员与权限</span><h1>人员与权限</h1><p>Keycloak 仍是账号、密码、租户、组织与角色的唯一权威；此处仅在当前 G0 试点租户与组织范围内提供受约束的管理入口。</p></div><div class="page-actions"><button id="btn-personnel-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+          <div class="page-head"><div><span class="page-module">系统配置 / 用户管理</span><h1>用户管理</h1><p>OA 人员字段只读展示；Keycloak 负责登录凭据和账号状态，Hub 负责当前试点范围内的业务角色。</p></div><div class="page-actions"><button id="btn-personnel-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
           <div class="personnel-toolbar">
             <input id="personnel-search" class="input" type="search" placeholder="按用户名搜索…" aria-label="搜索用户" />
-            <button id="btn-personnel-create" class="btn primary" type="button"><i data-lucide="plus"></i>创建用户</button>
+            <button id="btn-personnel-create" class="btn primary" type="button"><i data-lucide="plus"></i>应急创建用户</button>
           </div>
           <span id="personnel-access" class="status-pill neutral">正在确认权限</span>
           <p id="personnel-list-count" class="form-hint"></p>
           <div id="personnel-list" class="personnel-list"><div class="dashboard-loading">正在读取试点范围内用户…</div></div>
           <p id="personnel-status" class="form-hint"></p>
+        </section>
+
+        <section id="view-role-admin" class="view app-view hidden">
+          <div class="page-head"><div><span class="page-module">系统配置 / 角色管理</span><h1>角色管理</h1><p>业务角色按当前租户与组织隔离；系统保护角色不可删除，每个角色均可独立配置权限。</p></div><div class="page-actions"><button id="btn-role-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button id="btn-role-create" class="btn primary" type="button"><i data-lucide="plus"></i>新增角色</button></div></div>
+          <div id="role-metrics" class="access-metrics"></div>
+          <div class="personnel-toolbar"><input id="role-search" class="input" type="search" placeholder="按角色编码或名称搜索…" aria-label="搜索角色" /></div>
+          <div id="role-list" class="access-table-wrap"><div class="dashboard-loading">正在读取角色…</div></div>
+          <p id="role-status" class="form-hint"></p>
+        </section>
+
+        <section id="view-permission-admin" class="view app-view hidden">
+          <div class="page-head"><div><span class="page-module">系统配置 / 权限管理</span><h1>权限管理</h1><p>维护 Hub 页面与能力资源树，以及每个资源允许授予的 create / read / update / delete 操作。</p></div><div class="page-actions"><button id="btn-permission-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button id="btn-permission-create" class="btn primary" type="button"><i data-lucide="plus"></i>新增顶级权限</button></div></div>
+          <div id="permission-summary" class="form-hint"></div>
+          <div id="permission-list" class="access-table-wrap"><div class="dashboard-loading">正在读取权限树…</div></div>
+          <p id="permission-status" class="form-hint"></p>
         </section>
 
         <section id="view-personnel-onboarding" class="view app-view hidden">
@@ -519,10 +534,16 @@
               <div class="surface-head"><div><h2 id="g0-config-entry-title">治理设置</h2><p>登记试点进入 G1 前的责任分工与准入决策；仅 manager 可维护。</p></div><button id="btn-open-g0-governance" class="btn secondary compact" type="button"><i data-lucide="clipboard-check"></i>打开 G0 决策登记</button></div>
             </section>
             <section id="personnel-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="personnel-config-entry-title">
-              <div class="surface-head"><div><h2 id="personnel-config-entry-title">人员与权限</h2><p>在试点租户与组织范围内查询、创建、启停与授权 manager/operator/owner；Keycloak 仍是账号与凭据的唯一权威。</p></div><button id="btn-open-personnel-admin" class="btn secondary compact" type="button"><i data-lucide="users-round"></i>打开人员与权限</button></div>
+              <div class="surface-head"><div><h2 id="personnel-config-entry-title">用户管理</h2><p>查看 OA 人员投影，管理登录状态、临时密码与业务角色；身份范围由服务端固定。</p></div><button id="btn-open-personnel-admin" class="btn secondary compact" type="button"><i data-lucide="users-round"></i>打开用户管理</button></div>
+            </section>
+            <section id="role-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="role-config-entry-title">
+              <div class="surface-head"><div><h2 id="role-config-entry-title">角色管理</h2><p>新增业务角色、查看使用人数、配置角色权限或删除未使用的非保护角色。</p></div><button id="btn-open-role-admin" class="btn secondary compact" type="button"><i data-lucide="shield-check"></i>打开角色管理</button></div>
+            </section>
+            <section id="permission-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="permission-config-entry-title">
+              <div class="surface-head"><div><h2 id="permission-config-entry-title">权限管理</h2><p>维护 Hub 权限资源树、路由、操作集、排序和启停状态。</p></div><button id="btn-open-permission-admin" class="btn secondary compact" type="button"><i data-lucide="key-round"></i>打开权限管理</button></div>
             </section>
             <section id="onboarding-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="onboarding-config-entry-title">
-              <div class="surface-head"><div><h2 id="onboarding-config-entry-title">首次人员开通</h2><p>在首个闭环就绪前，先创建 G0 所需的业务 Owner、核验人与操作员账号并完成决策登记；范围固定为当前认证会话的租户与组织。</p></div><button id="btn-open-personnel-onboarding" class="btn primary compact" type="button"><i data-lucide="user-plus"></i>开始首次开通</button></div>
+              <div class="surface-head"><div><h2 id="onboarding-config-entry-title">首次人员开通（应急）</h2><p>仅在尚未接入 OA 或 G0 未就绪时使用；OA 同步启用后不作为日常人员维护入口。</p></div><button id="btn-open-personnel-onboarding" class="btn primary compact" type="button"><i data-lucide="user-plus"></i>开始应急开通</button></div>
             </section>
             <section class="surface config-section"><div class="surface-head"><div><h2>默认模型</h2><p>修改后将重启本项目隔离目录内的 Codex Runtime</p></div><span id="cfg-status" class="config-status"></span></div><div class="form-grid"><label><span>模型提供商</span><select id="cfg-provider"></select></label><label><span>模型</span><input id="cfg-model" list="model-suggest" placeholder="留空使用账号默认模型" /><datalist id="model-suggest"><option value="gpt-5.1-codex"></option><option value="gpt-5.2-codex"></option><option value="gpt-5-codex"></option><option value="o3"></option><option value="o4-mini"></option></datalist></label></div><p id="cfg-provider-hint" class="form-hint"></p></section>
             <section class="surface config-section provider-section"><div class="surface-head"><div><h2>自定义提供商</h2><p>OpenAI 兼容网关 / 国内模型 · 密钥仅写入隔离目录</p></div><button id="btn-add-provider" class="btn secondary compact" type="button"><i data-lucide="plus"></i>添加提供商</button></div><div id="providers" class="providers"></div><p class="form-hint">当前 Codex 版本仅支持 <code>responses</code> 接口；可切换模型清单仅用于对话页选择。</p></section>
@@ -554,6 +575,39 @@
         <label class="wide"><span>业务 Agent 小队</span><select name="squadId" required><option value="">正在读取业务小队…</option></select><small class="field-note">子 Agent 的独立记忆与动作只归属于自身；业务小队另有独立协作记录。</small></label>
         <label class="wide"><span>AI 港湾 Agent</span><select name="harborAgentId" required><option value="">正在读取可用 Agent…</option></select><small class="field-note">一个 AI 港湾 Agent 在当前小队中只能绑定一次。</small></label>
       </div><div class="modal-foot"><span id="squad-form-status"></span><button id="squad-form-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit"><i data-lucide="check"></i><span>加入小队</span></button></div></form>
+    </div>
+  </div>
+
+  <div id="role-create-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="role-create-title">
+    <div class="modal-panel">
+      <div class="modal-head"><div><span>角色管理</span><h2 id="role-create-title">新增业务角色</h2><p>角色编码创建后不可修改，并自动限定在当前租户与组织。</p></div><button id="role-create-close" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <form id="role-create-form"><div class="modal-body personnel-form-grid">
+        <label><span>角色编码</span><input id="role-create-code" required maxlength="80" pattern="[a-z][a-z0-9_]{1,79}" placeholder="quality_reviewer" /></label>
+        <label><span>角色名称</span><input id="role-create-name" required maxlength="120" placeholder="质量复核人" /></label>
+        <label class="wide"><span>说明</span><input id="role-create-description" maxlength="320" placeholder="说明此角色的业务职责" /></label>
+      </div><div class="modal-foot"><span id="role-create-status"></span><button id="role-create-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit">创建</button></div></form>
+    </div>
+  </div>
+
+  <div id="role-permission-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="role-permission-title">
+    <div class="modal-panel access-modal-wide">
+      <div class="modal-head"><div><span>角色管理</span><h2 id="role-permission-title">配置角色权限</h2><p>勾选资源操作后，将整体替换该角色在当前范围内的权限。</p></div><button id="role-permission-close" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <form id="role-permission-form"><div id="role-permission-grid" class="modal-body access-grant-grid"></div><div class="modal-foot"><span id="role-permission-status"></span><button id="role-permission-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit">保存权限</button></div></form>
+    </div>
+  </div>
+
+  <div id="permission-edit-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="permission-edit-title">
+    <div class="modal-panel">
+      <div class="modal-head"><div><span>权限管理</span><h2 id="permission-edit-title">新增权限</h2><p>编码用于服务端授权匹配；编辑时编码和父节点保持不变。</p></div><button id="permission-edit-close" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <form id="permission-edit-form"><div class="modal-body personnel-form-grid">
+        <label><span>权限编码</span><input id="permission-edit-code" required maxlength="80" pattern="[a-z][a-z0-9_]{1,79}" /></label>
+        <label><span>权限名称</span><input id="permission-edit-name" required maxlength="80" /></label>
+        <label><span>父权限</span><select id="permission-edit-parent"><option value="">顶级权限</option></select></label>
+        <label><span>路由（可选）</span><input id="permission-edit-route" maxlength="240" placeholder="/dashboard" /></label>
+        <label><span>排序</span><input id="permission-edit-sort" type="number" min="0" max="10000" value="10" required /></label>
+        <label class="access-inline-check"><input id="permission-edit-enabled" type="checkbox" checked /> 启用</label>
+        <fieldset class="wide"><legend>操作集</legend><div id="permission-edit-operations" class="personnel-role-picker"><label><input type="checkbox" value="create" /> create</label><label><input type="checkbox" value="read" checked /> read</label><label><input type="checkbox" value="update" /> update</label><label><input type="checkbox" value="delete" /> delete</label></div></fieldset>
+      </div><div class="modal-foot"><span id="permission-edit-status"></span><button id="permission-edit-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit">保存</button></div></form>
     </div>
   </div>
 

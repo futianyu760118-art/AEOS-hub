@@ -40,9 +40,10 @@ else
 fi
 test -n "$client_key"
 
-# Minimum realm-management permissions: manage/query users plus read-only realm
+# Minimum built-in realm-management permissions for scoped user administration
+# and Hub business-role lifecycle. Never grant realm-admin.
 # role lookup. No realm-admin, no client/role/mapper/group management.
-for role in query-users manage-users view-realm; do
+for role in query-users manage-users view-realm manage-realm; do
   /opt/keycloak/bin/kcadm.sh add-roles -r aeos \
     --uusername "service-account-$client_id" \
     --cclientid realm-management \

@@ -239,3 +239,114 @@ test('readPersonnelAdminConfig disables unless the flag and a non-sentinel secre
   assert.equal(enabled.enabled, true);
   if (enabled.enabled) assert.equal(enabled.clientId, 'aeos-hub-personnel-admin');
 });
+
+test('projects only allow-listed OA identity attributes', async () => {
+  const source = rawUser('u-oa', 'zhangsan') as ReturnType<typeof rawUser> & { attributes: Record<string, string[]> };
+  source.attributes = {
+    ...source.attributes,
+    external_employee_id: ['OA-1001'],
+    department_id: ['D-10'],
+    department_name: ['销售部'],
+    position_code: ['P-20'],
+    position_name: ['业务主管'],
+    identity_source: ['oa'],
+    last_synced_at: ['2026-10-12T08:00:00.000Z'],
+    confidential_note: ['must-not-leak'],
+  };
+  const { fetch } = makeFetch((method, pathname) => {
+    if (pathname.endsWith('/protocol/openid-connect/token')) return response(200, { access_token: 'tok', expires_in: 300 });
+    if (pathname === '/admin/realms/aeos/users') return response(200, [source]);
+    if (pathname === '/admin/realms/aeos/users/u-oa/role-mappings/realm') return response(200, [{ id: 'r1', name: 'operator' }]);
+    return new Error(`unexpected ${method} ${pathname}`);
+  });
+  const admin = new KeycloakPersonnelAdmin({ issuer: ISSUER, clientId: 'c', clientSecret: 's' }, { fetch });
+  const [user] = await admin.listUsers(scope);
+  assert.equal(user?.externalEmployeeId, 'OA-1001');
+  assert.equal(user?.departmentName, '销售部');
+  assert.equal(user?.positionName, '业务主管');
+  assert.equal(user?.identitySource, 'oa');
+  assert.doesNotMatch(JSON.stringify(user), /confidential_note|must-not-leak/);
+});
+
+test('creates, lists and assigns a scope-isolated Hub role', async () => {
+  const physicalRole = `hub__${Buffer.from(scope.demoTenantId).toString('base64url')}__${Buffer.from(scope.organizationScope).toString('base64url')}__quality_reviewer`;
+  const postedRoles: unknown[] = [];
+  let mappingReads = 0;
+  const { fetch } = makeFetch((method, pathname, url, init) => {
+    if (pathname.endsWith('/protocol/openid-connect/token')) return response(200, { access_token: 'tok', expires_in: 300 });
+    if (pathname === '/admin/realms/aeos/roles' && method === 'POST') {
+      postedRoles.push(JSON.parse(String(init.body)));
+      return response(201, undefined);
+    }
+    if (pathname === '/admin/realms/aeos/roles') return response(200, [{
+      id: 'r-custom', name: physicalRole, description: '质量复核人',
+      attributes: { hub_display_name: ['质量复核人'], hub_description: ['复核订单质量风险'] },
+    }]);
+    if (pathname === '/admin/realms/aeos/users') return response(200, [rawUser('u1', 'op1')]);
+    if (pathname === '/admin/realms/aeos/users/u1') return response(200, rawUser('u1', 'op1'));
+    if (pathname === '/admin/realms/aeos/users/u1/role-mappings/realm') {
+      if (method === 'POST') return response(204, undefined);
+      mappingReads += 1;
+      return response(200, mappingReads < 3 ? [{ id: 'r-op', name: 'operator' }] : [{ id: 'r-custom', name: physicalRole }]);
+    }
+    if (pathname === `/admin/realms/aeos/roles/${physicalRole}`) return response(200, { id: 'r-custom', name: physicalRole });
+    return new Error(`unexpected ${method} ${pathname} ${url}`);
+  });
+  const admin = new KeycloakPersonnelAdmin({ issuer: ISSUER, clientId: 'c', clientSecret: 's' }, { fetch });
+  const created = await admin.createHubRole(scope, { code: 'quality_reviewer', name: '质量复核人', description: '复核订单质量风险' });
+  assert.equal(created.name, '质量复核人');
+  assert.equal(created.description, '复核订单质量风险');
+  assert.deepEqual((postedRoles[0] as Record<string, unknown>).attributes, {
+    hub_display_name: ['质量复核人'], hub_description: ['复核订单质量风险'],
+  });
+  const user = await admin.setHubRoles(scope, 'u1', ['quality_reviewer']);
+  assert.deepEqual(user.roles, ['quality_reviewer']);
+});
+
+test('upserts only OA-owned fields while preserving credentials, roles and unrelated attributes', async () => {
+  const existing = rawUser('u-oa', 'existing-login') as ReturnType<typeof rawUser> & { attributes: Record<string, string[]> };
+  existing.attributes = { ...existing.attributes, external_employee_id: ['E-100'], identity_source: ['oa'], local_note: ['keep-me'] };
+  const updated = structuredClone(existing);
+  updated.firstName = '张三';
+  updated.attributes = { ...existing.attributes, department_name: ['销售部'], position_name: ['业务主管'], last_synced_at: ['2026-10-12T09:00:00.000Z'] };
+  const writes: Record<string, unknown>[] = [];
+  const { fetch } = makeFetch((method, pathname, url, init) => {
+    if (pathname.endsWith('/protocol/openid-connect/token')) return response(200, { access_token: 'tok', expires_in: 300 });
+    if (pathname === '/admin/realms/aeos/users' && method === 'GET') {
+      assert.match(url.searchParams.get('q') || '', /external_employee_id:E-100/);
+      return response(200, [existing]);
+    }
+    if (pathname === '/admin/realms/aeos/users/u-oa' && method === 'PUT') { writes.push(JSON.parse(String(init.body))); return response(204, undefined); }
+    if (pathname === '/admin/realms/aeos/users/u-oa') return response(200, updated);
+    if (pathname === '/admin/realms/aeos/users/u-oa/role-mappings/realm') return response(200, [{ id: 'r-op', name: 'operator' }]);
+    return new Error(`unexpected ${method} ${pathname}`);
+  });
+  const admin = new KeycloakPersonnelAdmin({ issuer: ISSUER, clientId: 'c', clientSecret: 's' }, { fetch });
+  const user = await admin.upsertSyncedUser({
+    externalEmployeeId: 'E-100', displayName: '张三', tenantId: 'demo-tenant', organizationId: '订单交付组',
+    departmentName: '销售部', positionName: '业务主管', active: true, updatedAt: '2026-10-12T08:00:00.000Z',
+  });
+  assert.equal(writes[0]?.username, 'existing-login');
+  assert.equal(Object.hasOwn(writes[0] || {}, 'credentials'), false);
+  assert.deepEqual((writes[0]?.attributes as Record<string, unknown>).local_note, ['keep-me']);
+  assert.deepEqual(user.roles, ['operator']);
+});
+
+test('disables an OA user without deleting the account', async () => {
+  const source = rawUser('u-oa', 'existing-login') as ReturnType<typeof rawUser> & { attributes: Record<string, string[]> };
+  source.attributes = { ...source.attributes, external_employee_id: ['E-101'], identity_source: ['oa'] };
+  const methods: string[] = [];
+  const { fetch } = makeFetch((method, pathname) => {
+    if (pathname.endsWith('/protocol/openid-connect/token')) return response(200, { access_token: 'tok', expires_in: 300 });
+    if (pathname === '/admin/realms/aeos/users') return response(200, [source]);
+    if (pathname === '/admin/realms/aeos/users/u-oa' && method === 'PUT') { methods.push(method); source.enabled = false; return response(204, undefined); }
+    if (pathname === '/admin/realms/aeos/users/u-oa') return response(200, source);
+    if (pathname === '/admin/realms/aeos/users/u-oa/role-mappings/realm') return response(200, [{ id: 'r-op', name: 'operator' }]);
+    if (method === 'DELETE') methods.push(method);
+    return new Error(`unexpected ${method} ${pathname}`);
+  });
+  const admin = new KeycloakPersonnelAdmin({ issuer: ISSUER, clientId: 'c', clientSecret: 's' }, { fetch });
+  const user = await admin.disableSyncedUser('E-101', scope);
+  assert.equal(user.enabled, false);
+  assert.deepEqual(methods, ['PUT']);
+});

@@ -35,14 +35,22 @@ test('exposes personnel controls only to a human manager in the exact G0 scope',
   assert.equal(personnelUiGate(managerSession, { ...g0Ready, decisions: { firstScenario: null, scope: g0Ready.decisions.scope } }).code, 'G0_SCENARIO_MISMATCH');
 });
 
-test('is a manager-only System Configuration surface, not day-to-day navigation', () => {
-  assert.match(html, /id="personnel-config-entry"[\s\S]*打开人员与权限/);
+test('exposes three manager-only access-control modules under System Configuration', () => {
+  assert.match(html, /id="personnel-config-entry"[\s\S]*打开用户管理/);
+  assert.match(html, /id="role-config-entry"[\s\S]*打开角色管理/);
+  assert.match(html, /id="permission-config-entry"[\s\S]*打开权限管理/);
   assert.match(html, /id="personnel-config-entry"[^>]*\bhidden\b/);
   assert.match(html, /id="view-personnel-admin"/);
+  assert.match(html, /id="view-role-admin"/);
+  assert.match(html, /id="view-permission-admin"/);
   const navigation = html.slice(html.indexOf('<nav'), html.indexOf('</nav>'));
   assert.doesNotMatch(navigation, /data-view="personnel-admin"/);
-  assert.match(html, /Keycloak 仍是账号、密码、租户、组织与角色的唯一权威/);
+  assert.doesNotMatch(navigation, /data-view="role-admin"|data-view="permission-admin"/);
+  assert.match(html, /OA 人员字段只读展示/);
   assert.match(html, /不显示、不保存、不记录密码/);
+  assert.match(app, /data-role-permission/);
+  assert.match(app, /data-role-delete/);
+  assert.match(app, /data-permission-child/);
 });
 
 test('keeps browser identity and scope claims out of every request payload', () => {
@@ -62,13 +70,15 @@ test('keeps browser identity and scope claims out of every request payload', () 
   assert.deepEqual(reset, { temporaryPassword: 'pw' });
 });
 
-test('limits roles to the three pilot roles', () => {
+test('limits account creation to pilot roles but permits safe custom-role assignment', () => {
   assert.deepEqual(PERSONNEL_PILOT_ROLES, ['manager', 'operator', 'owner']);
   assert.equal(personnelRolesAllowed(['manager', 'operator', 'owner']), true);
   assert.equal(personnelRolesAllowed(['realm-admin']), false);
   assert.equal(personnelRolesAllowed([]), false);
   assert.equal(personnelRolesAllowed('manager'), false);
   assert.throws(() => buildPersonnelCreateRequest({ username: 'x', temporaryPassword: 'pw', roles: ['realm-admin'] }), /只能分配/);
+  assert.deepEqual(buildPersonnelRolesRequest({ roles: ['manager', 'quality_reviewer'] }), { roles: ['manager', 'quality_reviewer'] });
+  assert.throws(() => buildPersonnelRolesRequest({ roles: ['realm-admin'] }), /有效角色/);
 });
 
 test('clears password fields after building create and reset requests', () => {
@@ -98,7 +108,7 @@ test('first-time onboarding appears only while G0 is not ready for a human manag
   assert.equal(onboardingConfigEntryVisible({ ...managerSession, roles: ['operator'] }, notReady), false);
   assert.equal(onboardingConfigEntryVisible({ ...managerSession, actorType: 'service' }, notReady), false);
 
-  assert.match(html, /id="onboarding-config-entry"[\s\S]*开始首次开通/);
+  assert.match(html, /id="onboarding-config-entry"[\s\S]*开始应急开通/);
   assert.match(html, /id="onboarding-config-entry"[^>]*\bhidden\b/);
   assert.match(html, /id="view-personnel-onboarding"/);
   assert.match(html, /第 1 步 · 创建账号/);

@@ -93,6 +93,16 @@ function rolesField(body: Record<string, unknown>, key: string): PilotRole[] {
   return unique as PilotRole[];
 }
 
+function hubRolesField(body: Record<string, unknown>, key: string): string[] {
+  const value = body[key];
+  if (!Array.isArray(value)) throw new PersonnelApiError(400, `${key} 必须是角色数组`);
+  const unique = [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
+  if (!unique.length || unique.some((role) => !/^[a-z][a-z0-9_]{1,79}$/.test(role))) {
+    throw new PersonnelApiError(400, '角色编码无效');
+  }
+  return unique;
+}
+
 export class PersonnelApi {
   private readonly dependencies: PersonnelApiDependencies;
 
@@ -236,7 +246,7 @@ export class PersonnelApi {
     const rolesMatch = pathname.match(/^\/api\/system\/personnel\/users\/([^/]+)\/roles$/);
     if (rolesMatch && method === 'PUT') {
       if (request.bodyParseFailed) return this.invalidRequest(actor, 'set_roles');
-      const roles = rolesField(body, 'roles');
+      const roles = hubRolesField(body, 'roles');
       let denied = this.baseDenied(actor, 'set_roles', scope, roles);
       if (denied) return denied;
       const userId = decoded(rolesMatch[1] ?? '');
@@ -244,7 +254,7 @@ export class PersonnelApi {
       const activeManagers = await this.activeManagerActorIds(this.g0Scope(scope)!);
       denied = this.targetDenied(actor, 'set_roles', scope, target, roles, undefined, activeManagers);
       if (denied) return denied;
-      const user = await this.dependencies.admin!.setPilotRoles(this.g0Scope(scope)!, userId, roles);
+      const user = await this.dependencies.admin!.setHubRoles(this.g0Scope(scope)!, userId, roles);
       const auditStatus = this.auditAccepted(actor, 'personnel_roles_replaced', user, { roles });
       return this.acceptedResponse(200, user, auditStatus);
     }
@@ -351,7 +361,7 @@ export class PersonnelApi {
     actor: PersonnelApiActor,
     action: Parameters<typeof authorizePersonnelAction>[0]['action'],
     scope: PersonnelAuthorizationScope | null,
-    requestedRoles?: readonly PilotRole[],
+    requestedRoles?: readonly string[],
   ): PersonnelApiResponse | null {
     const decision = authorizePersonnelAction({
       action,
@@ -370,7 +380,7 @@ export class PersonnelApi {
     action: Parameters<typeof authorizePersonnelAction>[0]['action'],
     scope: PersonnelAuthorizationScope | null,
     target: PersonnelUser,
-    requestedRoles?: readonly PilotRole[],
+    requestedRoles?: readonly string[],
     nextEnabled?: boolean,
     activeManagerActorIds: readonly string[] = [],
   ): PersonnelApiResponse | null {

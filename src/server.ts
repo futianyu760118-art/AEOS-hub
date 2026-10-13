@@ -74,6 +74,8 @@ import {
 import { M01OidcAuth, derivePostLogoutRedirectUri, readM01Config } from './auth/m01-oidc.ts';
 import { KeycloakPersonnelAdmin, readPersonnelAdminConfig } from './keycloak-personnel-admin.ts';
 import { PersonnelApi } from './personnel-api.ts';
+import { AccessControlStore } from './access-control-store.ts';
+import { AccessControlApi } from './access-control-api.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -143,6 +145,7 @@ const personnelAdmin = personnelAdminConfig.enabled
   ? new KeycloakPersonnelAdmin({ issuer: personnelAdminConfig.issuer, clientId: personnelAdminConfig.clientId, clientSecret: personnelAdminConfig.clientSecret })
   : null;
 const personnelApi = new PersonnelApi({ admin: personnelAdmin, g0DecisionStore, appendEvidence });
+const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: new AccessControlStore(), g0DecisionStore, appendEvidence });
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
@@ -1318,6 +1321,32 @@ const server = createServer(async (req, res) => {
       });
       if (!personnelResponse) { sendJson(res, 404, { error: 'personnel endpoint not found' }); }
       else sendJson(res, personnelResponse.status, personnelResponse.body);
+    } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
+    return;
+  }
+  if (url.pathname.startsWith('/api/system/access-control/')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method !== 'GET' && req.method !== 'DELETE') {
+        try { body = await readJsonBody(req); }
+        catch { bodyParseFailed = true; }
+      }
+      const response = await accessControlApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        actor: requestActorContext ? {
+          actorId: requestActorContext.actorId,
+          actorType: requestActorContext.actorType,
+          tenantId: requestActorContext.tenantId,
+          organizationId: requestActorContext.organizationId,
+          roles: requestActorContext.roles,
+        } : null,
+        body,
+        bodyParseFailed,
+      });
+      if (!response) sendJson(res, 404, { error: 'access-control endpoint not found' });
+      else sendJson(res, response.status, response.body);
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }

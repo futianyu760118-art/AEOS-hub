@@ -59,12 +59,19 @@ function optionalString(value: unknown, claim: string): string | undefined {
   return requiredString(value, claim);
 }
 
-function normalizedRoles(value: unknown): string[] {
+function normalizedRoles(value: unknown, tenantId: string, organizationId?: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.some((role) => typeof role !== 'string')) {
     throw new Error('M01 roles must be an array of strings');
   }
-  return [...new Set(value.map((role) => role.trim()).filter(Boolean))];
+  const prefix = organizationId ? `hub__${Buffer.from(tenantId, 'utf8').toString('base64url')}__${Buffer.from(organizationId, 'utf8').toString('base64url')}__` : '';
+  return [...new Set(value.map((role) => {
+    const normalized = role.trim();
+    if (!normalized.startsWith('hub__')) return normalized;
+    if (!prefix || !normalized.startsWith(prefix)) return '';
+    const scopedCode = normalized.slice(prefix.length);
+    return /^[a-z][a-z0-9_]{1,79}$/.test(scopedCode) ? scopedCode : normalized;
+  }).filter(Boolean))];
 }
 
 export function normalizeActorContext(claims: unknown, source: 'm01'): ActorContext {
@@ -83,7 +90,7 @@ export function normalizeActorContext(claims: unknown, source: 'm01'): ActorCont
     actorType,
     tenantId,
     ...(organizationId ? { organizationId } : {}),
-    roles: normalizedRoles(values.roles),
+    roles: normalizedRoles(values.roles, tenantId, organizationId),
     ...(clientId ? { clientId } : {}),
     authSource: source,
   };

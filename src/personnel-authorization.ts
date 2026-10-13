@@ -71,6 +71,10 @@ function isPilotRole(role: string): role is PilotRole {
   return (PERSONNEL_PILOT_ROLES as readonly string[]).includes(role);
 }
 
+function isHubRoleCode(role: string): boolean {
+  return /^[a-z][a-z0-9_]{1,79}$/.test(role);
+}
+
 function scopeMatchesActor(actor: PersonnelAuthorizationActor, scope: PersonnelAuthorizationScope | null): boolean {
   if (!scope || scope.readyForG1 !== true || scope.firstScenario !== 'order_delivery_risk') return false;
   if (typeof scope.demoTenantId !== 'string' || !scope.demoTenantId) return false;
@@ -95,7 +99,7 @@ export function authorizePersonnelAction(input: PersonnelAuthorizationInput): Pe
   if (action === 'create' || action === 'set_roles') {
     const roles = normalizedRoles(input.requestedRoles);
     if (!roles.length) return { allowed: false, code: 'ROLES_REQUIRED' };
-    if (!roles.every(isPilotRole)) return { allowed: false, code: 'UNKNOWN_ROLE' };
+    if (action === 'create' ? !roles.every(isPilotRole) : !roles.every(isHubRoleCode)) return { allowed: false, code: 'UNKNOWN_ROLE' };
     if (action === 'set_roles' && target) {
       if (target.actorId === actor.actorId && target.roles.includes('manager') && !roles.includes('manager')) {
         return { allowed: false, code: 'SELF_MANAGER_REMOVAL_DENIED' };

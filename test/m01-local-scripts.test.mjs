@@ -54,6 +54,8 @@ test('personnel provisioning uses the ignored runtime file, requires confirmatio
   assert.match(script, /query-users/);
   assert.match(script, /manage-users/);
   assert.match(script, /view-realm/);
+  assert.match(script, /manage-realm/);
+  assert.doesNotMatch(script, /for role in[^\n]*realm-admin/);
   assert.match(script, /configure-personnel-admin\.sh/);
   assert.match(script, /docker compose --env-file deploy\/m01\/\.env -f deploy\/m01\/docker-compose\.yml/);
   assert.match(script, /function Wait-KeycloakReady/);

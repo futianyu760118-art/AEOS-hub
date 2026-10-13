@@ -63,7 +63,7 @@ test('requires a G0-ready scope that matches the actor tenant and organization e
   }
 });
 
-test('rejects empty or unknown role sets for create and set_roles', () => {
+test('keeps create on protected pilot roles and accepts only safe Hub role codes for set_roles', () => {
   assert.deepEqual(
     authorizePersonnelAction({ action: 'create', actor: manager, scope: readyScope, requestedRoles: [] }),
     { allowed: false, code: 'ROLES_REQUIRED' },
@@ -73,8 +73,12 @@ test('rejects empty or unknown role sets for create and set_roles', () => {
     { allowed: false, code: 'UNKNOWN_ROLE' },
   );
   assert.deepEqual(
-    authorizePersonnelAction({ action: 'set_roles', actor: manager, scope: readyScope, requestedRoles: ['manager', 'superuser'] }),
+    authorizePersonnelAction({ action: 'set_roles', actor: manager, scope: readyScope, requestedRoles: ['manager', 'realm-admin'] }),
     { allowed: false, code: 'UNKNOWN_ROLE' },
+  );
+  assert.deepEqual(
+    authorizePersonnelAction({ action: 'set_roles', actor: manager, scope: readyScope, requestedRoles: ['manager', 'quality_reviewer'] }),
+    { allowed: true, code: 'ALLOWED' },
   );
 });
 

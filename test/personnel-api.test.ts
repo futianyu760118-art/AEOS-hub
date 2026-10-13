@@ -32,7 +32,7 @@ function fakeAdmin(overrides: Record<string, unknown> = {}) {
     createUser: async (_scope: unknown, input: { username: string; roles: string[] }) => userOf('u-new', input.roles),
     updateUser: async (_scope: unknown, id: string, input: { enabled?: boolean }) => userOf(id, ['operator'], input.enabled ?? true),
     resetTemporaryPassword: async (_scope: unknown, id: string) => userOf(id),
-    setPilotRoles: async (_scope: unknown, id: string, roles: string[]) => userOf(id, roles),
+    setHubRoles: async (_scope: unknown, id: string, roles: string[]) => userOf(id, roles),
   };
   return { ...base, ...overrides } as unknown as KeycloakPersonnelAdmin;
 }

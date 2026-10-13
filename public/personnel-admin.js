@@ -78,8 +78,8 @@ export function buildPersonnelCreateRequest(fields) {
 }
 
 export function buildPersonnelRolesRequest(fields) {
-  const roles = Array.isArray(fields?.roles) ? fields.roles : [];
-  if (!personnelRolesAllowed(roles)) throw new Error('只能分配 manager、operator、owner 三种角色。');
+  const roles = Array.isArray(fields?.roles) ? [...new Set(fields.roles.map((role) => String(role).trim()).filter(Boolean))] : [];
+  if (!roles.length || roles.some((role) => !/^[a-z][a-z0-9_]{1,79}$/.test(role))) throw new Error('请选择至少一个有效角色。');
   return { roles };
 }
 

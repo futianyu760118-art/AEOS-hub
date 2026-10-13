@@ -1,6 +1,6 @@
 # M01 人员与权限：开通与重启教程
 
-本教程用于启用 AEOS Hub 的“系统配置 → 人员与权限”功能。该功能仅在 **M01/Keycloak 模式**下可用：Hub 提供日常管理入口，Keycloak 仍是账号、密码、租户、组织和角色的唯一权威来源。
+本教程用于启用 AEOS Hub 的“系统配置 → 用户管理 / 角色管理 / 权限管理”功能。该功能仅在 **M01/Keycloak 模式**下可用。
 
 > 适用目录：`G:\PyCharm\aeos-hub`  
 > 不要将 `.env`、密码、Client Secret、浏览器 Cookie 或 Token 发到聊天、截图或 Git 仓库。
@@ -73,7 +73,7 @@ PowerShell 会要求确认。确认后，脚本会：
 1. 在 `deploy\m01\.env` 生成或复用服务客户端密钥；
 2. 只重建/启动 Keycloak 容器以读取该密钥；
 3. 在 Keycloak 中创建或更新 `aeos-hub-personnel-admin`；
-4. 为其服务账号授予 `query-users`、`manage-users`、`view-realm` 等最小必要权限。
+4. 为其服务账号授予 `query-users`、`manage-users`、`view-realm`、`manage-realm`；不授予 `realm-admin`。
 
 成功后会提示将 `M01_PERSONNEL_ADMIN_ENABLED` 设为 `1`。不要复制、打印或查看生成的密钥值。
 
@@ -120,7 +120,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-m01-demo.ps1
 
 1. `GET /api/auth/session` 返回 `authenticated: true`、`actorType: "human"`，且 `roles` 中包含 `manager`。
 2. 当前会话的 `tenantId`、`organizationId` 与 G0 已登记并就绪的试点范围一致。
-3. 打开“系统配置”，可以看到“人员与权限”入口。
+3. 打开“系统配置”，可以看到“用户管理”“角色管理”“权限管理”三个入口。
 4. 创建测试用户时，只能选择 `manager`、`operator`、`owner` 三种角色。
 5. 重置密码后，密码输入框会被清空；页面、审计记录和接口响应均不应显示该密码。
 
@@ -138,7 +138,7 @@ Set-Location G:\PyCharm\aeos-hub
 
 然后重新运行命令；也可改用脚本完整路径。
 
-### Hub 重启后看不到“人员与权限”
+### Hub 重启后看不到三个管理入口
 
 依次确认：
 

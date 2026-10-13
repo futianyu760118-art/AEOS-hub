@@ -6,6 +6,7 @@
 // returns only a safe, scope-filtered projection. Upstream responses, tokens,
 // credentials, and arbitrary user attributes never leave this boundary.
 import { PERSONNEL_PILOT_ROLES, type PilotRole } from './personnel-authorization.ts';
+import { projectOaIdentity, type OaIdentityRecord } from './oa-identity-sync.ts';
 
 export type PersonnelScope = { demoTenantId: string; organizationScope: string };
 
@@ -19,7 +20,22 @@ export type PersonnelUser = {
   enabled: boolean;
   tenantId: string;
   organizationId: string;
-  roles: PilotRole[];
+  roles: string[];
+  externalEmployeeId?: string;
+  departmentId?: string;
+  departmentName?: string;
+  positionCode?: string;
+  positionName?: string;
+  identitySource?: 'oa';
+  lastSyncedAt?: string;
+};
+
+export type HubRole = {
+  code: string;
+  name: string;
+  description?: string;
+  protected: boolean;
+  userCount: number;
 };
 
 export type CreatePersonnelUserInput = {
@@ -98,6 +114,17 @@ export const MAX_LIST = 500;
 const TOKEN_SKEW_MS = 30_000;
 const TENANT_ATTRIBUTE = 'tenant_id';
 const ORGANIZATION_ATTRIBUTE = 'organization_id';
+const EXTERNAL_EMPLOYEE_ATTRIBUTE = 'external_employee_id';
+const DEPARTMENT_ID_ATTRIBUTE = 'department_id';
+const DEPARTMENT_NAME_ATTRIBUTE = 'department_name';
+const POSITION_CODE_ATTRIBUTE = 'position_code';
+const POSITION_NAME_ATTRIBUTE = 'position_name';
+const IDENTITY_SOURCE_ATTRIBUTE = 'identity_source';
+const LAST_SYNCED_ATTRIBUTE = 'last_synced_at';
+const ROLE_DISPLAY_NAME_ATTRIBUTE = 'hub_display_name';
+const ROLE_DESCRIPTION_ATTRIBUTE = 'hub_description';
+const PROTECTED_ROLE_CODES = new Set<string>(PERSONNEL_PILOT_ROLES);
+const ROLE_CODE = /^[a-z][a-z0-9_]{1,79}$/;
 
 type RawUser = {
   id?: unknown;
@@ -204,14 +231,14 @@ export class KeycloakPersonnelAdmin {
     const users: PersonnelUser[] = [];
     for (const raw of this.asArray(response.json)) {
       const projected = this.projectUser(raw, scope);
-      if (projected) users.push(await this.withRoles(projected));
+      if (projected) users.push(await this.withRoles(projected, scope));
     }
     return users;
   }
 
   async getUser(scope: PersonnelScope, userId: string): Promise<PersonnelUser> {
     const raw = await this.rawUser(scope, userId);
-    return this.withRoles(raw.user);
+    return this.withRoles(raw.user, scope);
   }
 
   async createUser(scope: PersonnelScope, input: CreatePersonnelUserInput): Promise<PersonnelUser> {
@@ -257,6 +284,53 @@ export class KeycloakPersonnelAdmin {
     return this.getUser(scope, userId);
   }
 
+  /** Upserts only the OA-owned identity projection. Credentials and roles are never changed. */
+  async upsertSyncedUser(record: OaIdentityRecord): Promise<PersonnelUser> {
+    const projection = projectOaIdentity(record);
+    const scope = { demoTenantId: projection.tenantId, organizationScope: projection.organizationId };
+    const existing = await this.findSyncedUsers(projection.externalEmployeeId);
+    if (existing.length > 1) throw new KeycloakPersonnelError('invalid');
+    const attributes = this.oaAttributes(existing[0]?.attributes, projection);
+    if (!existing.length) {
+      const response = await this.adminRequest('POST', '/users', { body: {
+        username: projection.externalEmployeeId,
+        enabled: projection.active,
+        firstName: projection.displayName,
+        attributes,
+      } });
+      const userId = response.location ? /\/([^/]+)\/?$/.exec(response.location)?.[1] : undefined;
+      if (!userId) throw new KeycloakPersonnelError('invalid');
+      return this.getUser(scope, userId);
+    }
+    const raw = existing[0]!;
+    if (typeof raw.id !== 'string' || !raw.id) throw new KeycloakPersonnelError('invalid');
+    await this.adminRequest('PUT', `/users/${encodeURIComponent(raw.id)}`, { body: {
+      username: typeof raw.username === 'string' && raw.username.trim() ? raw.username : projection.externalEmployeeId,
+      enabled: projection.active,
+      email: typeof raw.email === 'string' ? raw.email : undefined,
+      firstName: projection.displayName,
+      lastName: typeof raw.lastName === 'string' ? raw.lastName : undefined,
+      attributes,
+    } });
+    return this.getUser(scope, raw.id);
+  }
+
+  /** A departure or inactive OA record disables the account; it never deletes history. */
+  async disableSyncedUser(externalEmployeeId: string, scope: PersonnelScope): Promise<PersonnelUser> {
+    const matches = (await this.findSyncedUsers(externalEmployeeId)).filter((raw) => attributeValue(raw.attributes, TENANT_ATTRIBUTE) === scope.demoTenantId && attributeValue(raw.attributes, ORGANIZATION_ATTRIBUTE) === scope.organizationScope);
+    if (matches.length !== 1 || typeof matches[0]!.id !== 'string') throw new KeycloakPersonnelError(matches.length ? 'invalid' : 'not_found');
+    const raw = matches[0]!;
+    await this.adminRequest('PUT', `/users/${encodeURIComponent(raw.id as string)}`, { body: {
+      username: typeof raw.username === 'string' ? raw.username : externalEmployeeId,
+      enabled: false,
+      email: typeof raw.email === 'string' ? raw.email : undefined,
+      firstName: typeof raw.firstName === 'string' ? raw.firstName : undefined,
+      lastName: typeof raw.lastName === 'string' ? raw.lastName : undefined,
+      attributes: isRecord(raw.attributes) ? raw.attributes : {},
+    } });
+    return this.getUser(scope, raw.id as string);
+  }
+
   async resetTemporaryPassword(scope: PersonnelScope, userId: string, temporaryPassword: string): Promise<PersonnelUser> {
     await this.rawUser(scope, userId);
     await this.adminRequest('PUT', `/users/${encodeURIComponent(userId)}/reset-password`, {
@@ -290,6 +364,72 @@ export class KeycloakPersonnelAdmin {
     return this.getUser(scope, userId);
   }
 
+  /** Safe projection of only this scope's Hub roles plus protected pilot roles. */
+  async listHubRoles(scope: PersonnelScope): Promise<HubRole[]> {
+    const response = await this.adminRequest('GET', '/roles', { query: { first: '0', max: String(MAX_LIST) } });
+    const names = this.asArray(response.json).filter(isRecord).map((entry) => ({
+      name: typeof entry.name === 'string' ? entry.name : '',
+      description: typeof entry.description === 'string' ? entry.description : undefined,
+      displayName: attributeValue(entry.attributes, ROLE_DISPLAY_NAME_ATTRIBUTE),
+      businessDescription: attributeValue(entry.attributes, ROLE_DESCRIPTION_ATTRIBUTE),
+    })).filter((entry) => entry.name);
+    const codes = names.map((entry) => this.hubRoleCode(scope, entry.name)).filter((item): item is string => item !== null);
+    const users = await this.listUsers(scope, { max: MAX_LIST });
+    return codes.map((roleCode) => {
+      const source = names.find((entry) => this.hubRoleCode(scope, entry.name) === roleCode)!;
+      return {
+        code: roleCode,
+        name: source.displayName || (PROTECTED_ROLE_CODES.has(roleCode) ? roleCode : source.description || roleCode),
+        ...((source.businessDescription || (source.displayName ? source.description : undefined)) ? { description: source.businessDescription || source.description } : {}),
+        protected: PROTECTED_ROLE_CODES.has(roleCode),
+        userCount: users.filter((user) => user.roles.includes(roleCode)).length,
+      };
+    }).sort((left, right) => left.code.localeCompare(right.code));
+  }
+
+  async createHubRole(scope: PersonnelScope, input: { code: string; name: string; description?: string }): Promise<HubRole> {
+    const code = input.code.trim();
+    if (!ROLE_CODE.test(code) || PROTECTED_ROLE_CODES.has(code)) throw new KeycloakPersonnelError('invalid');
+    const roleName = this.keycloakRoleName(scope, code);
+    await this.adminRequest('POST', '/roles', { body: {
+      name: roleName,
+      description: input.name.trim(),
+      attributes: {
+        [ROLE_DISPLAY_NAME_ATTRIBUTE]: [input.name.trim()],
+        ...(input.description?.trim() ? { [ROLE_DESCRIPTION_ATTRIBUTE]: [input.description.trim()] } : {}),
+      },
+    } });
+    const roles = await this.listHubRoles(scope);
+    const created = roles.find((role) => role.code === code);
+    if (!created) throw new KeycloakPersonnelError('invalid');
+    return created;
+  }
+
+  async deleteHubRole(scope: PersonnelScope, roleCode: string): Promise<void> {
+    if (PROTECTED_ROLE_CODES.has(roleCode) || !ROLE_CODE.test(roleCode)) throw new KeycloakPersonnelError('forbidden');
+    const users = await this.listUsers(scope, { max: MAX_LIST });
+    if (users.some((user) => user.roles.includes(roleCode))) throw new KeycloakPersonnelError('conflict');
+    await this.adminRequest('DELETE', `/roles/${encodeURIComponent(this.keycloakRoleName(scope, roleCode))}`);
+  }
+
+  async setHubRoles(scope: PersonnelScope, userId: string, roleCodes: readonly string[]): Promise<PersonnelUser> {
+    await this.rawUser(scope, userId);
+    const requested = [...new Set(roleCodes.map((role) => role.trim()))];
+    if (!requested.length || requested.some((role) => !ROLE_CODE.test(role))) throw new KeycloakPersonnelError('invalid');
+    const mappings = await this.realmRoleMappings(userId);
+    const current = mappings.filter((role) => this.hubRoleCode(scope, role.name) !== null);
+    const currentCodes = new Set(current.map((role) => this.hubRoleCode(scope, role.name)!));
+    const toAdd = requested.filter((role) => !currentCodes.has(role));
+    const requestedSet = new Set(requested);
+    const toRemove = current.filter((role) => !requestedSet.has(this.hubRoleCode(scope, role.name)!));
+    for (const roleCode of toAdd) {
+      const role = await this.realmRole(this.keycloakRoleName(scope, roleCode));
+      await this.adminRequest('POST', `/users/${encodeURIComponent(userId)}/role-mappings/realm`, { body: [role] });
+    }
+    if (toRemove.length) await this.adminRequest('DELETE', `/users/${encodeURIComponent(userId)}/role-mappings/realm`, { body: toRemove });
+    return this.getUser(scope, userId);
+  }
+
   private async rawUser(scope: PersonnelScope, userId: string): Promise<{ raw: RawUser; user: PersonnelUser }> {
     const response = await this.adminRequest('GET', `/users/${encodeURIComponent(userId)}`);
     if (!isRecord(response.json)) throw new KeycloakPersonnelError('invalid');
@@ -299,9 +439,39 @@ export class KeycloakPersonnelAdmin {
     return { raw, user };
   }
 
-  private async withRoles(user: PersonnelUser): Promise<PersonnelUser> {
+  private async findSyncedUsers(externalEmployeeId: string): Promise<RawUser[]> {
+    const identifier = externalEmployeeId.trim();
+    if (!identifier || identifier.length > 240) throw new KeycloakPersonnelError('invalid');
+    const response = await this.adminRequest('GET', '/users', { query: { q: `${EXTERNAL_EMPLOYEE_ATTRIBUTE}:${identifier}`, max: '3' } });
+    return this.asArray(response.json)
+      .filter(isRecord)
+      .map((raw) => raw as unknown as RawUser)
+      .filter((raw) => attributeValue(raw.attributes, EXTERNAL_EMPLOYEE_ATTRIBUTE) === identifier);
+  }
+
+  private oaAttributes(attributes: unknown, projection: ReturnType<typeof projectOaIdentity>): Record<string, unknown> {
+    const next = isRecord(attributes) ? structuredClone(attributes) : {};
+    for (const key of [TENANT_ATTRIBUTE, ORGANIZATION_ATTRIBUTE, EXTERNAL_EMPLOYEE_ATTRIBUTE, DEPARTMENT_ID_ATTRIBUTE, DEPARTMENT_NAME_ATTRIBUTE, POSITION_CODE_ATTRIBUTE, POSITION_NAME_ATTRIBUTE, IDENTITY_SOURCE_ATTRIBUTE, LAST_SYNCED_ATTRIBUTE]) delete next[key];
+    next[TENANT_ATTRIBUTE] = [projection.tenantId];
+    next[ORGANIZATION_ATTRIBUTE] = [projection.organizationId];
+    next[EXTERNAL_EMPLOYEE_ATTRIBUTE] = [projection.externalEmployeeId];
+    if (projection.departmentId) next[DEPARTMENT_ID_ATTRIBUTE] = [projection.departmentId];
+    if (projection.departmentName) next[DEPARTMENT_NAME_ATTRIBUTE] = [projection.departmentName];
+    if (projection.positionCode) next[POSITION_CODE_ATTRIBUTE] = [projection.positionCode];
+    if (projection.positionName) next[POSITION_NAME_ATTRIBUTE] = [projection.positionName];
+    next[IDENTITY_SOURCE_ATTRIBUTE] = ['oa'];
+    next[LAST_SYNCED_ATTRIBUTE] = [projection.syncedAt];
+    return next;
+  }
+
+  private async withRoles(user: PersonnelUser, scope: PersonnelScope): Promise<PersonnelUser> {
     const names = await this.realmRoleNames(user.id);
-    return { ...user, roles: pilotRoles(names) };
+    return { ...user, roles: names.map((name) => this.hubRoleCode(scope, name)).filter((item): item is string => item !== null) };
+  }
+
+  private async realmRoleMappings(userId: string): Promise<Array<{ id: string; name: string }>> {
+    const response = await this.adminRequest('GET', `/users/${encodeURIComponent(userId)}/role-mappings/realm`);
+    return this.asArray(response.json).filter(isRecord).map((mapping) => ({ id: typeof mapping.id === 'string' ? mapping.id : '', name: typeof mapping.name === 'string' ? mapping.name : '' })).filter((role) => role.id && role.name);
   }
 
   private async currentPilotRoles(userId: string): Promise<Array<{ id: string; name: PilotRole }>> {
@@ -321,7 +491,7 @@ export class KeycloakPersonnelAdmin {
       .filter((name): name is string => typeof name === 'string');
   }
 
-  private async realmRole(name: PilotRole): Promise<{ id: string; name: string }> {
+  private async realmRole(name: string): Promise<{ id: string; name: string }> {
     const cached = this.roleCache.get(name);
     if (cached) return cached;
     const response = await this.adminRequest('GET', `/roles/${encodeURIComponent(name)}`);
@@ -351,7 +521,26 @@ export class KeycloakPersonnelAdmin {
       tenantId,
       organizationId,
       roles: [],
+      ...(attributeValue(attributes, EXTERNAL_EMPLOYEE_ATTRIBUTE) ? { externalEmployeeId: attributeValue(attributes, EXTERNAL_EMPLOYEE_ATTRIBUTE) } : {}),
+      ...(attributeValue(attributes, DEPARTMENT_ID_ATTRIBUTE) ? { departmentId: attributeValue(attributes, DEPARTMENT_ID_ATTRIBUTE) } : {}),
+      ...(attributeValue(attributes, DEPARTMENT_NAME_ATTRIBUTE) ? { departmentName: attributeValue(attributes, DEPARTMENT_NAME_ATTRIBUTE) } : {}),
+      ...(attributeValue(attributes, POSITION_CODE_ATTRIBUTE) ? { positionCode: attributeValue(attributes, POSITION_CODE_ATTRIBUTE) } : {}),
+      ...(attributeValue(attributes, POSITION_NAME_ATTRIBUTE) ? { positionName: attributeValue(attributes, POSITION_NAME_ATTRIBUTE) } : {}),
+      ...(attributeValue(attributes, IDENTITY_SOURCE_ATTRIBUTE) === 'oa' ? { identitySource: 'oa' as const } : {}),
+      ...(attributeValue(attributes, LAST_SYNCED_ATTRIBUTE) ? { lastSyncedAt: attributeValue(attributes, LAST_SYNCED_ATTRIBUTE) } : {}),
     };
+  }
+
+  private keycloakRoleName(scope: PersonnelScope, roleCode: string): string {
+    if (PROTECTED_ROLE_CODES.has(roleCode)) return roleCode;
+    return `hub__${Buffer.from(scope.demoTenantId, 'utf8').toString('base64url')}__${Buffer.from(scope.organizationScope, 'utf8').toString('base64url')}__${roleCode}`;
+  }
+
+  private hubRoleCode(scope: PersonnelScope, keycloakName: string): string | null {
+    if (PROTECTED_ROLE_CODES.has(keycloakName)) return keycloakName;
+    const prefix = `hub__${Buffer.from(scope.demoTenantId, 'utf8').toString('base64url')}__${Buffer.from(scope.organizationScope, 'utf8').toString('base64url')}__`;
+    const roleCode = keycloakName.startsWith(prefix) ? keycloakName.slice(prefix.length) : '';
+    return ROLE_CODE.test(roleCode) ? roleCode : null;
   }
 
   private asArray(value: unknown): unknown[] {
