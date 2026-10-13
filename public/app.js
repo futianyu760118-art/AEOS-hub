@@ -40,7 +40,7 @@ const els = {
   navTaskCount: $('#nav-task-count'), taskDraftCount: $('#task-draft-count'), taskActiveCount: $('#task-active-count'),
   taskVerifyCount: $('#task-verify-count'), taskAttentionCount: $('#task-attention-count'), taskCaseSelect: $('#task-case-select'),
   taskPriority: $('#task-priority'), taskCreateControls: $('#task-create-controls'), taskCreateHint: $('#task-create-hint'), taskReadonlyNote: $('#task-readonly-note'), btnTaskCreate: $('#btn-task-create'),
-  btnTasksRefresh: $('#btn-tasks-refresh'), taskListCount: $('#task-list-count'), taskList: $('#task-list'),
+  btnTasksRefresh: $('#btn-tasks-refresh'), controlledTaskSection: $('#controlled-task-section'), taskListCount: $('#task-list-count'), taskList: $('#task-list'),
   btnTaskManualCreate: $('#btn-task-manual-create'), manualTaskCreatePanel: $('#manual-task-create-panel'), manualTaskForm: $('#manual-task-form'), manualTaskProject: $('#manual-task-project'), taskSearch: $('#task-search'), taskStatusFilter: $('#task-status-filter'), taskProjectFilter: $('#task-project-filter'), taskBoard: $('#task-board'),
   btnProjectsRefresh: $('#btn-projects-refresh'), btnProjectCreate: $('#btn-project-create'), projectCreatePanel: $('#project-create-panel'), projectForm: $('#project-form'), projectSearch: $('#project-search'), projectStatusFilter: $('#project-status-filter'), projectList: $('#project-list'), projectWorkspace: $('#project-workspace'),
   btnG0Refresh: $('#btn-g0-refresh'), g0Readiness: $('#g0-readiness'), g0DecisionStatus: $('#g0-decision-status'),
@@ -3490,7 +3490,10 @@ async function loadProjects(options = {}) {
     return projectCenterState;
   } catch (error) {
     if (els.projectList) els.projectList.innerHTML = `<div class="dashboard-loading">项目加载失败：${esc(error.message)}</div>`;
-    if (!options.silent) toast(`项目加载失败：${error.message}`, true);
+    const hint = error?.message === 'api endpoint not found'
+      ? '项目接口不可用：当前网页已更新，但服务端仍是旧实例。请重启 AEOS Hub 后重试。'
+      : `项目加载失败：${error.message}`;
+    if (!options.silent) toast(hint, true);
     return null;
   }
 }
@@ -3573,8 +3576,10 @@ async function editProject(projectId) {
 
 function renderTaskCenter() {
   const tasks = Array.isArray(taskCenterState.tasks) ? taskCenterState.tasks : [];
+  const controlledTasks = tasks.filter((task) => task.source !== 'collaboration');
   const today = localDateKey();
   const openCases = (operatingCenterState.cases || []).filter((item) => item.status !== 'closed' && item.source === 'order' && Array.isArray(item.evidenceRefs) && item.evidenceRefs.length);
+  els.controlledTaskSection?.classList.toggle('hidden', !openCases.length && !controlledTasks.length);
   const taskMutationGate = g1TaskUiMutationGate(authSession, g0DecisionSnapshot);
   const canCreate = canCreateTaskFromCase(authSession, { source: 'order', evidenceRefs: ['ui-projection'] }, g0DecisionSnapshot);
   const selectedCase = els.taskCaseSelect.value;
@@ -3590,7 +3595,7 @@ function renderTaskCenter() {
     : taskMutationGateMessage(taskMutationGate);
 
   const ownerActorId = registeredTaskOwnerActorId();
-  const display = tasks.map((task) => ({ task, state: taskDisplayState(task, today), capabilities: taskUiCapabilities(task, authSession, ownerActorId, g0DecisionSnapshot) }));
+  const display = controlledTasks.map((task) => ({ task, state: taskDisplayState(task, today), capabilities: taskUiCapabilities(task, authSession, ownerActorId, g0DecisionSnapshot) }));
   const draft = display.filter(({ task }) => task.status === 'DRAFT').length;
   const active = display.filter(({ task }) => ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'AWAITING_DECISION'].includes(task.status)).length;
   const verifying = display.filter(({ task }) => task.status === 'AWAITING_VERIFY').length;
@@ -3602,7 +3607,7 @@ function renderTaskCenter() {
   const actionable = display.filter(({ task }) => !['COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED'].includes(task.status)).length;
   els.navTaskCount.textContent = String(actionable);
   els.navTaskCount.classList.toggle('hidden', actionable === 0);
-  els.taskListCount.textContent = `${tasks.length} 项任务`;
+  els.taskListCount.textContent = `${controlledTasks.length} 项任务`;
   els.taskListCount.className = `status-pill ${attention ? 'warn' : 'neutral'}`;
 
   els.taskList.innerHTML = display.length ? display.map(({ task, state, capabilities }) => {
@@ -3692,7 +3697,12 @@ async function createProject(event) {
     selectedProjectId = response.project?.projectId || null;
     await loadProjects({ silent: true });
     toast('项目已创建');
-  } catch (error) { toast(`创建项目失败：${error.message}`, true); }
+  } catch (error) {
+    const hint = error?.message === 'api endpoint not found'
+      ? '创建项目失败：项目接口尚未部署到当前服务，请重启 AEOS Hub 后重试。'
+      : `创建项目失败：${error.message}`;
+    toast(hint, true);
+  }
   finally { if (submit?.isConnected) submit.disabled = false; }
 }
 

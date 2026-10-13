@@ -12,6 +12,8 @@ test('keeps task and project collaboration as visible navigation entries without
   assert.match(html, /id="task-center-nav"[\s\S]*data-view="tasks"/);
   assert.match(html, /id="task-center-nav"[\s\S]*data-view="projects"/);
   assert.match(html, /id="view-projects"[\s\S]*项目列表/);
+  assert.match(html, /id="controlled-task-section" class="controlled-task-section hidden"/);
+  assert.match(html, /经营风险闭环任务/);
   assert.doesNotMatch(html, /data-view="cases"/);
   assert.doesNotMatch(html, /data-view="inbox"/);
   assert.doesNotMatch(css, /#task-center-nav\s*,?[\s\S]{0,80}display:\s*none/);
