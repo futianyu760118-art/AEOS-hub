@@ -47,6 +47,7 @@ export interface CreateRuntimeSessionRequest {
   modelProvider?: string;
   metadata?: RuntimeMetadata;
   runtimeOptions?: RuntimeMetadata;
+  developerInstructions?: string;
 }
 
 export interface ResumeRuntimeSessionRequest {
@@ -54,6 +55,7 @@ export interface ResumeRuntimeSessionRequest {
   model?: string;
   modelProvider?: string;
   runtimeOptions?: RuntimeMetadata;
+  developerInstructions?: string;
 }
 
 export interface RuntimeInputItem {
