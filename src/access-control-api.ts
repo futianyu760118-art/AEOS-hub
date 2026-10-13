@@ -38,6 +38,12 @@ export class AccessControlApi {
     if (!request.pathname.startsWith('/api/system/access-control/')) return null;
     if (!request.actor) return { status: 401, body: { error: 'authentication required' } };
     if (!this.dependencies.admin) return { status: 503, body: { error: 'personnel administration is not enabled' } };
+    if (request.pathname === '/api/system/access-control/my-grants') {
+      if (request.method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };
+      const scope = this.scope(request.actor);
+      const accessScope = scope ? this.g0Scope(scope) : null;
+      return { status: 200, body: { grants: accessScope ? this.dependencies.store.listGrantsForRoles(accessScope, request.actor.roles) : [] } };
+    }
     const scope = this.scope(request.actor);
     const decision = authorizePersonnelAction({ action: 'list', actor: request.actor, scope });
     if (!decision.allowed) return this.denied(request.actor, decision.code);

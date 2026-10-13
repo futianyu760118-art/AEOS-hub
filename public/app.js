@@ -186,6 +186,8 @@ let personnelUsers = [];
 let personnelTargetId = null;
 let accessRoles = [];
 const OPERATION_LABELS = { create: '新增', read: '查看', update: '编辑', delete: '删除' };
+const VIEW_RESOURCE = { dashboard: 'dashboard', chat: 'analysis', attention: 'analysis', tasks: 'tasks', projects: 'tasks', harbor: 'agents', squad: 'agents', evidence: 'evidence', registry: 'system' };
+let myGrants = [];
 let accessResources = [];
 let accessRoleTarget = null;
 let accessResourceTarget = null;
@@ -537,6 +539,10 @@ function viewVisibleForRole(view, session) {
   const roles = Array.isArray(session?.roles) ? session.roles : [];
   const managerOnly = ['config', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding', 'g0-governance'];
   if (managerOnly.includes(view)) return roles.includes('manager');
+  const resource = VIEW_RESOURCE[view];
+  if (resource && myGrants.length > 0) {
+    return myGrants.some((grant) => grant.resourceCode === resource && Array.isArray(grant.operations) && grant.operations.includes('read'));
+  }
   if (roles.includes('manager') || roles.includes('supervisor')) return true;
   return ['chat', 'attention', 'tasks', 'projects', 'evidence'].includes(view);
 }
@@ -3143,6 +3149,17 @@ function visibleAccessResources(resources = [], depth = 0, output = []) {
   return output;
 }
 
+async function loadMyGrants() {
+  try {
+    const response = await personnelApiRequest('/api/system/access-control/my-grants');
+    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    myGrants = Array.isArray(data.grants) ? data.grants : [];
+  } catch {
+    myGrants = [];
+  }
+}
+
 async function loadAccessRoles() {
   const response = await personnelApiRequest('/api/system/access-control/roles');
   const data = await response.json().catch(() => ({}));
@@ -5364,6 +5381,7 @@ async function bootstrapAuthentication() {
     if (session?.authenticated === true) {
       authenticated = true;
       authSession = session;
+      await loadMyGrants();
       showWorkspace(false);
       return;
     }

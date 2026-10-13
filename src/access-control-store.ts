@@ -118,6 +118,20 @@ export class AccessControlStore {
   listResources(scope: AccessScope): AccessResource[] { return this.load(scope).resources; }
   listRolePermissions(scope: AccessScope, roleKey: string): RolePermissionGrant[] { return this.load(scope).rolePermissions[roleKey] ?? []; }
 
+  /** Union of grants across the given roles, merged per resource. */
+  listGrantsForRoles(scope: AccessScope, roles: readonly string[]): RolePermissionGrant[] {
+    const snapshot = this.load(scope);
+    const merged = new Map<string, RolePermissionGrant>();
+    for (const role of roles) {
+      for (const grant of snapshot.rolePermissions[role] ?? []) {
+        const existing = merged.get(grant.resourceCode);
+        if (existing) existing.operations = [...new Set([...existing.operations, ...grant.operations])];
+        else merged.set(grant.resourceCode, { resourceCode: grant.resourceCode, operations: [...grant.operations] });
+      }
+    }
+    return [...merged.values()];
+  }
+
   createResource(scope: AccessScope, input: AccessResourceInput): AccessControlSnapshot {
     const snapshot = this.load(scope);
     if (flatten(snapshot.resources).has(input.code)) throw new Error('权限编码已存在');

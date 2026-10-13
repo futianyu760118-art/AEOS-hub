@@ -49,3 +49,15 @@ test('refuses permission grants for a role that is not present in the scoped Key
   const response = await api.handle({ method: 'PUT', pathname: '/api/system/access-control/roles/missing_role/permissions', actor: manager, body: { grants: [{ resourceCode: 'dashboard', operations: ['read'] }] } });
   assert.equal(response?.status, 404);
 });
+
+test('exposes the current actor grants via a read-only my-grants endpoint without requiring manager', async () => {
+  const { api } = fixture();
+  const managerGrants = await api.handle({ method: 'GET', pathname: '/api/system/access-control/my-grants', actor: manager });
+  assert.equal(managerGrants?.status, 200);
+  assert.ok(((managerGrants?.body as { grants: { resourceCode: string }[] }).grants).some((grant) => grant.resourceCode === 'dashboard'));
+
+  const operator = { actorId: 'm01:user:operator-1', actorType: 'human' as const, tenantId: 'tenant-demo', organizationId: 'org-demo', roles: ['operator'] };
+  const operatorGrants = await api.handle({ method: 'GET', pathname: '/api/system/access-control/my-grants', actor: operator });
+  assert.equal(operatorGrants?.status, 200);
+  assert.deepEqual((operatorGrants?.body as { grants: unknown[] }).grants, []);
+});
