@@ -50,7 +50,7 @@ $env:M01_CLIENT_ID = 'aeos-hub-web'
 $env:M01_CLIENT_SECRET = $settings['M01_CLIENT_SECRET']
 $env:M01_REDIRECT_URI = "https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT'])/api/auth/callback"
 $env:M01_AUDIENCE = 'aeos-hub-web'
-$env:AEOS_M01_ALLOWED_ROLES = 'manager,operator,owner,analyst'
+$env:AEOS_M01_ALLOWED_ROLES = 'manager,supervisor,operator,owner,analyst'
 
 # Personnel administration is fail-closed: it is enabled only when the feature
 # flag is on and a non-sentinel service-client secret is present in the ignored

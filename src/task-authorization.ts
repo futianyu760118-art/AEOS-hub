@@ -36,6 +36,10 @@ const MANAGER_ACTIONS = new Set<TaskAction>(['create', 'assign', 'reassign']);
 const OPERATOR_ACTIONS = new Set<TaskAction>(['accept', 'start', 'supplement_evidence', 'submit_result']);
 const OWNER_ACTIONS = new Set<TaskAction>(['verify', 'reject']);
 
+function canManageBusiness(roles: readonly string[]): boolean {
+  return roles.includes('manager') || roles.includes('supervisor');
+}
+
 /**
  * Pure G1 policy for trusted M01 actor context and a tenant-scoped task.
  * It deliberately performs no storage, audit, or HTTP work so TaskApi can
@@ -47,7 +51,7 @@ export function authorizeTaskAction(input: TaskAuthorizationInput): Authorizatio
   if (task && actor.tenantId !== task.tenantId) return { allowed: false, code: 'TENANT_MISMATCH' };
 
   if (MANAGER_ACTIONS.has(action)) {
-    return actor.roles.includes('manager')
+    return canManageBusiness(actor.roles)
       ? { allowed: true, code: 'ALLOWED' }
       : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
   }
@@ -62,7 +66,7 @@ export function authorizeTaskAction(input: TaskAuthorizationInput): Authorizatio
   }
 
   if (OWNER_ACTIONS.has(action)) {
-    if (!actor.roles.includes('owner')) return { allowed: false, code: 'OWNER_ROLE_REQUIRED' };
+    if (!canManageBusiness(actor.roles) && !actor.roles.includes('owner')) return { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
     return input.registeredOwnerActorId?.trim() === actor.actorId
       ? { allowed: true, code: 'ALLOWED' }
       : { allowed: false, code: 'REGISTERED_OWNER_MISMATCH' };
@@ -82,17 +86,17 @@ export function authorizeCollaborationAction(input: CollaborationAuthorizationIn
   if (task && task.tenantId !== actor.tenantId) return { allowed: false, code: 'TENANT_MISMATCH' };
   if (action === 'project_read') return { allowed: true, code: 'ALLOWED' };
   if (action === 'project_create' || action === 'task_create_manual' || action === 'task_move') {
-    return actor.roles.includes('manager') ? { allowed: true, code: 'ALLOWED' } : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
+    return canManageBusiness(actor.roles) ? { allowed: true, code: 'ALLOWED' } : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
   }
   if (action === 'project_update') {
     if (!project) return { allowed: false, code: 'TASK_REQUIRED' };
-    return actor.roles.includes('manager') || project.ownerActorId === actor.actorId
+    return canManageBusiness(actor.roles) || project.ownerActorId === actor.actorId
       ? { allowed: true, code: 'ALLOWED' }
       : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
   }
   if (action === 'task_update_manual') {
     if (!task) return { allowed: false, code: 'TASK_REQUIRED' };
-    if (actor.roles.includes('manager')) return { allowed: true, code: 'ALLOWED' };
+    if (canManageBusiness(actor.roles)) return { allowed: true, code: 'ALLOWED' };
     if (!actor.roles.includes('operator')) return { allowed: false, code: 'OPERATOR_ROLE_REQUIRED' };
     if (!task.currentAssignee) return { allowed: false, code: 'ASSIGNMENT_REQUIRED' };
     return task.currentAssignee.actorId === actor.actorId

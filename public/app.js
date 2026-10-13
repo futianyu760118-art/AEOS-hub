@@ -520,6 +520,31 @@ function applyProfile() {
   });
 }
 
+function viewVisibleForRole(view, session) {
+  const roles = Array.isArray(session?.roles) ? session.roles : [];
+  const managerOnly = ['config', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding', 'g0-governance'];
+  if (managerOnly.includes(view)) return roles.includes('manager');
+  if (roles.includes('manager') || roles.includes('supervisor')) return true;
+  return ['chat', 'attention', 'tasks', 'projects', 'evidence'].includes(view);
+}
+
+function defaultViewForSession(session) {
+  const roles = Array.isArray(session?.roles) ? session.roles : [];
+  return (roles.includes('manager') || roles.includes('supervisor')) ? 'dashboard' : 'tasks';
+}
+
+function applyNavVisibility() {
+  $$('.nav-item').forEach((item) => {
+    const view = item.dataset.view;
+    if (view) item.classList.toggle('hidden', !viewVisibleForRole(view, authSession));
+  });
+  $$('.nav-group').forEach((group) => {
+    const visible = [...group.querySelectorAll('.nav-item')].some((item) => !item.classList.contains('hidden'));
+    group.classList.toggle('hidden', !visible);
+  });
+  $$('.nav-item:not(.hidden)').forEach((node, index) => node.style.setProperty('--nav-order', String(index)));
+}
+
 function showWorkspace(entering = false, forcedView = null) {
   els.loginStage.classList.add('hidden');
   els.welcomeStage.classList.add('hidden');
@@ -529,7 +554,7 @@ function showWorkspace(entering = false, forcedView = null) {
   syncG0GovernanceConfigEntry();
   syncPersonnelConfigEntry();
   syncOnboardingConfigEntry();
-  $$('.nav-item').forEach((node, index) => node.style.setProperty('--nav-order', String(index)));
+  applyNavVisibility();
   const onboarding = parseStored(STORAGE.onboarding, { defaultView: 'dashboard' });
   const hashView = location.hash.replace(/^#/, '');
   const initialView = forcedView || (VIEW_TITLES[hashView] ? hashView : onboarding.defaultView) || 'dashboard';
@@ -605,6 +630,7 @@ async function logout() {
 function showView(view, options = {}) {
   if (!VIEW_TITLES[view]) view = 'dashboard';
   if (LOCALLY_HIDDEN_VIEWS.has(view)) view = 'dashboard';
+  if (!viewVisibleForRole(view, authSession)) view = defaultViewForSession(authSession);
   currentView = view;
   $$('.app-view').forEach((node) => node.classList.add('hidden'));
   const target = $(`#view-${view}`);
@@ -946,7 +972,7 @@ function closeCommandPalette() {
 
 function renderCommandResults() {
   const query = els.commandInput.value.trim().toLowerCase();
-  commandMatches = commands.filter((item) => !LOCALLY_HIDDEN_VIEWS.has(item.view) && (!query || `${item.label} ${item.desc} ${item.group}`.toLowerCase().includes(query)));
+  commandMatches = commands.filter((item) => !LOCALLY_HIDDEN_VIEWS.has(item.view) && viewVisibleForRole(item.view, authSession) && (!query || `${item.label} ${item.desc} ${item.group}`.toLowerCase().includes(query)));
   if (commandIndex >= commandMatches.length) commandIndex = Math.max(0, commandMatches.length - 1);
   els.commandResults.innerHTML = commandMatches.length ? commandMatches.map((item, index) => `
     <button class="command-item${index === commandIndex ? ' active' : ''}" type="button" data-command-view="${item.view}">
@@ -3413,7 +3439,7 @@ async function loadTaskG0Context() {
 }
 
 function collaborationManager() {
-  return authSession?.actorType === 'human' && Array.isArray(authSession?.roles) && authSession.roles.includes('manager');
+  return authSession?.actorType === 'human' && Array.isArray(authSession?.roles) && (authSession.roles.includes('manager') || authSession.roles.includes('supervisor'));
 }
 
 function collaborationTaskEditor(task) {

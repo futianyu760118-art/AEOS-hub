@@ -81,10 +81,10 @@ export function g1TaskUiMutationGate(session, snapshot) {
 export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g0Snapshot = null) {
   const human = isHumanSession(session);
   const gate = g1TaskUiMutationGate(session, g0Snapshot);
-  const manager = gate.allowed && human && hasRole(session, 'manager');
+  const manager = gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'supervisor'));
   const operator = gate.allowed && human && hasRole(session, 'operator')
     && task?.currentAssignee?.actorId === session.actorId;
-  const owner = gate.allowed && human && hasRole(session, 'owner')
+  const verifier = gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'supervisor') || hasRole(session, 'owner'))
     && Boolean(registeredOwnerActorId)
     && registeredOwnerActorId === session.actorId;
   const policy = taskInteractionPolicy(task);
@@ -96,16 +96,16 @@ export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g
     canStart: operator && ['ACCEPTED', 'AWAITING_DECISION'].includes(task?.status),
     canSupplementEvidence: operator && policy.canSupplementEvidence,
     canSubmitPendingResult: operator && policy.canSubmitPendingResult,
-    canVerify: owner && policy.canVerify,
-    canReject: owner && policy.canVerify,
-    isReadOnly: !gate.allowed || (!manager && !operator && !owner),
+    canVerify: verifier && policy.canVerify,
+    canReject: verifier && policy.canVerify,
+    isReadOnly: !gate.allowed || (!manager && !operator && !verifier),
     mutationGate: gate.code,
   };
 }
 
 export function canCreateTaskFromCase(session, operatingCase, g0Snapshot = null) {
   return g1TaskUiMutationGate(session, g0Snapshot).allowed
-    && hasRole(session, 'manager')
+    && (hasRole(session, 'manager') || hasRole(session, 'supervisor'))
     && operatingCase?.source === 'order'
     && Array.isArray(operatingCase.evidenceRefs)
     && operatingCase.evidenceRefs.length > 0;

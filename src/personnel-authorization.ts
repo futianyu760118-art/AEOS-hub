@@ -2,7 +2,7 @@
 // storage, network, audit, or HTTP work so PersonnelApi can uniformly audit
 // either outcome at its boundary. It mirrors src/task-authorization.ts.
 
-export const PERSONNEL_PILOT_ROLES = ['manager', 'operator', 'owner'] as const;
+export const PERSONNEL_PILOT_ROLES = ['manager', 'supervisor', 'operator', 'owner'] as const;
 export type PilotRole = (typeof PERSONNEL_PILOT_ROLES)[number];
 
 export const PERSONNEL_ACTIONS = ['list', 'create', 'update', 'delete', 'set_roles', 'reset_password'] as const;
