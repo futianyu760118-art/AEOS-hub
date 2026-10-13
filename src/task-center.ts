@@ -28,12 +28,27 @@ const dueDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期必须使用 YYYY
 export const TaskStatusSchema = z.enum(TASK_STATUSES);
 export const TaskPrioritySchema = z.enum(TASK_PRIORITIES);
 export const ProjectStatusSchema = z.enum(PROJECT_STATUSES);
-export const TaskAssigneeSchema = z.object({
-  kind: z.literal('responsibility_role'),
-  role: text(160, 1),
-  actorId: text(160, 1),
-  assignedAt: timestamp,
+export const TaskAssigneeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('responsibility_role'),
+    role: text(160, 1),
+    actorId: text(160, 1),
+    assignedAt: timestamp,
+  }).strict(),
+  z.object({
+    kind: z.literal('agent'),
+    agentId: text(160, 1),
+    assignedAt: timestamp,
+  }).strict(),
+]);
+export const DispatchHistoryEntrySchema = z.object({
+  agentId: text(160, 1),
+  recommendedReasons: z.array(text(500)).max(32),
+  confirmedBy: text(160, 1),
+  confirmedAt: timestamp,
+  reason: text(1_000, 1),
 }).strict();
+export type DispatchHistoryEntry = z.infer<typeof DispatchHistoryEntrySchema>;
 export const TaskRecordSchema = z.object({
   taskId: text(160, 1),
   tenantId: text(160, 1),
@@ -46,6 +61,7 @@ export const TaskRecordSchema = z.object({
   dueAt: dueDate,
   initiatedBy: text(160, 1),
   currentAssignee: TaskAssigneeSchema.nullable(),
+  dispatchHistory: z.array(DispatchHistoryEntrySchema).default([]),
   status: TaskStatusSchema,
   correlationId: text(200, 1),
   projectId: text(160, 1).nullable(),
@@ -460,17 +476,30 @@ export class TaskCenterStore {
 
   assign(input: Record<string, unknown>): TaskRecord {
     const taskId = requiredString(input, 'taskId', 'taskId', 160);
-    const assigneeRole = requiredString(input, 'assigneeRole', 'assigneeRole', 160);
-    const assigneeActorId = requiredString(input, 'assigneeActorId', 'assigneeActorId', 160);
     const actor = requiredString(input, 'actor', 'actor', 160);
     const reason = requiredString(input, 'reason', 'reason', 1_000);
+    const assigneeKind = typeof input.assigneeKind === 'string' && input.assigneeKind.trim() === 'agent' ? 'agent' : 'responsibility_role';
     return this.mutate((snapshot, occurredAt) => {
       const task = this.findOpenTask(snapshot, taskId);
       const fromStatus = task.status;
       const wasAssigned = Boolean(task.currentAssignee);
       if (task.status === 'DRAFT') task.status = 'ASSIGNED';
-      task.currentAssignee = TaskAssigneeSchema.parse({ kind: 'responsibility_role', role: assigneeRole, actorId: assigneeActorId, assignedAt: occurredAt });
-      task.nextAction = task.status === 'ASSIGNED' ? '等待指定责任人接受任务' : task.nextAction;
+      if (assigneeKind === 'agent') {
+        const agentId = requiredString(input, 'agentId', 'agentId', 160);
+        const recommendedReasons = Array.isArray(input.recommendedReasons)
+          ? input.recommendedReasons.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 32)
+          : [];
+        task.currentAssignee = TaskAssigneeSchema.parse({ kind: 'agent', agentId, assignedAt: occurredAt });
+        task.dispatchHistory = [...task.dispatchHistory, DispatchHistoryEntrySchema.parse({
+          agentId, recommendedReasons, confirmedBy: actor, confirmedAt: occurredAt, reason,
+        })];
+        task.nextAction = '等待 Agent 回传分析结果';
+      } else {
+        const assigneeRole = requiredString(input, 'assigneeRole', 'assigneeRole', 160);
+        const assigneeActorId = requiredString(input, 'assigneeActorId', 'assigneeActorId', 160);
+        task.currentAssignee = TaskAssigneeSchema.parse({ kind: 'responsibility_role', role: assigneeRole, actorId: assigneeActorId, assignedAt: occurredAt });
+        task.nextAction = task.status === 'ASSIGNED' ? '等待指定责任人接受任务' : task.nextAction;
+      }
       task.updatedAt = occurredAt;
       this.appendHistory(snapshot, task, {
         eventType: wasAssigned ? 'reassigned' : 'assigned', fromStatus, toStatus: task.status, actor, reason, evidenceRefs: task.evidenceRefs,
@@ -608,7 +637,7 @@ export class TaskCenterStore {
     if (isBlockedNonHumanActor(actor)) {
       throw new Error('Agent 或系统身份不能执行人工任务操作');
     }
-    if (!task.currentAssignee) throw new Error('任务尚未分派具体责任人');
+    if (!task.currentAssignee || task.currentAssignee.kind !== 'responsibility_role') throw new Error('任务尚未分派具体责任人');
     if (task.currentAssignee.actorId !== actor) throw new Error('任务只能由被分派的具体责任人操作');
   }
 

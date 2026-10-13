@@ -11,7 +11,7 @@ export type TaskAuthorizationActor = {
 };
 export type TaskAuthorizationTask = {
   tenantId: string;
-  currentAssignee: { actorId: string } | null;
+  currentAssignee: { kind: 'responsibility_role'; actorId: string } | { kind: 'agent'; agentId: string } | null;
 };
 export type AuthorizationDecision =
   | { allowed: true; code: 'ALLOWED' }
@@ -60,9 +60,8 @@ export function authorizeTaskAction(input: TaskAuthorizationInput): Authorizatio
   if (OPERATOR_ACTIONS.has(action)) {
     if (!actor.roles.includes('operator')) return { allowed: false, code: 'OPERATOR_ROLE_REQUIRED' };
     if (!task.currentAssignee) return { allowed: false, code: 'ASSIGNMENT_REQUIRED' };
-    return task.currentAssignee.actorId === actor.actorId
-      ? { allowed: true, code: 'ALLOWED' }
-      : { allowed: false, code: 'ASSIGNEE_MISMATCH' };
+    if (task.currentAssignee.kind !== 'responsibility_role' || task.currentAssignee.actorId !== actor.actorId) return { allowed: false, code: 'ASSIGNEE_MISMATCH' };
+    return { allowed: true, code: 'ALLOWED' };
   }
 
   if (OWNER_ACTIONS.has(action)) {
@@ -99,9 +98,8 @@ export function authorizeCollaborationAction(input: CollaborationAuthorizationIn
     if (canManageBusiness(actor.roles)) return { allowed: true, code: 'ALLOWED' };
     if (!actor.roles.includes('operator')) return { allowed: false, code: 'OPERATOR_ROLE_REQUIRED' };
     if (!task.currentAssignee) return { allowed: false, code: 'ASSIGNMENT_REQUIRED' };
-    return task.currentAssignee.actorId === actor.actorId
-      ? { allowed: true, code: 'ALLOWED' }
-      : { allowed: false, code: 'ASSIGNEE_MISMATCH' };
+    if (task.currentAssignee.kind !== 'responsibility_role' || task.currentAssignee.actorId !== actor.actorId) return { allowed: false, code: 'ASSIGNEE_MISMATCH' };
+    return { allowed: true, code: 'ALLOWED' };
   }
   return { allowed: false, code: 'TASK_REQUIRED' };
 }

@@ -77,3 +77,27 @@ test('rejects unauthenticated, cross-tenant, unknown, and mutating candidate req
   assert.equal(api.handle({ method: 'GET', pathname: '/api/tasks/missing/agent-candidates', actor: manager })?.status, 404);
   assert.equal(api.handle({ method: 'POST', pathname: `/api/tasks/${taskId}/agent-candidates`, actor: manager, body: { tenantId: 'tenant-b', actor: 'agent:forged' } })?.status, 405);
 });
+
+test('confirms an eligible Agent assignment and records immutable dispatch history', (t) => {
+  const { api, taskId } = fixture(t);
+
+  const response = api.handle({ method: 'POST', pathname: `/api/tasks/${taskId}/assignments`, actor: manager, body: { assigneeKind: 'agent', agentId: 'agent-aeos-hub', reason: '人工确认派单' } });
+
+  assert.equal(response?.status, 200);
+  const body = response?.body as { task: { currentAssignee: { kind: string }; dispatchHistory: Array<{ agentId: string; confirmedBy: string }> } };
+  assert.equal(body.task.currentAssignee.kind, 'agent');
+  assert.equal(body.task.dispatchHistory.length, 1);
+  assert.equal(body.task.dispatchHistory[0]?.agentId, 'agent-aeos-hub');
+  assert.equal(body.task.dispatchHistory[0]?.confirmedBy, manager.actorId);
+});
+
+test('rejects an ineligible Agent assignment and a missing agentId', (t) => {
+  const { api, harbor, taskId } = fixture(t);
+
+  const snapshot = harbor.load();
+  snapshot.agents[0]!.registration.taskServiceProfile.tenantIds = ['tenant-b'];
+  harbor.save(snapshot);
+
+  assert.equal(api.handle({ method: 'POST', pathname: `/api/tasks/${taskId}/assignments`, actor: manager, body: { assigneeKind: 'agent', agentId: 'agent-aeos-hub', reason: '越界派单' } })?.status, 403);
+  assert.equal(api.handle({ method: 'POST', pathname: `/api/tasks/${taskId}/assignments`, actor: manager, body: { assigneeKind: 'agent', reason: '缺少目标' } })?.status, 403);
+});

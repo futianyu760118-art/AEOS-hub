@@ -1,5 +1,6 @@
 import type { EvidenceInput } from './evidence.ts';
 import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
+import { recommendTaskAssignees, validateAgentAssignment } from './task-dispatch.ts';
 import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
 import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
@@ -214,6 +215,27 @@ export class TaskApi {
         ? this.authorizeCollaboration('task_move', actor, task)
         : (!this.requireG1Scope(actor) ? this.denied(actor, 'assign', 'G0_SCOPE_REQUIRED') : this.authorize(task.currentAssignee ? 'reassign' : 'assign', actor, task));
       if (denied) return denied;
+
+      if (bodyValue(body, 'assigneeKind') === 'agent') {
+        const agentId = bodyValue(body, 'agentId');
+        if (typeof agentId !== 'string' || !agentId.trim()) return this.denied(actor, 'assign', 'AGENT_TARGET_REQUIRED', task);
+        const harbor = (this.dependencies.loadHarbor ?? loadHarbor)();
+        const agent = harbor.agents.find((candidate) => candidate.id === agentId.trim());
+        if (!agent) return this.denied(actor, 'assign', 'AGENT_NOT_FOUND', task);
+        const runtime = agent.runtimeId ? harbor.runtimes.find((candidate) => candidate.id === agent.runtimeId) ?? null : null;
+        const evaluatedAt = (this.dependencies.now ?? (() => new Date()))().toISOString();
+        const dispatchTask = { taskId: task.taskId, tenantId: task.tenantId, source: task.source };
+        const validation = validateAgentAssignment(dispatchTask, agent, runtime, evaluatedAt);
+        if (!validation.allowed) return this.denied(actor, 'assign', validation.code, task);
+        const recommendation = recommendTaskAssignees(dispatchTask, harbor.agents, harbor.runtimes, evaluatedAt).find((candidate) => candidate.agentId === agent.id);
+        const updated = this.dependencies.taskCenter.assign({
+          taskId: task.taskId, assigneeKind: 'agent', agentId: agent.id, reason: bodyValue(body, 'reason'),
+          recommendedReasons: recommendation?.reasons ?? [], actor: actor.actorId,
+        });
+        const auditStatus = this.audit(updated, actor, task.currentAssignee ? 'task_reassigned' : 'task_assigned');
+        return { status: 200, body: { task: updated, committed: true, auditStatus } };
+      }
+
       if (!this.isHumanOperatorTarget(bodyValue(body, 'assigneeActorId'))) {
         return this.denied(actor, 'assign', 'HUMAN_OPERATOR_TARGET_REQUIRED', task);
       }
