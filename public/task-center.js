@@ -15,6 +15,9 @@ const TERMINAL = new Set(['COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED']);
 export const PROJECT_STATUS_LABELS = {
   PLANNING: ['计划中', 'neutral'], IN_PROGRESS: ['进行中', 'warn'], ON_HOLD: ['已搁置', 'danger'], COMPLETED: ['已完成', 'ok'], CANCELLED: ['已取消', 'neutral'],
 };
+export const PRIORITY_LABELS = {
+  urgent: ['紧急', 'danger'], high: ['高', 'warn'], medium: ['中', 'info'], low: ['低', 'neutral'], none: ['无', 'neutral'],
+};
 
 export function taskDisplayState(task, today) {
   const [label, tone] = TASK_STATUS_LABELS[task?.status] || ['未知状态', 'neutral'];
@@ -125,7 +128,8 @@ export function projectDisplayState(project, tasks = []) {
   const completed = projectTasks.filter((task) => task.status === 'COMPLETED').length;
   const progress = project?.progress && Number.isFinite(project.progress.percent)
     ? project.progress : { total: projectTasks.length, completed, percent: projectTasks.length ? Math.round((completed / projectTasks.length) * 100) : 0 };
-  return { label, tone, progress, ownerLabel: project?.ownerActorId || '未指定负责人' };
+  const [priorityLabel] = PRIORITY_LABELS[project?.priority] || ['—', 'neutral'];
+  return { label, tone, progress, ownerLabel: project?.ownerActorId || '未指定负责人', priorityLabel };
 }
 
 export function taskBoardColumns(tasks = []) {
