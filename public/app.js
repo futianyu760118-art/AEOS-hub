@@ -51,7 +51,7 @@ const els = {
   g0DemoTenant: $('#g0-demo-tenant'), g0OrganizationScope: $('#g0-organization-scope'), g0ManagerActor: $('#g0-manager-actor'),
   g0OperatorActor: $('#g0-operator-actor'), g0OwnerActor: $('#g0-owner-actor'), g0M02Owner: $('#g0-m02-owner'),
   g0TaskStore: $('#g0-task-store'), g0G4Admission: $('#g0-g4-admission'), g0DecisionNote: $('#g0-decision-note'),
-  g0HistoryCount: $('#g0-history-count'), g0DecisionHistory: $('#g0-decision-history'),
+  g0HistoryCount: $('#g0-history-count'), g0DecisionHistory: $('#g0-decision-history'), g0HistorySearch: $('#g0-history-search'),
   personnelConfigEntry: $('#personnel-config-entry'), btnOpenPersonnelAdmin: $('#btn-open-personnel-admin'),
   btnPersonnelRefresh: $('#btn-personnel-refresh'), personnelSearch: $('#personnel-search'), btnPersonnelCreate: $('#btn-personnel-create'),
   personnelAccess: $('#personnel-access'), personnelListCount: $('#personnel-list-count'), personnelList: $('#personnel-list'), personnelStatus: $('#personnel-status'),
@@ -3347,6 +3347,16 @@ function setG0Field(field, value) {
   if (field && document.activeElement !== field) field.value = value || '';
 }
 
+function renderG0History() {
+  const snapshot = g0DecisionSnapshot;
+  const history = snapshot ? [...(snapshot.history || [])].reverse() : [];
+  const query = String(els.g0HistorySearch?.value || '').trim().toLowerCase();
+  const filtered = query
+    ? history.filter((entry) => [entry.field, entry.note, entry.actorId, entry.tenantId, String(entry.revision)].some((value) => String(value || '').toLowerCase().includes(query)))
+    : history;
+  els.g0DecisionHistory.innerHTML = renderG0HistoryMarkup(filtered, formatHarborTime);
+}
+
 function renderG0DecisionView() {
   const snapshot = g0DecisionSnapshot;
   if (!snapshot) return;
@@ -3369,7 +3379,7 @@ function renderG0DecisionView() {
   els.g0FormAccess.className = `status-pill ${canRecord ? 'ok' : 'neutral'}`;
   els.g0FormStatus.textContent = canRecord ? '提交后将作为治理决策登记；服务端会再次验证 manager 权限。' : '当前会话不具备 manager 角色，只能查看已登记的决策与历史。';
   els.g0HistoryCount.textContent = `${display.history.length} 条`;
-  els.g0DecisionHistory.innerHTML = renderG0HistoryMarkup(display.history, formatHarborTime);
+  renderG0History();
   refreshIcons($('#view-g0-governance'));
 }
 
@@ -5491,6 +5501,7 @@ els.btnOpenG0Governance?.addEventListener('click', () => {
   showView('g0-governance');
 });
 els.g0Form.addEventListener('submit', (event) => { void saveG0DecisionView(event); });
+els.g0HistorySearch?.addEventListener('input', renderG0History);
 els.btnPersonnelRefresh?.addEventListener('click', () => loadPersonnelAdminView());
 els.btnOpenPersonnelAdmin?.addEventListener('click', () => {
   if (!personnelConfigEntryVisible(authSession, g0DecisionSnapshot)) return;

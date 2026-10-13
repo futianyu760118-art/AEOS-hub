@@ -1073,7 +1073,10 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .g0-decision-fieldset > p { margin: 0 0 9px; color: var(--text-3); font-size: 10px; line-height: 1.45; }
 .g0-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; border-top: 1px solid var(--line-subtle); padding-top: 11px; }
 .g0-form-actions small { color: var(--text-3); font-size: 10px; line-height: 1.45; }
-.g0-decision-history { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 9px; list-style: none; }
+.g0-decision-history { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 9px; list-style: none; max-height: 360px; overflow-y: auto; }
+.g0-history-search { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-top: 1px solid var(--line-subtle); }
+.g0-history-search svg { width: 14px; height: 14px; color: var(--text-3); flex: none; }
+.g0-history-search input { flex: 1; border: none; background: transparent; color: var(--text); font-size: 11px; outline: none; }
 .g0-decision-history li { border: 1px solid var(--line-subtle); border-radius: 7px; background: #fff; padding: 9px 10px; }
 .g0-decision-history li > div { display: flex; justify-content: space-between; gap: 10px; }
 .g0-decision-history b { color: var(--text-2); font-size: 10px; }
