@@ -3393,12 +3393,26 @@ function collectG0DecisionRequest() {
   });
 }
 
+function renderG0ResponsibleOptions() {
+  const options = onboardingUsers
+    .map((user) => `<option value="${esc(user.actorId)}">${esc(onboardingOptionLabel(user))}</option>`)
+    .join('');
+  const placeholder = '<option value="">请选择账号</option>';
+  for (const select of [els.g0BusinessOwner, els.g0VerifyActor, els.g0OperatorActor]) {
+    const current = select.value;
+    select.innerHTML = placeholder + options;
+    if (current) select.value = current;
+  }
+}
+
 async function loadG0DecisionView(options = {}) {
   try {
     const response = await fetch('/api/governance/g0-decisions', { headers: { accept: 'application/json' } });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(g0ApiFailureReason(data, response.status));
     g0DecisionSnapshot = data.snapshot;
+    await loadOnboardingUsers({ silent: true });
+    renderG0ResponsibleOptions();
     renderG0DecisionView();
     syncPersonnelConfigEntry();
     syncOnboardingConfigEntry();

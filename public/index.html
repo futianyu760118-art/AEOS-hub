@@ -296,9 +296,9 @@
             <form id="g0-decision-form" class="g0-decision-form">
               <div class="g0-form-grid">
                 <label class="wide"><span>首个闭环场景</span><input value="订单交付风险" disabled /></label>
-                <label><span>业务负责人 actor ID</span><input id="g0-business-owner" maxlength="160" placeholder="例如 m01:user:xxxx" /></label>
-                <label><span>核验人 actor ID</span><input id="g0-verify-actor" maxlength="160" placeholder="必须与业务负责人不同" /></label>
-                <label><span>操作员 actor ID</span><input id="g0-operator-actor" maxlength="160" placeholder="例如 m01:user:xxxx" /></label>
+                <label><span>业务负责人</span><select id="g0-business-owner"><option value="">请选择账号</option></select></label>
+                <label><span>核验人</span><select id="g0-verify-actor"><option value="">请选择账号</option></select></label>
+                <label><span>操作员</span><select id="g0-operator-actor"><option value="">请选择账号</option></select></label>
                 <label><span>试点租户范围</span><input id="g0-demo-tenant" maxlength="160" placeholder="来自当前认证会话" readonly /></label>
                 <label class="wide"><span>组织范围</span><input id="g0-organization-scope" maxlength="300" placeholder="来自当前认证会话" readonly /></label>
                 <label class="wide"><span>登记说明</span><textarea id="g0-decision-note" maxlength="2000" rows="3" placeholder="说明本次登记依据；将随登记留痕。"></textarea></label>

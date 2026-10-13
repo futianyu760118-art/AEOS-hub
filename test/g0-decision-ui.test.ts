@@ -32,7 +32,7 @@ test('G0 governance is a manager-only system setting, not day-to-day navigation'
   assert.doesNotMatch(navigation, /data-view="g0-governance"/);
   const commandCatalog = app.slice(app.indexOf('const commands = ['), app.indexOf('];', app.indexOf('const commands = [')));
   assert.doesNotMatch(commandCatalog, /g0-governance/);
-  assert.match(html, /业务负责人 actor ID/);
+  assert.match(html, /id="g0-business-owner"/);
   assert.match(html, /不创建账号、不分配角色/);
   assert.doesNotMatch(html, /已创建 Keycloak 账号|已对接 M02|已派发 Agent|已执行业务操作/);
 });
