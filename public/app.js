@@ -3,6 +3,7 @@ import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule }
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
+import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -283,6 +284,7 @@ const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, i
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
+  localizeDynamicCopy(root);
   if (!window.lucide?.createIcons) return;
   window.lucide.createIcons({ root, attrs: { 'aria-hidden': 'true' } });
 }
@@ -309,7 +311,7 @@ function localDateKey(date = new Date()) {
 function toast(message, isError = false) {
   const node = document.createElement('div');
   node.className = `toast${isError ? ' err' : ''}`;
-  node.textContent = message;
+  node.textContent = localizeUiText(message);
   els.toasts.appendChild(node);
   window.setTimeout(() => node.remove(), 4500);
 }
@@ -3380,7 +3382,7 @@ async function taskRequest(path, method = 'GET', body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(localizeUiText(data.error || `请求失败（HTTP ${response.status}）`));
   return data;
 }
 
@@ -5796,5 +5798,6 @@ els.evidenceSearch?.addEventListener('input', renderEvidenceRows);
 els.evidenceSourceFilter?.addEventListener('change', renderEvidenceRows);
 els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
 
+localizeStaticDocument();
 refreshIcons();
 void bootstrapAuthentication();

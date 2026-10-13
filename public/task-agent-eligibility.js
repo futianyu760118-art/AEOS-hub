@@ -47,7 +47,7 @@ function candidateLine(candidate) {
   const runtime = candidate.runtime;
   const health = runtime?.lastVerification?.status === 'healthy'
     ? `健康已验证 · ${text(runtime.lastVerification.checkedAt)}`
-    : runtime ? `Runtime ${text(runtime.status)}` : '未绑定 Runtime';
+    : runtime ? `运行时 ${text(runtime.status)}` : '未绑定运行时';
   return `<article class="task-agent-candidate ${candidate.eligible ? 'is-eligible' : 'is-blocked'}">
     <div><strong>${escapeHtml(candidate.name)}</strong><small>${escapeHtml(candidate.role)} · 生命周期：${escapeHtml(candidate.lifecycle)} · 状态：${escapeHtml(candidate.status)}</small></div>
     <p>${escapeHtml(health)}</p>
@@ -67,8 +67,8 @@ export function renderAgentCandidatePanel(payload) {
     ? `<div class="task-agent-candidate-group"><h4>暂不符合条件</h4>${state.blocked.map(candidateLine).join('')}</div>`
     : '';
   return `<section class="task-agent-eligibility" aria-live="polite">
-    <div class="task-agent-eligibility-head"><i data-lucide="shield-check"></i><div><strong>Agent 接手条件</strong><small>仅展示治理资格；当前任务仍由责任角色负责。</small></div></div>
+    <div class="task-agent-eligibility-head"><i data-lucide="shield-check"></i><div><strong>智能体接手条件</strong><small>仅展示治理资格；当前任务仍由责任角色负责。</small></div></div>
     ${interfaceWarning}
-    ${[eligible, blocked].filter(Boolean).join('') || '<p class="task-agent-empty">当前租户没有登记的 Agent 候选。</p>'}
+    ${[eligible, blocked].filter(Boolean).join('') || '<p class="task-agent-empty">当前租户没有登记的智能体候选。</p>'}
   </section>`;
 }

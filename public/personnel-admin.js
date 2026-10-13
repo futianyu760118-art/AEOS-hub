@@ -7,7 +7,7 @@ export const PERSONNEL_PILOT_ROLES = ['manager', 'operator', 'owner'];
 export const PERSONNEL_ROLE_LABELS = {
   manager: '管理者',
   operator: '操作员',
-  owner: 'Owner',
+  owner: '业务负责人',
 };
 
 function isHumanSession(session) {

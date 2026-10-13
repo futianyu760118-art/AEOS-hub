@@ -27,7 +27,7 @@
     "test:m01-local-scripts": "node --test test/m01-local-scripts.test.mjs",
     "test:evidence-contract": "node --test test/evidence-contract.test.ts",
     "test:result-contract": "node --test test/result-contract.test.ts",
-    "test:collaboration": "node --test test/task-center.test.ts test/task-authorization.test.ts test/task-api.test.ts test/project-api.test.ts test/task-center-ui.test.ts test/project-center-ui.test.ts test/task-center-navigation.test.ts",
+    "test:collaboration": "node --test test/task-center.test.ts test/task-authorization.test.ts test/task-api.test.ts test/project-api.test.ts test/task-center-ui.test.ts test/project-center-ui.test.ts test/task-center-navigation.test.ts test/chinese-copy.test.ts",
     "smoke:protocol": "node scripts/smoke-protocol.mjs",
     "check:types": "tsc --noEmit",
     "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",
