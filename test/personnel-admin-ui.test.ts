@@ -129,12 +129,12 @@ test('onboarding and G0 scope use the authenticated session, never editable brow
   assert.match(createForm, /ob-password/);
 });
 
-test('onboarding create step labels accounts by G0 role (Owner / Verify / operator), not Keycloak pilot role', () => {
+test('onboarding create step labels accounts by G0 role and assigns pilot roles', () => {
   const createForm = html.slice(html.indexOf('id="onboarding-create-form"'), html.indexOf('id="onboarding-g0-form"'));
-  assert.match(createForm, /业务 Owner/);
-  assert.match(createForm, /核验人 Verify/);
-  assert.match(createForm, /操作员 operator/);
-  assert.match(createForm, /data-pilot-role="owner"/);
+  assert.match(createForm, /业务负责人/);
+  assert.match(createForm, /核验人/);
+  assert.match(createForm, /操作员/);
+  assert.match(createForm, /data-pilot-role="supervisor"/);
   assert.match(createForm, /data-pilot-role="operator"/);
   assert.doesNotMatch(createForm, /class="ob-role"/);
 });

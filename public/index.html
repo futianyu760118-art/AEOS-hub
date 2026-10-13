@@ -345,23 +345,23 @@
           <div class="page-head"><div><span class="page-module">系统配置 / 首次人员开通</span><h1>首次人员开通</h1><p>在首个闭环就绪前，由当前 manager 创建 G0 所需的普通账号并登记决策；账号与范围均来自服务端可信会话，不采信浏览器传入的身份与范围。</p></div><div class="page-actions"><button id="btn-open-personnel-admin-from-onboarding" class="btn secondary" type="button"><i data-lucide="users-round"></i>打开人员与权限</button></div></div>
 
           <section class="surface onboarding-step">
-            <div class="surface-head"><div><h2>第 1 步 · 创建账号</h2><p>创建业务 Owner、核验人与操作员三个 human 账号并设置各自临时密码（强制下次登录修改）。</p></div></div>
+            <div class="surface-head"><div><h2>第 1 步 · 创建账号</h2><p>创建业务负责人、核验人与操作员三个账号并设置各自临时密码（强制下次登录修改）。</p></div></div>
             <form id="onboarding-create-form">
               <div id="onboarding-create-rows" class="onboarding-create-rows">
-                <div class="onboarding-create-row" data-pilot-role="owner">
-                  <span class="ob-role-tag ob-role-owner"><i data-lucide="shield-check"></i>业务 Owner</span>
+                <div class="onboarding-create-row" data-pilot-role="supervisor">
+                  <span class="ob-role-tag ob-role-owner"><i data-lucide="shield-check"></i>业务负责人</span>
                   <label><span>显示名</span><input class="ob-first-name" value="张三" maxlength="320" /></label>
                   <label><span>登录名</span><input class="ob-username" placeholder="zhangsan" maxlength="160" /></label>
                   <label><span>临时密码</span><input class="ob-password" type="password" maxlength="1024" autocomplete="new-password" /></label>
                 </div>
-                <div class="onboarding-create-row" data-pilot-role="owner">
-                  <span class="ob-role-tag ob-role-verify"><i data-lucide="badge-check"></i>核验人 Verify</span>
+                <div class="onboarding-create-row" data-pilot-role="supervisor">
+                  <span class="ob-role-tag ob-role-verify"><i data-lucide="badge-check"></i>核验人</span>
                   <label><span>显示名</span><input class="ob-first-name" value="李四" maxlength="320" /></label>
                   <label><span>登录名</span><input class="ob-username" placeholder="lisi" maxlength="160" /></label>
                   <label><span>临时密码</span><input class="ob-password" type="password" maxlength="1024" autocomplete="new-password" /></label>
                 </div>
                 <div class="onboarding-create-row" data-pilot-role="operator">
-                  <span class="ob-role-tag ob-role-operator"><i data-lucide="user-cog"></i>操作员 operator</span>
+                  <span class="ob-role-tag ob-role-operator"><i data-lucide="user-cog"></i>操作员</span>
                   <label><span>显示名</span><input class="ob-first-name" value="王五" maxlength="320" /></label>
                   <label><span>登录名</span><input class="ob-username" placeholder="wangwu" maxlength="160" /></label>
                   <label><span>临时密码</span><input class="ob-password" type="password" maxlength="1024" autocomplete="new-password" /></label>
@@ -633,10 +633,10 @@
           <label><span>邮箱</span><input id="personnel-create-email" type="email" maxlength="320" /></label>
           <label><span>名</span><input id="personnel-create-first" maxlength="320" /></label>
           <label><span>姓</span><input id="personnel-create-last" maxlength="320" /></label>
-          <fieldset class="wide"><legend>角色（仅 manager / operator / owner）</legend><div id="personnel-create-roles" class="personnel-role-picker">
-            <label><input type="checkbox" name="role" value="manager" /> manager</label>
-            <label><input type="checkbox" name="role" value="operator" /> operator</label>
-            <label><input type="checkbox" name="role" value="owner" /> owner</label>
+          <fieldset class="wide"><legend>角色（总经理 / 主管 / 普通用户）</legend><div id="personnel-create-roles" class="personnel-role-picker">
+            <label><input type="checkbox" name="role" value="manager" /> 总经理</label>
+            <label><input type="checkbox" name="role" value="supervisor" /> 主管</label>
+            <label><input type="checkbox" name="role" value="operator" /> 普通用户</label>
           </div></fieldset>
         </div>
         <div class="modal-foot"><span id="personnel-create-status"></span><button id="personnel-create-cancel" class="btn secondary" type="button">取消</button><button id="personnel-create-submit" class="btn primary" type="submit"><i data-lucide="check"></i><span>创建</span></button></div>
