@@ -112,7 +112,7 @@ test('first-time onboarding appears only while G0 is not ready for a human manag
   assert.match(html, /id="onboarding-config-entry"[^>]*\bhidden\b/);
   assert.match(html, /id="view-personnel-onboarding"/);
   assert.match(html, /第 1 步 · 创建账号/);
-  assert.match(html, /第 2 步 · 登记 G0 决策/);
+  assert.match(html, /第 2 步 · 登记责任人/);
 });
 
 test('onboarding and G0 scope use the authenticated session, never editable browser scope', () => {

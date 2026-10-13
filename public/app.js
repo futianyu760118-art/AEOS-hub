@@ -2704,9 +2704,11 @@ export function g0DecisionDisplay(snapshot) {
   return {
     ready: snapshot?.readyForG1 === true,
     entries: [
-      ['首个闭环场景', decisions.firstScenario], ['业务 Owner', decisions.businessOwnerActor], ['Verify 人', decisions.verifyActor],
-      ['试点租户与组织范围', decisions.scope], ['三账号授权安排决策', decisions.threeAccountAuthorization], ['M02 责任安排', decisions.m02Responsibility],
-      ['任务中心决策', decisions.taskStoreDecision], ['G4 准入门禁', decisions.g4Admission],
+      ['首个闭环场景', decisions.firstScenario],
+      ['业务负责人', decisions.businessOwnerActor],
+      ['核验人', decisions.verifyActor],
+      ['操作员', decisions.threeAccountAuthorization],
+      ['试点范围', decisions.scope],
     ],
     history: Array.isArray(snapshot?.history) ? [...snapshot.history].reverse() : [],
   };
@@ -2760,8 +2762,8 @@ export function g0ApiFailureReason(data, status) {
 
 export function g0SaveFeedback(auditStatus) {
   return auditStatus === 'failed'
-    ? { status: '决策已登记，但 Evidence 留痕未确认；请联系管理员核查。', toast: 'G0 决策已登记，Evidence 留痕待核查', isError: true }
-    : { status: '决策登记已保存并提交服务端审计。', toast: 'G0 决策登记已保存', isError: false };
+    ? { status: '登记已保存，但 Evidence 留痕未确认；请联系管理员核查。', toast: '试点初始化已登记，Evidence 留痕待核查', isError: true }
+    : { status: '登记已保存并提交服务端审计。', toast: '试点初始化已保存', isError: false };
 }
 
 function g0ManagerCanRecord() { return g0CanRecord(authSession); }
@@ -2787,7 +2789,7 @@ function syncOnboardingConfigEntry() {
 
 async function loadPersonnelOnboardingView(options = {}) {
   const ready = g0DecisionSnapshot?.readyForG1 === true;
-  els.onboardingG0Readiness.textContent = ready ? '已具备进入 G1 的决策条件' : '尚未就绪';
+  els.onboardingG0Readiness.textContent = ready ? '已完成初始化' : '尚未就绪';
   els.onboardingG0Readiness.className = `status-pill ${ready ? 'ok' : 'neutral'}`;
   els.obG0Manager.textContent = authSession?.actorId || '—';
   els.obG0Tenant.textContent = authSession?.tenantId || '—';
@@ -3350,21 +3352,15 @@ function renderG0DecisionView() {
   if (!snapshot) return;
   const display = g0DecisionDisplay(snapshot);
   const decisions = snapshot.decisions || {};
-  els.g0Readiness.textContent = display.ready ? '已具备进入 G1 的决策条件' : '尚未具备进入 G1 的决策条件';
+  els.g0Readiness.textContent = display.ready ? '已完成初始化' : '尚未完成初始化';
   els.g0Readiness.className = `status-pill ${display.ready ? 'ok' : 'warn'}`;
   els.g0DecisionStatus.innerHTML = display.entries.map(([label, choice]) => `<div class="g0-status-item ${choice ? 'recorded' : 'missing'}"><i data-lucide="${choice ? 'check-circle-2' : 'circle'}"></i><span>${esc(label)}</span><b>${choice ? '已登记' : '尚未登记'}</b></div>`).join('');
 
-  setG0Field(els.g0FirstScenario, g0ChoiceValue(decisions.firstScenario));
   setG0Field(els.g0BusinessOwner, g0ChoiceValue(decisions.businessOwnerActor)?.actorId);
   setG0Field(els.g0VerifyActor, g0ChoiceValue(decisions.verifyActor)?.actorId);
+  setG0Field(els.g0OperatorActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.operatorActorId);
   setG0Field(els.g0DemoTenant, g0ChoiceValue(decisions.scope)?.demoTenantId || authSession?.tenantId || '');
   setG0Field(els.g0OrganizationScope, g0ChoiceValue(decisions.scope)?.organizationScope || authSession?.organizationId || '');
-  setG0Field(els.g0ManagerActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.managerActorId);
-  setG0Field(els.g0OperatorActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.operatorActorId);
-  setG0Field(els.g0OwnerActor, g0ChoiceValue(decisions.threeAccountAuthorization)?.ownerActorId);
-  setG0Field(els.g0M02Owner, g0ChoiceValue(decisions.m02Responsibility)?.ownerActorId);
-  setG0Field(els.g0TaskStore, g0ChoiceValue(decisions.taskStoreDecision));
-  setG0Field(els.g0G4Admission, g0ChoiceValue(decisions.g4Admission));
 
   const canRecord = g0ManagerCanRecord();
   els.g0Form.querySelectorAll('input, select, textarea').forEach((field) => { field.disabled = !canRecord; });
@@ -3380,11 +3376,20 @@ function renderG0DecisionView() {
 function g0TrimmedValue(field) { return String(field?.value || '').trim(); }
 
 function collectG0DecisionRequest() {
+  const businessOwnerActorId = g0TrimmedValue(els.g0BusinessOwner);
   return buildG0DecisionRequest({
-    firstScenario: g0TrimmedValue(els.g0FirstScenario), businessOwnerActorId: g0TrimmedValue(els.g0BusinessOwner), verifyActorId: g0TrimmedValue(els.g0VerifyActor),
-    demoTenantId: g0TrimmedValue(els.g0DemoTenant), organizationScope: g0TrimmedValue(els.g0OrganizationScope), managerActorId: g0TrimmedValue(els.g0ManagerActor),
-    operatorActorId: g0TrimmedValue(els.g0OperatorActor), ownerActorId: g0TrimmedValue(els.g0OwnerActor), m02OwnerActorId: g0TrimmedValue(els.g0M02Owner),
-    taskStoreDecision: g0TrimmedValue(els.g0TaskStore), g4Admission: g0TrimmedValue(els.g0G4Admission), note: g0TrimmedValue(els.g0DecisionNote),
+    firstScenario: 'order_delivery_risk',
+    businessOwnerActorId,
+    verifyActorId: g0TrimmedValue(els.g0VerifyActor),
+    demoTenantId: g0TrimmedValue(els.g0DemoTenant),
+    organizationScope: g0TrimmedValue(els.g0OrganizationScope),
+    managerActorId: authSession?.actorId || '',
+    operatorActorId: g0TrimmedValue(els.g0OperatorActor),
+    ownerActorId: businessOwnerActorId,
+    m02OwnerActorId: businessOwnerActorId,
+    taskStoreDecision: 'reuse_existing_task_center',
+    g4Admission: 'blocked_until_g1',
+    note: g0TrimmedValue(els.g0DecisionNote),
   });
 }
 

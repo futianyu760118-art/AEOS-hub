@@ -290,25 +290,20 @@
         </section>
 
         <section id="view-g0-governance" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">系统配置 / 治理设置</span><h1>G0 决策登记</h1><p>登记进入 G1 前的治理选择与就绪状态；本页不创建账号、不分配角色、不对接 M02、不派发 Agent，也不执行业务操作。</p></div><div class="page-actions"><button id="btn-g0-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
-          <section class="surface g0-readiness-surface"><div class="surface-head"><div><h2>G1 准入状态</h2><p>仅在全部必需决策已登记且 Owner 与 Verify 人不同后，才显示为已就绪。</p></div><span id="g0-readiness" class="status-pill neutral">正在读取</span></div><div id="g0-decision-status" class="g0-decision-status"><div class="dashboard-loading">正在读取 G0 决策登记…</div></div></section>
-          <section class="surface g0-form-surface"><div class="surface-head"><div><h2>决策登记</h2><p>只有当前会话具备 manager 角色时可提交；服务端会再次校验权限并留下 Evidence。</p></div><span id="g0-form-access" class="status-pill neutral">正在确认权限</span></div>
+          <div class="page-head"><div><span class="page-module">系统配置 / 治理设置</span><h1>试点初始化</h1><p>登记进入经营闭环前需要确定的试点范围与责任人；本页不创建账号、不分配角色，也不执行业务操作。</p></div><div class="page-actions"><button id="btn-g0-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+          <section class="surface g0-readiness-surface"><div class="surface-head"><div><h2>就绪状态</h2><p>仅在业务负责人、核验人、操作员都已登记，且负责人与核验人不同后，才显示为已就绪。</p></div><span id="g0-readiness" class="status-pill neutral">正在读取</span></div><div id="g0-decision-status" class="g0-decision-status"><div class="dashboard-loading">正在读取试点初始化…</div></div></section>
+          <section class="surface g0-form-surface"><div class="surface-head"><div><h2>责任人登记</h2><p>只有当前会话具备 manager 角色时可提交；服务端会再次校验权限并留下 Evidence。</p></div><span id="g0-form-access" class="status-pill neutral">正在确认权限</span></div>
             <form id="g0-decision-form" class="g0-decision-form">
               <div class="g0-form-grid">
-                <label><span>首个闭环场景</span><select id="g0-first-scenario"><option value="">尚未登记</option><option value="order_delivery_risk">订单交付风险</option></select></label>
-                <label><span>业务 Owner actor ID</span><input id="g0-business-owner" maxlength="160" placeholder="例如 owner-demo" /></label>
-                <label><span>Verify 人 actor ID</span><input id="g0-verify-actor" maxlength="160" placeholder="必须与 Owner 不同" /></label>
+                <label class="wide"><span>首个闭环场景</span><input value="订单交付风险" disabled /></label>
+                <label><span>业务负责人 actor ID</span><input id="g0-business-owner" maxlength="160" placeholder="例如 m01:user:xxxx" /></label>
+                <label><span>核验人 actor ID</span><input id="g0-verify-actor" maxlength="160" placeholder="必须与业务负责人不同" /></label>
+                <label><span>操作员 actor ID</span><input id="g0-operator-actor" maxlength="160" placeholder="例如 m01:user:xxxx" /></label>
                 <label><span>试点租户范围</span><input id="g0-demo-tenant" maxlength="160" placeholder="来自当前认证会话" readonly /></label>
                 <label class="wide"><span>组织范围</span><input id="g0-organization-scope" maxlength="300" placeholder="来自当前认证会话" readonly /></label>
+                <label class="wide"><span>登记说明</span><textarea id="g0-decision-note" maxlength="2000" rows="3" placeholder="说明本次登记依据；将随登记留痕。"></textarea></label>
               </div>
-              <fieldset class="g0-decision-fieldset"><legend>三账号授权安排决策</legend><p>登记 G1 所需的账号与职责安排，不代表系统已创建账号或已分配角色。</p><div class="g0-form-grid"><label><span>manager actor ID</span><input id="g0-manager-actor" maxlength="160" placeholder="例如 manager-demo" /></label><label><span>operator actor ID</span><input id="g0-operator-actor" maxlength="160" placeholder="例如 operator-demo" /></label><label><span>owner actor ID</span><input id="g0-owner-actor" maxlength="160" placeholder="应与业务 Owner 一致" /></label></div></fieldset>
-              <div class="g0-form-grid">
-                <label><span>M02 责任 Owner actor ID</span><input id="g0-m02-owner" maxlength="160" placeholder="应与业务 Owner 一致" /></label>
-                <label><span>任务中心决策</span><select id="g0-task-store"><option value="">尚未登记</option><option value="reuse_existing_task_center">复用现有任务中心</option></select></label>
-                <label><span>G4 准入门禁</span><select id="g0-g4-admission"><option value="">尚未登记</option><option value="blocked_until_g1">G1 完成前保持阻断</option></select></label>
-                <label class="wide"><span>登记说明</span><textarea id="g0-decision-note" maxlength="2000" rows="3" placeholder="说明本次决策依据；将随决策登记留痕。"></textarea></label>
-              </div>
-              <div class="g0-form-actions"><small id="g0-form-status">请先读取当前登记状态。</small><button id="btn-g0-save" class="btn primary" type="submit"><i data-lucide="save"></i>保存决策登记</button></div>
+              <div class="g0-form-actions"><small id="g0-form-status">请先读取当前登记状态。</small><button id="btn-g0-save" class="btn primary" type="submit"><i data-lucide="save"></i>保存登记</button></div>
             </form>
           </section>
           <section class="surface g0-history-surface"><div class="surface-head"><div><h2>不可变更的登记历史</h2><p>按最近登记在前显示；该历史记录的是 Hub 治理决策，不等同于业务系统执行记录。</p></div><span id="g0-history-count" class="status-pill neutral">0 条</span></div><ol id="g0-decision-history" class="g0-decision-history"><li class="dashboard-loading">暂无登记历史</li></ol></section>
@@ -342,7 +337,7 @@
         </section>
 
         <section id="view-personnel-onboarding" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">系统配置 / 首次人员开通</span><h1>首次人员开通</h1><p>在首个闭环就绪前，由当前 manager 创建 G0 所需的普通账号并登记决策；账号与范围均来自服务端可信会话，不采信浏览器传入的身份与范围。</p></div><div class="page-actions"><button id="btn-open-personnel-admin-from-onboarding" class="btn secondary" type="button"><i data-lucide="users-round"></i>打开人员与权限</button></div></div>
+          <div class="page-head"><div><span class="page-module">系统配置 / 首次人员开通</span><h1>首次人员开通</h1><p>在首个闭环就绪前，由当前 manager 创建试点所需的普通账号并登记责任人；账号与范围均来自服务端可信会话，不采信浏览器传入的身份与范围。</p></div><div class="page-actions"><button id="btn-open-personnel-admin-from-onboarding" class="btn secondary" type="button"><i data-lucide="users-round"></i>打开人员与权限</button></div></div>
 
           <section class="surface onboarding-step">
             <div class="surface-head"><div><h2>第 1 步 · 创建账号</h2><p>创建业务负责人、核验人与操作员三个账号并设置各自临时密码（强制下次登录修改）。</p></div></div>
@@ -372,7 +367,7 @@
           </section>
 
           <section class="surface onboarding-step">
-            <div class="surface-head"><div><h2>第 2 步 · 登记 G0 决策</h2><p>从已创建或已有账号中选择 G0 角色；manager 与范围固定为当前认证会话。</p></div><span id="onboarding-g0-readiness" class="status-pill neutral">尚未就绪</span></div>
+            <div class="surface-head"><div><h2>第 2 步 · 登记责任人</h2><p>从已创建或已有账号中选择试点责任人；manager 与范围固定为当前认证会话。</p></div><span id="onboarding-g0-readiness" class="status-pill neutral">尚未就绪</span></div>
             <form id="onboarding-g0-form" class="onboarding-g0">
               <div class="obg0-scope-strip">
                 <div class="obg0-scope-item"><span class="obg0-scope-label"><i data-lucide="user"></i>当前 manager</span><code id="ob-g0-manager">—</code></div>
@@ -543,7 +538,7 @@
           <div class="page-head"><div><span class="page-module">系统</span><h1>系统配置</h1><p>模型提供商、运行时隔离与中枢能力配置</p></div><div class="page-actions"><button id="btn-save-config" class="btn primary" type="button"><i data-lucide="save"></i>保存并重启运行时</button></div></div>
           <div class="config-layout">
             <section id="g0-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="g0-config-entry-title">
-              <div class="surface-head"><div><h2 id="g0-config-entry-title">治理设置</h2><p>登记试点进入 G1 前的责任分工与准入决策；仅 manager 可维护。</p></div><button id="btn-open-g0-governance" class="btn secondary compact" type="button"><i data-lucide="clipboard-check"></i>打开 G0 决策登记</button></div>
+              <div class="surface-head"><div><h2 id="g0-config-entry-title">试点初始化</h2><p>登记试点范围与责任人；仅 manager 可维护。</p></div><button id="btn-open-g0-governance" class="btn secondary compact" type="button"><i data-lucide="clipboard-check"></i>打开试点初始化</button></div>
             </section>
             <section id="personnel-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="personnel-config-entry-title">
               <div class="surface-head"><div><h2 id="personnel-config-entry-title">用户管理</h2><p>查看 OA 人员投影，管理登录状态、临时密码与业务角色；身份范围由服务端固定。</p></div><button id="btn-open-personnel-admin" class="btn secondary compact" type="button"><i data-lucide="users-round"></i>打开用户管理</button></div>
@@ -555,7 +550,7 @@
               <div class="surface-head"><div><h2 id="permission-config-entry-title">权限管理</h2><p>维护 Hub 权限资源树、路由、操作集、排序和启停状态。</p></div><button id="btn-open-permission-admin" class="btn secondary compact" type="button"><i data-lucide="key-round"></i>打开权限管理</button></div>
             </section>
             <section id="onboarding-config-entry" class="surface config-section governance-config-entry hidden" aria-labelledby="onboarding-config-entry-title">
-              <div class="surface-head"><div><h2 id="onboarding-config-entry-title">首次人员开通（应急）</h2><p>仅在尚未接入 OA 或 G0 未就绪时使用；OA 同步启用后不作为日常人员维护入口。</p></div><button id="btn-open-personnel-onboarding" class="btn primary compact" type="button"><i data-lucide="user-plus"></i>开始应急开通</button></div>
+              <div class="surface-head"><div><h2 id="onboarding-config-entry-title">首次人员开通（应急）</h2><p>仅在尚未接入 OA 或试点未初始化时使用；OA 同步启用后不作为日常人员维护入口。</p></div><button id="btn-open-personnel-onboarding" class="btn primary compact" type="button"><i data-lucide="user-plus"></i>开始应急开通</button></div>
             </section>
             <section class="surface config-section"><div class="surface-head"><div><h2>默认模型</h2><p>修改后将重启本项目隔离目录内的 Codex Runtime</p></div><span id="cfg-status" class="config-status"></span></div><div class="form-grid"><label><span>模型提供商</span><select id="cfg-provider"></select></label><label><span>模型</span><input id="cfg-model" list="model-suggest" placeholder="留空使用账号默认模型" /><datalist id="model-suggest"><option value="gpt-5.1-codex"></option><option value="gpt-5.2-codex"></option><option value="gpt-5-codex"></option><option value="o3"></option><option value="o4-mini"></option></datalist></label></div><p id="cfg-provider-hint" class="form-hint"></p></section>
             <section class="surface config-section provider-section"><div class="surface-head"><div><h2>自定义提供商</h2><p>OpenAI 兼容网关 / 国内模型 · 密钥仅写入隔离目录</p></div><button id="btn-add-provider" class="btn secondary compact" type="button"><i data-lucide="plus"></i>添加提供商</button></div><div id="providers" class="providers"></div><p class="form-hint">当前 Codex 版本仅支持 <code>responses</code> 接口；可切换模型清单仅用于对话页选择。</p></section>
@@ -625,7 +620,7 @@
 
   <div id="personnel-create-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="personnel-create-title">
     <div class="modal-panel">
-      <div class="modal-head"><div><span>人员与权限</span><h2 id="personnel-create-title">创建用户</h2><p>创建即设置临时密码；范围固定为当前 G0 试点租户与组织，不采信浏览器传入的范围。</p></div><button id="personnel-create-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div class="modal-head"><div><span>人员与权限</span><h2 id="personnel-create-title">创建用户</h2><p>创建即设置临时密码；范围固定为当前试点租户与组织，不采信浏览器传入的范围。</p></div><button id="personnel-create-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
       <form id="personnel-create-form">
         <div class="modal-body personnel-form-grid">
           <label class="wide"><span>用户名</span><input id="personnel-create-username" maxlength="160" required /></label>

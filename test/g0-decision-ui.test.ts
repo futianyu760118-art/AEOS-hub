@@ -15,9 +15,9 @@ test('G0 decision view presents missing choices and a readiness result', () => {
   const incomplete = helpers.g0DecisionDisplay({ readyForG1: false, decisions: {}, history: [] });
   const ready = helpers.g0DecisionDisplay({ readyForG1: true, decisions: { firstScenario: { value: 'order_delivery_risk' } }, history: [] });
   assert.equal(incomplete.ready, false);
-  assert.equal(incomplete.entries.filter(([, choice]) => !choice).length, 8);
+  assert.equal(incomplete.entries.filter(([, choice]) => !choice).length, 5);
   assert.equal(ready.ready, true);
-  assert.match(app, /已具备进入 G1 的决策条件/);
+  assert.match(app, /已完成初始化/);
 });
 
 test('G0 governance is a manager-only system setting, not day-to-day navigation', () => {
@@ -26,13 +26,13 @@ test('G0 governance is a manager-only system setting, not day-to-day navigation'
   assert.equal(helpers.g0CanRecord({ roles: 'manager' }), false);
   assert.equal(helpers.g0ConfigEntryVisible({ roles: ['operator'] }), false);
   assert.equal(helpers.g0ConfigEntryVisible({ roles: ['manager'] }), true);
-  assert.match(html, /id="g0-config-entry"[\s\S]*打开 G0 决策登记/);
+  assert.match(html, /id="g0-config-entry"[\s\S]*打开试点初始化/);
   assert.match(html, /id="g0-config-entry"[^>]*\bhidden\b/);
   const navigation = html.slice(html.indexOf('<nav'), html.indexOf('</nav>'));
   assert.doesNotMatch(navigation, /data-view="g0-governance"/);
   const commandCatalog = app.slice(app.indexOf('const commands = ['), app.indexOf('];', app.indexOf('const commands = [')));
   assert.doesNotMatch(commandCatalog, /g0-governance/);
-  assert.match(html, /授权安排决策/);
+  assert.match(html, /业务负责人 actor ID/);
   assert.match(html, /不创建账号、不分配角色/);
   assert.doesNotMatch(html, /已创建 Keycloak 账号|已对接 M02|已派发 Agent|已执行业务操作/);
 });
@@ -56,7 +56,7 @@ test('G0 UI retains API 400/403 reasons and makes audit failure a warning rather
   assert.equal(helpers.g0ApiFailureReason({ error: 'invalid governance request' }, 400), 'invalid governance request');
   assert.equal(helpers.g0ApiFailureReason({ error: 'manager role required' }, 403), 'manager role required');
   const feedback = helpers.g0SaveFeedback('failed');
-  assert.match(feedback.status, /已登记/);
+  assert.match(feedback.status, /登记已保存/);
   assert.match(feedback.toast, /待核查/);
   assert.equal(feedback.isError, true);
   assert.equal(helpers.g0SaveFeedback('recorded').isError, false);
