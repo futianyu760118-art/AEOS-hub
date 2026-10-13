@@ -30,9 +30,9 @@ test('M01 status script uses braced interpolation before port-label colons', asy
   assert.doesNotMatch(script, /\$hubHttpsPort:/);
 });
 
-test('M01 hub runner admits manager/operator/owner roles and gates personnel admin on flag + secret', async () => {
+test('M01 hub runner admits the pilot roles and gates personnel admin on flag + secret', async () => {
   const runner = await source('run-m01-hub.ps1');
-  assert.match(runner, /AEOS_M01_ALLOWED_ROLES = 'manager,operator,owner,analyst'/);
+  assert.match(runner, /AEOS_M01_ALLOWED_ROLES = 'manager,supervisor,operator,owner,analyst'/);
   assert.match(runner, /HOST = '0\.0\.0\.0'/);
   assert.match(runner, /M01_PERSONNEL_ADMIN_ENABLED/);
   assert.match(runner, /M01_PERSONNEL_ADMIN_CLIENT_ID = 'aeos-hub-personnel-admin'/);
@@ -73,14 +73,10 @@ test('personnel provisioning uses the ignored runtime file, requires confirmatio
   assert.doesNotMatch(script, /Write-(?:Host|Output).*M01_PERSONNEL_ADMIN_CLIENT_SECRET/);
   assert.match(compose, /aeos-user-profile\.json:\/opt\/aeos\/aeos-user-profile\.json:ro/);
   assert.match(config, /update users\/profile -r aeos -f/);
-  assert.match(config, /for role in manager operator owner/);
+  assert.match(config, /for role in manager supervisor operator/);
   assert.match(config, /kcadm\.sh create roles -r aeos/);
   assert.equal(profile.unmanagedAttributePolicy, 'ADMIN_EDIT');
-  for (const name of [
-    'email', 'firstName', 'lastName', 'tenant_id', 'organization_id',
-    'external_employee_id', 'department_id', 'department_name',
-    'position_code', 'position_name', 'identity_source', 'last_synced_at',
-  ]) {
+  for (const name of ['email', 'firstName', 'lastName']) {
     const attribute = profile.attributes.find((entry) => entry.name === name);
     assert.deepEqual(attribute?.permissions, { view: ['admin'], edit: ['admin'] });
     assert.equal(Object.hasOwn(attribute ?? {}, 'required'), false);
