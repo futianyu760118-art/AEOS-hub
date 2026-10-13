@@ -22,6 +22,15 @@ export type TaskAuthorizationInput = {
   task?: TaskAuthorizationTask | null;
   registeredOwnerActorId?: string | null;
 };
+export const COLLABORATION_ACTIONS = ['project_create', 'project_update', 'project_read', 'task_create_manual', 'task_update_manual', 'task_move'] as const;
+export type CollaborationAction = typeof COLLABORATION_ACTIONS[number];
+export type CollaborationProject = { tenantId: string; ownerActorId: string; memberActorIds: readonly string[] };
+export type CollaborationAuthorizationInput = {
+  action: CollaborationAction;
+  actor: TaskAuthorizationActor;
+  task?: TaskAuthorizationTask | null;
+  project?: CollaborationProject | null;
+};
 
 const MANAGER_ACTIONS = new Set<TaskAction>(['create', 'assign', 'reassign']);
 const OPERATOR_ACTIONS = new Set<TaskAction>(['accept', 'start', 'supplement_evidence', 'submit_result']);
@@ -59,5 +68,36 @@ export function authorizeTaskAction(input: TaskAuthorizationInput): Authorizatio
       : { allowed: false, code: 'REGISTERED_OWNER_MISMATCH' };
   }
 
+  return { allowed: false, code: 'TASK_REQUIRED' };
+}
+
+/**
+ * The project workspace has a wider collaboration surface than controlled G1
+ * work, but it retains the same server-trusted identity and tenant boundary.
+ */
+export function authorizeCollaborationAction(input: CollaborationAuthorizationInput): AuthorizationDecision {
+  const { action, actor, task, project } = input;
+  if (actor.actorType !== 'human') return { allowed: false, code: 'HUMAN_ACTOR_REQUIRED' };
+  if (project && project.tenantId !== actor.tenantId) return { allowed: false, code: 'TENANT_MISMATCH' };
+  if (task && task.tenantId !== actor.tenantId) return { allowed: false, code: 'TENANT_MISMATCH' };
+  if (action === 'project_read') return { allowed: true, code: 'ALLOWED' };
+  if (action === 'project_create' || action === 'task_create_manual' || action === 'task_move') {
+    return actor.roles.includes('manager') ? { allowed: true, code: 'ALLOWED' } : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
+  }
+  if (action === 'project_update') {
+    if (!project) return { allowed: false, code: 'TASK_REQUIRED' };
+    return actor.roles.includes('manager') || project.ownerActorId === actor.actorId
+      ? { allowed: true, code: 'ALLOWED' }
+      : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
+  }
+  if (action === 'task_update_manual') {
+    if (!task) return { allowed: false, code: 'TASK_REQUIRED' };
+    if (actor.roles.includes('manager')) return { allowed: true, code: 'ALLOWED' };
+    if (!actor.roles.includes('operator')) return { allowed: false, code: 'OPERATOR_ROLE_REQUIRED' };
+    if (!task.currentAssignee) return { allowed: false, code: 'ASSIGNMENT_REQUIRED' };
+    return task.currentAssignee.actorId === actor.actorId
+      ? { allowed: true, code: 'ALLOWED' }
+      : { allowed: false, code: 'ASSIGNEE_MISMATCH' };
+  }
   return { allowed: false, code: 'TASK_REQUIRED' };
 }

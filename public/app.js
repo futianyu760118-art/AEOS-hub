@@ -1,6 +1,6 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
-import { buildTaskAssignmentPayload, canCreateTaskFromCase, g1TaskUiMutationGate, taskDisplayState, taskUiCapabilities } from './task-center.js';
+import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 
@@ -41,6 +41,8 @@ const els = {
   taskVerifyCount: $('#task-verify-count'), taskAttentionCount: $('#task-attention-count'), taskCaseSelect: $('#task-case-select'),
   taskPriority: $('#task-priority'), taskCreateControls: $('#task-create-controls'), taskCreateHint: $('#task-create-hint'), taskReadonlyNote: $('#task-readonly-note'), btnTaskCreate: $('#btn-task-create'),
   btnTasksRefresh: $('#btn-tasks-refresh'), taskListCount: $('#task-list-count'), taskList: $('#task-list'),
+  btnTaskManualCreate: $('#btn-task-manual-create'), manualTaskCreatePanel: $('#manual-task-create-panel'), manualTaskForm: $('#manual-task-form'), manualTaskProject: $('#manual-task-project'), taskSearch: $('#task-search'), taskStatusFilter: $('#task-status-filter'), taskProjectFilter: $('#task-project-filter'), taskBoard: $('#task-board'),
+  btnProjectsRefresh: $('#btn-projects-refresh'), btnProjectCreate: $('#btn-project-create'), projectCreatePanel: $('#project-create-panel'), projectForm: $('#project-form'), projectSearch: $('#project-search'), projectStatusFilter: $('#project-status-filter'), projectList: $('#project-list'), projectWorkspace: $('#project-workspace'),
   btnG0Refresh: $('#btn-g0-refresh'), g0Readiness: $('#g0-readiness'), g0DecisionStatus: $('#g0-decision-status'),
   g0ConfigEntry: $('#g0-config-entry'), btnOpenG0Governance: $('#btn-open-g0-governance'),
   g0Form: $('#g0-decision-form'), g0FormAccess: $('#g0-form-access'), g0FormStatus: $('#g0-form-status'), btnG0Save: $('#btn-g0-save'),
@@ -194,6 +196,9 @@ const expandedSquadBusinessIds = new Set();
 let dailyQuestionConfig = null;
 let operatingCenterState = { cases: [], decisions: [], inbox: [], unreadInboxCount: 0 };
 let taskCenterState = { tasks: [], total: 0 };
+let projectCenterState = { projects: [], total: 0 };
+let taskBoardView = 'board';
+let selectedProjectId = null;
 let g0DecisionSnapshot = null;
 const taskDetails = new Map();
 const taskAgentCandidates = new Map();
@@ -260,7 +265,8 @@ const commands = [
   { view: 'dashboard', label: '管理者首页', desc: '目标、风险、TOP 决策与治理脉冲', icon: 'layout-dashboard', group: '经营总览' },
   { view: 'chat', label: '中枢 Agent', desc: '跨域经营分析与 Capability 调用', icon: 'bot', group: '自治运行' },
   { view: 'attention', label: 'Attention 中心', desc: '需要责任人介入的例外事项', icon: 'list-checks', group: '自治运行' },
-  { view: 'tasks', label: '任务中心', desc: '责任角色、时限、证据与业务核验闭环', icon: 'list-todo', group: '经营闭环' },
+  { view: 'tasks', label: '任务', desc: '任务看板、责任角色、时限与业务核验闭环', icon: 'list-todo', group: '任务协同' },
+  { view: 'projects', label: '项目', desc: '项目目标、成员、进度与关联任务', icon: 'folder-kanban', group: '任务协同' },
   { view: 'cases', label: '经营事项', desc: '风险建档、人工决策与闭环验证', icon: 'clipboard-list', group: '经营闭环' },
   { view: 'inbox', label: 'Inbox', desc: '待确认事项、扫描结果与决策留痕', icon: 'inbox', group: '经营闭环' },
   { view: 'harbor', label: 'AI 港湾', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: 'AI 资源协作' },
@@ -621,6 +627,7 @@ function showView(view, options = {}) {
   if (view === 'dashboard' || view === 'attention') loadDashboard({ silent: true });
   if (view === 'cases') loadOperatingCenter();
   if (view === 'tasks') loadTasks();
+  if (view === 'projects') loadTasks({ silent: true });
   if (view === 'g0-governance') loadG0DecisionView();
   if (view === 'personnel-admin') loadPersonnelAdminView();
   if (view === 'role-admin') loadRoleAdminView();
@@ -3403,6 +3410,167 @@ async function loadTaskG0Context() {
   }
 }
 
+function collaborationManager() {
+  return authSession?.actorType === 'human' && Array.isArray(authSession?.roles) && authSession.roles.includes('manager');
+}
+
+function collaborationTaskEditor(task) {
+  if (authSession?.actorType !== 'human' || task?.source !== 'collaboration') return false;
+  return collaborationManager() || (Array.isArray(authSession.roles) && authSession.roles.includes('operator') && task.currentAssignee?.actorId === authSession.actorId);
+}
+
+function populateCollaborationProjectOptions() {
+  const projects = Array.isArray(projectCenterState.projects) ? projectCenterState.projects : [];
+  const selectedManual = els.manualTaskProject?.value || '';
+  const selectedFilter = els.taskProjectFilter?.value || '';
+  const options = projects.map((project) => `<option value="${esc(project.projectId)}">${esc(project.name)}</option>`).join('');
+  if (els.manualTaskProject) {
+    els.manualTaskProject.innerHTML = `<option value="">无项目</option>${options}`;
+    els.manualTaskProject.value = projects.some((project) => project.projectId === selectedManual) ? selectedManual : '';
+  }
+  if (els.taskProjectFilter) {
+    els.taskProjectFilter.innerHTML = `<option value="">全部项目</option>${options}`;
+    els.taskProjectFilter.value = projects.some((project) => project.projectId === selectedFilter) ? selectedFilter : '';
+  }
+}
+
+function taskBoardFilters() {
+  return { query: els.taskSearch?.value || '', status: els.taskStatusFilter?.value || 'all', projectId: els.taskProjectFilter?.value || '' };
+}
+
+function collaborationBoardGroups(tasks) {
+  return [
+    { status: 'DRAFT', label: '待规划', tasks: tasks.filter((task) => task.status === 'DRAFT') },
+    { status: 'ASSIGNED', label: '待办', tasks: tasks.filter((task) => task.status === 'ASSIGNED') },
+    { status: 'IN_PROGRESS', label: '处理中', tasks: tasks.filter((task) => ['ACCEPTED', 'IN_PROGRESS', 'AWAITING_DECISION'].includes(task.status)) },
+    { status: 'AWAITING_VERIFY', label: '待核验', tasks: tasks.filter((task) => task.status === 'AWAITING_VERIFY') },
+    { status: 'COMPLETED', label: '已完成', tasks: tasks.filter((task) => task.status === 'COMPLETED') },
+  ];
+}
+
+function renderCollaborationCard(task, compact = false) {
+  const state = taskDisplayState(task, localDateKey());
+  const project = (projectCenterState.projects || []).find((item) => item.projectId === task.projectId);
+  const editable = collaborationTaskEditor(task);
+  const nextStatus = task.status === 'DRAFT' || task.status === 'ASSIGNED' ? 'IN_PROGRESS' : task.status === 'IN_PROGRESS' ? 'COMPLETED' : '';
+  return `<article class="collaboration-card${state.needsAttention ? ' needs-attention' : ''}" ${task.source === 'collaboration' && editable ? `draggable="true" data-card-id="${esc(task.taskId)}"` : ''}>
+    <div class="collaboration-card-top"><span class="status-pill ${esc(state.tone)}">${esc(state.label)}</span><span class="card-spacer"></span><code>${esc(task.taskId.slice(-8))}</code></div>
+    <strong>${esc(task.title)}</strong>
+    <p>${project ? `<i data-lucide="folder"></i>${esc(project.name)}` : '<i data-lucide="layers"></i>未归属项目'}</p>
+    <div class="collaboration-card-meta"><span><i data-lucide="user-round"></i>${esc(task.currentAssignee?.actorId || '待分派')}</span><span><i data-lucide="calendar"></i>${esc(task.dueAt)}</span><span>${esc(task.priority)}</span></div>
+    ${compact ? '' : `<small>${esc(state.nextAction)}</small>`}
+    <div class="collaboration-card-actions">${nextStatus ? `<button class="text-action task-progress-action" type="button" data-collab-task-status="${esc(nextStatus)}" data-collab-task-id="${esc(task.taskId)}">${nextStatus === 'COMPLETED' ? '标记完成' : '开始处理'}<i data-lucide="arrow-right"></i></button>` : ''}${collaborationManager() && task.source === 'collaboration' ? `<button class="text-action task-progress-action" type="button" data-collab-task-assign="${esc(task.taskId)}">改派<i data-lucide="user-round-check"></i></button>` : ''}</div>
+  </article>`;
+}
+
+function renderCollaborationTaskBoard() {
+  if (!els.taskBoard) return;
+  const tasks = filterCollaborationTasks(taskCenterState.tasks || [], taskBoardFilters());
+  if (taskBoardView === 'list') {
+    els.taskBoard.className = 'collaboration-table-wrap';
+    els.taskBoard.innerHTML = `<table class="collaboration-table"><thead><tr><th>任务</th><th>项目</th><th>状态</th><th>负责人</th><th>优先级</th><th>截止日期</th></tr></thead><tbody>${tasks.map((task) => {
+      const state = taskDisplayState(task, localDateKey()); const project = (projectCenterState.projects || []).find((item) => item.projectId === task.projectId);
+      return `<tr><td><b>${esc(task.title)}</b><small>${esc(task.taskId)}</small></td><td>${esc(project?.name || '—')}</td><td><span class="status-pill ${esc(state.tone)}">${esc(state.label)}</span></td><td>${esc(task.currentAssignee?.actorId || '待分派')}</td><td>${esc(task.priority)}</td><td>${esc(task.dueAt)}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="empty-cell">未找到匹配的任务</td></tr>'}</tbody></table>`;
+  } else {
+    els.taskBoard.className = 'collaboration-board';
+    els.taskBoard.innerHTML = collaborationBoardGroups(tasks).map((column) => `<section class="collaboration-column" data-kanban-column="${column.status}"><header><span>${esc(column.label)}</span><b>${column.tasks.length}</b></header><div class="collaboration-column-body">${column.tasks.map((task) => renderCollaborationCard(task)).join('') || '<p class="empty-column">暂无任务</p>'}</div></section>`).join('');
+    bindKanbanDrag(els.taskBoard, (taskId, status) => { void updateCollaborationTaskStatus(taskId, status); });
+  }
+  $$('[data-task-view]').forEach((button) => button.classList.toggle('active', button.dataset.taskView === taskBoardView));
+  refreshIcons(els.taskBoard);
+}
+
+async function loadProjects(options = {}) {
+  try {
+    projectCenterState = await taskRequest('/api/projects');
+    populateCollaborationProjectOptions();
+    renderProjectList();
+    if (currentView === 'tasks') renderCollaborationTaskBoard();
+    return projectCenterState;
+  } catch (error) {
+    if (els.projectList) els.projectList.innerHTML = `<div class="dashboard-loading">项目加载失败：${esc(error.message)}</div>`;
+    if (!options.silent) toast(`项目加载失败：${error.message}`, true);
+    return null;
+  }
+}
+
+function renderProjectList() {
+  if (!els.projectList) return;
+  const query = String(els.projectSearch?.value || '').trim().toLocaleLowerCase('zh-CN');
+  const status = els.projectStatusFilter?.value || 'all';
+  const projects = (projectCenterState.projects || []).filter((project) => (!query || [project.name, project.description, project.ownerActorId].some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(query))) && (status === 'all' || project.status === status));
+  els.projectList.innerHTML = projects.length ? `<table class="collaboration-table"><thead><tr><th>项目名称</th><th>状态</th><th>优先级</th><th>进度</th><th>负责人</th><th>创建时间</th></tr></thead><tbody>${projects.map((project) => {
+    const display = projectDisplayState(project, taskCenterState.tasks || []);
+    return `<tr class="project-row" data-project-open="${esc(project.projectId)}"><td><b><i data-lucide="folder"></i>${esc(project.name)}</b><small>${esc(project.description || '未填写项目描述')}</small></td><td><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></td><td>${esc(project.priority)}</td><td><div class="progress-cell"><span><i style="width:${display.progress.percent}%"></i></span><b>${display.progress.completed}/${display.progress.total}</b></div></td><td>${esc(display.ownerLabel)}</td><td>${esc(formatHarborTime(project.createdAt))}</td></tr>`;
+  }).join('')}</tbody></table>` : '<div class="dashboard-loading">尚无项目。请新建第一个项目开始协同。</div>';
+  renderProjectWorkspace();
+  refreshIcons(els.projectList);
+}
+
+function renderProjectWorkspace() {
+  if (!els.projectWorkspace) return;
+  const project = (projectCenterState.projects || []).find((item) => item.projectId === selectedProjectId);
+  if (!project) { els.projectWorkspace.classList.add('hidden'); els.projectWorkspace.innerHTML = ''; return; }
+  const display = projectDisplayState(project, taskCenterState.tasks || []);
+  const tasks = (taskCenterState.tasks || []).filter((task) => task.projectId === project.projectId);
+  els.projectWorkspace.classList.remove('hidden');
+  els.projectWorkspace.innerHTML = `<section class="surface project-workspace-board"><div class="surface-head"><div><h2><i data-lucide="folder-open"></i>${esc(project.name)}</h2><p>${esc(project.description || '未填写项目描述')}</p></div><button class="btn ghost compact" data-project-close type="button">返回项目列表</button></div><div class="project-workspace-layout"><div class="project-task-board">${collaborationBoardGroups(tasks).map((column) => `<section class="collaboration-column"><header><span>${esc(column.label)}</span><b>${column.tasks.length}</b></header><div class="collaboration-column-body">${column.tasks.map((task) => renderCollaborationCard(task, true)).join('') || '<p class="empty-column">暂无任务</p>'}</div></section>`).join('')}</div><aside class="project-detail-panel"><h3>项目属性</h3><dl><div><dt>状态</dt><dd><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></dd></div><div><dt>优先级</dt><dd>${esc(project.priority)}</dd></div><div><dt>负责人</dt><dd>${esc(project.ownerActorId)}</dd></div><div><dt>成员</dt><dd>${esc((project.memberActorIds || []).join('、'))}</dd></div><div><dt>开始日期</dt><dd>${esc(project.startDate || '—')}</dd></div><div><dt>截止日期</dt><dd>${esc(project.dueDate || '—')}</dd></div></dl><div class="project-progress"><span>进度 ${display.progress.percent}%</span><i><b style="width:${display.progress.percent}%"></b></i><small>${display.progress.completed}/${display.progress.total} 项任务已完成</small></div>${collaborationManager() ? `<div class="project-detail-actions"><button class="btn secondary compact" data-project-edit="${esc(project.projectId)}" type="button">编辑属性</button><button class="btn secondary compact" data-project-status="IN_PROGRESS" data-project-id="${esc(project.projectId)}" type="button">设为进行中</button><button class="btn ghost compact" data-project-status="COMPLETED" data-project-id="${esc(project.projectId)}" type="button">标记完成</button></div>` : ''}</aside></div></section>`;
+  refreshIcons(els.projectWorkspace);
+}
+
+async function updateCollaborationTaskStatus(taskId, status) {
+  try {
+    await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/collaboration`, 'PATCH', { status, reason: `在协同看板中更新为 ${status}` });
+    await Promise.all([loadTasks({ silent: true }), loadProjects({ silent: true })]);
+    toast('任务状态已更新');
+  } catch (error) { toast(`更新任务失败：${error.message}`, true); }
+}
+
+async function assignCollaborationTask(taskId) {
+  const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
+  if (!task || !collaborationManager()) return;
+  const assigneeActorId = window.prompt('目标稳定 M01 / local-dev actor ID：', task.currentAssignee?.actorId || '');
+  if (!assigneeActorId?.trim()) return;
+  const assigneeRole = window.prompt('责任角色：', task.currentAssignee?.role || '项目协同负责人');
+  if (!assigneeRole?.trim()) return;
+  const reason = window.prompt('改派说明（将写入审计记录）：', '调整协同任务负责人。');
+  if (!reason?.trim()) return;
+  try {
+    await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/assignments`, 'POST', { assigneeActorId, assigneeRole, reason });
+    await loadTasks({ silent: true });
+    toast('任务负责人已更新');
+  } catch (error) { toast(`改派任务失败：${error.message}`, true); }
+}
+
+async function updateProjectStatus(projectId, status) {
+  try {
+    await taskRequest(`/api/projects/${encodeURIComponent(projectId)}`, 'PATCH', { status, reason: `更新项目状态为 ${status}` });
+    await loadProjects({ silent: true });
+    toast('项目状态已更新');
+  } catch (error) { toast(`更新项目失败：${error.message}`, true); }
+}
+
+async function editProject(projectId) {
+  const project = (projectCenterState.projects || []).find((item) => item.projectId === projectId);
+  if (!project || !collaborationManager()) return;
+  const name = window.prompt('项目名称：', project.name);
+  if (!name?.trim()) return;
+  const description = window.prompt('项目描述：', project.description || '');
+  if (description === null) return;
+  const members = window.prompt('成员 actor ID（用英文逗号分隔）：', (project.memberActorIds || []).join(','));
+  if (members === null) return;
+  const dueDate = window.prompt('截止日期（YYYY-MM-DD，留空表示未设置）：', project.dueDate || '');
+  if (dueDate === null) return;
+  try {
+    await taskRequest(`/api/projects/${encodeURIComponent(projectId)}`, 'PATCH', {
+      name, description, dueDate: dueDate.trim() || null, memberActorIds: members.split(',').map((item) => item.trim()).filter(Boolean), reason: '更新项目属性与成员',
+    });
+    await loadProjects({ silent: true });
+    toast('项目属性已更新');
+  } catch (error) { toast(`更新项目失败：${error.message}`, true); }
+}
+
 function renderTaskCenter() {
   const tasks = Array.isArray(taskCenterState.tasks) ? taskCenterState.tasks : [];
   const today = localDateKey();
@@ -3463,12 +3631,14 @@ function renderTaskCenter() {
       ${details ? `<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
     </article>`;
   }).join('') : '<div class="dashboard-loading">暂无责任任务。请先从上方选择经营事项创建任务。</div>';
+  populateCollaborationProjectOptions();
+  renderCollaborationTaskBoard();
   refreshIcons($('#view-tasks'));
 }
 
 async function loadTasks(options = {}) {
   try {
-    await Promise.all([loadOperatingCenter({ silent: true }), loadTaskG0Context()]);
+    await Promise.all([loadOperatingCenter({ silent: true }), loadTaskG0Context(), loadProjects({ silent: true })]);
     taskCenterState = await taskRequest('/api/tasks');
     renderTaskCenter();
     return taskCenterState;
@@ -3491,6 +3661,39 @@ async function createTaskFromCase() {
     await loadTasks({ silent: true });
     toast('责任任务已创建或返回原有未关闭任务；请确认责任角色与下一步动作。');
   } finally { els.btnTaskCreate.disabled = false; }
+}
+
+async function createManualTask(event) {
+  event.preventDefault();
+  if (!collaborationManager()) { toast('只有 manager 人工账号可以创建协同任务。', true); return; }
+  const submit = $('button[type="submit"]', els.manualTaskForm);
+  try {
+    const payload = buildCollaborationTaskPayload(Object.fromEntries(new FormData(els.manualTaskForm).entries()));
+    submit.disabled = true;
+    await taskRequest('/api/tasks/manual', 'POST', payload);
+    els.manualTaskForm.reset();
+    els.manualTaskCreatePanel.classList.add('hidden');
+    await Promise.all([loadTasks({ silent: true }), loadProjects({ silent: true })]);
+    toast('协同任务已创建');
+  } catch (error) { toast(`创建协同任务失败：${error.message}`, true); }
+  finally { if (submit?.isConnected) submit.disabled = false; }
+}
+
+async function createProject(event) {
+  event.preventDefault();
+  if (!collaborationManager()) { toast('只有 manager 人工账号可以创建项目。', true); return; }
+  const submit = $('button[type="submit"]', els.projectForm);
+  try {
+    const data = Object.fromEntries(new FormData(els.projectForm).entries());
+    submit.disabled = true;
+    const response = await taskRequest('/api/projects', 'POST', data);
+    els.projectForm.reset();
+    els.projectCreatePanel.classList.add('hidden');
+    selectedProjectId = response.project?.projectId || null;
+    await loadProjects({ silent: true });
+    toast('项目已创建');
+  } catch (error) { toast(`创建项目失败：${error.message}`, true); }
+  finally { if (submit?.isConnected) submit.disabled = false; }
 }
 
 async function loadTaskDetail(taskId) {
@@ -5258,12 +5461,58 @@ els.btnOpenPersonnelAdminFromOnboarding?.addEventListener('click', () => showVie
 els.onboardingCreateForm?.addEventListener('submit', (event) => { void submitOnboardingCreate(event); });
 els.onboardingG0Form?.addEventListener('submit', (event) => { void submitOnboardingG0(event); });
 els.btnTaskCreate.addEventListener('click', () => { void createTaskFromCase().catch((error) => toast(`创建任务失败：${error.message}`, true)); });
+els.btnTaskManualCreate?.addEventListener('click', () => {
+  if (!collaborationManager()) { toast('只有 manager 人工账号可以创建协同任务。', true); return; }
+  els.manualTaskCreatePanel.classList.toggle('hidden');
+  if (!els.manualTaskCreatePanel.classList.contains('hidden')) els.manualTaskForm.elements.title.focus();
+});
+els.manualTaskForm?.addEventListener('submit', (event) => { void createManualTask(event); });
+els.manualTaskCreatePanel?.addEventListener('click', (event) => { if (event.target.closest('[data-manual-task-cancel]')) els.manualTaskCreatePanel.classList.add('hidden'); });
+els.taskSearch?.addEventListener('input', renderCollaborationTaskBoard);
+els.taskStatusFilter?.addEventListener('change', renderCollaborationTaskBoard);
+els.taskProjectFilter?.addEventListener('change', renderCollaborationTaskBoard);
+$$('[data-task-view]').forEach((button) => button.addEventListener('click', () => { taskBoardView = button.dataset.taskView === 'list' ? 'list' : 'board'; renderCollaborationTaskBoard(); }));
+els.taskBoard?.addEventListener('click', (event) => {
+  const action = event.target.closest('[data-collab-task-status]');
+  if (action) void updateCollaborationTaskStatus(action.dataset.collabTaskId, action.dataset.collabTaskStatus);
+  const assignment = event.target.closest('[data-collab-task-assign]');
+  if (assignment) void assignCollaborationTask(assignment.dataset.collabTaskAssign);
+});
 els.taskList.addEventListener('click', (event) => {
   const button = event.target.closest('[data-task-action]');
   if (!button) return;
   void performTaskAction(button.dataset.taskId, button.dataset.taskAction).catch((error) => toast(`更新任务失败：${error.message}`, true));
 });
 els.taskList.addEventListener('submit', (event) => { void submitTaskAssignment(event); });
+els.btnProjectsRefresh?.addEventListener('click', () => { void Promise.all([loadProjects(), loadTasks({ silent: true })]); });
+els.btnProjectCreate?.addEventListener('click', () => {
+  if (!collaborationManager()) { toast('只有 manager 人工账号可以创建项目。', true); return; }
+  els.projectCreatePanel.classList.toggle('hidden');
+  if (!els.projectCreatePanel.classList.contains('hidden')) els.projectForm.elements.name.focus();
+});
+els.projectForm?.addEventListener('submit', (event) => { void createProject(event); });
+els.projectCreatePanel?.addEventListener('click', (event) => { if (event.target.closest('[data-project-cancel]')) els.projectCreatePanel.classList.add('hidden'); });
+els.projectSearch?.addEventListener('input', renderProjectList);
+els.projectStatusFilter?.addEventListener('change', renderProjectList);
+els.projectList?.addEventListener('click', (event) => {
+  const row = event.target.closest('[data-project-open]');
+  if (!row) return;
+  selectedProjectId = row.dataset.projectOpen;
+  renderProjectWorkspace();
+  els.projectWorkspace.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+els.projectWorkspace?.addEventListener('click', (event) => {
+  const close = event.target.closest('[data-project-close]');
+  if (close) { selectedProjectId = null; renderProjectWorkspace(); return; }
+  const status = event.target.closest('[data-project-status]');
+  if (status) void updateProjectStatus(status.dataset.projectId, status.dataset.projectStatus);
+  const edit = event.target.closest('[data-project-edit]');
+  if (edit) void editProject(edit.dataset.projectEdit);
+  const taskStatus = event.target.closest('[data-collab-task-status]');
+  if (taskStatus) void updateCollaborationTaskStatus(taskStatus.dataset.collabTaskId, taskStatus.dataset.collabTaskStatus);
+  const assignment = event.target.closest('[data-collab-task-assign]');
+  if (assignment) void assignCollaborationTask(assignment.dataset.collabTaskAssign);
+});
 els.btnInboxRefresh.addEventListener('click', () => loadInbox());
 els.btnInboxReadAll?.addEventListener('click', () => { void markAllInboxRead(); });
 els.inboxSearch?.addEventListener('input', renderInbox);

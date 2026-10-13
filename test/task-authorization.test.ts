@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { authorizeTaskAction, type TaskAuthorizationActor } from '../src/task-authorization.ts';
+import { authorizeCollaborationAction, authorizeTaskAction, type TaskAuthorizationActor } from '../src/task-authorization.ts';
 
 const assignedTask = {
   tenantId: 'demo-tenant',
@@ -51,4 +51,15 @@ test('denies an operator action for an unassigned legacy task and blocks non-hum
     authorizeTaskAction({ action: 'verify', actor: actor('system:sync', ['owner'], 'system'), task: assignedTask, registeredOwnerActorId: 'system:sync' }),
     { allowed: false, code: 'HUMAN_ACTOR_REQUIRED' },
   );
+});
+
+test('authorizes human collaboration work without weakening controlled-task rules', () => {
+  const project = { tenantId: 'demo-tenant', ownerActorId: 'm01:user:manager-demo', memberActorIds: ['m01:user:manager-demo'] };
+  assert.deepEqual(authorizeCollaborationAction({ action: 'project_create', actor: actor('m01:user:manager-demo', ['manager']) }), { allowed: true, code: 'ALLOWED' });
+  assert.equal(authorizeCollaborationAction({ action: 'project_create', actor: actor('m01:user:operator-demo', ['operator']) }).code, 'MANAGER_ROLE_REQUIRED');
+  assert.deepEqual(authorizeCollaborationAction({ action: 'project_update', actor: actor('m01:user:manager-demo', ['manager']), project }), { allowed: true, code: 'ALLOWED' });
+  assert.equal(authorizeCollaborationAction({ action: 'project_update', actor: actor('m01:user:operator-demo', ['operator']), project }).code, 'MANAGER_ROLE_REQUIRED');
+  assert.deepEqual(authorizeCollaborationAction({ action: 'task_update_manual', actor: actor('m01:user:operator-demo', ['operator']), task: assignedTask }), { allowed: true, code: 'ALLOWED' });
+  assert.equal(authorizeCollaborationAction({ action: 'task_update_manual', actor: actor('agent:planner', ['manager'], 'agent'), task: assignedTask }).code, 'HUMAN_ACTOR_REQUIRED');
+  assert.equal(authorizeCollaborationAction({ action: 'project_read', actor: { ...actor('m01:user:manager-other', ['manager']), tenantId: 'other' }, project }).code, 'TENANT_MISMATCH');
 });

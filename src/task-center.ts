@@ -13,6 +13,7 @@ const TASK_STATUSES = [
   'AWAITING_VERIFY', 'COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED',
 ] as const;
 const TASK_PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
+const PROJECT_STATUSES = ['PLANNING', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CANCELLED'] as const;
 const TASK_EVENT_TYPES = [
   'created', 'assigned', 'reassigned', 'accepted', 'started', 'decision_requested',
   'result_submitted', 'verified', 'rejected', 'failed', 'cancelled', 'withdrawn',
@@ -26,6 +27,7 @@ const dueDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期必须使用 YYYY
 
 export const TaskStatusSchema = z.enum(TASK_STATUSES);
 export const TaskPrioritySchema = z.enum(TASK_PRIORITIES);
+export const ProjectStatusSchema = z.enum(PROJECT_STATUSES);
 export const TaskAssigneeSchema = z.object({
   kind: z.literal('responsibility_role'),
   role: text(160, 1),
@@ -46,10 +48,33 @@ export const TaskRecordSchema = z.object({
   currentAssignee: TaskAssigneeSchema.nullable(),
   status: TaskStatusSchema,
   correlationId: text(200, 1),
+  projectId: text(160, 1).nullable(),
   nextAction: text(500),
   resultId: text(160, 1).nullable(),
   createdAt: timestamp,
   updatedAt: timestamp,
+}).strict();
+export const ProjectRecordSchema = z.object({
+  projectId: text(160, 1),
+  tenantId: text(160, 1),
+  name: text(200, 1),
+  description: text(2_000),
+  status: ProjectStatusSchema,
+  priority: TaskPrioritySchema,
+  ownerActorId: text(160, 1),
+  memberActorIds: z.array(text(160, 1)).max(100),
+  startDate: dueDate.nullable(),
+  dueDate: dueDate.nullable(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict();
+export const ProjectHistoryEntrySchema = z.object({
+  eventId: text(160, 1),
+  projectId: text(160, 1),
+  actor: text(160, 1),
+  action: z.enum(['created', 'updated']),
+  reason: text(1_000, 1),
+  occurredAt: timestamp,
 }).strict();
 export const TaskHistoryEntrySchema = z.object({
   eventId: text(160, 1),
@@ -63,16 +88,29 @@ export const TaskHistoryEntrySchema = z.object({
   occurredAt: timestamp,
 }).strict();
 export const TaskCenterSnapshotSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   revision: z.number().int().nonnegative(),
   updatedAt: timestamp,
   tasks: z.array(TaskRecordSchema).max(10_000),
   history: z.array(TaskHistoryEntrySchema).max(100_000),
+  projects: z.array(ProjectRecordSchema).max(10_000),
+  projectHistory: z.array(ProjectHistoryEntrySchema).max(100_000),
 }).strict().superRefine((snapshot, ctx) => {
   const taskIds = new Set<string>();
+  const projects = new Map<string, ProjectRecord>();
+  snapshot.projects.forEach((project, index) => {
+    if (projects.has(project.projectId)) ctx.addIssue({ code: 'custom', path: ['projects', index, 'projectId'], message: '项目 ID 不能重复' });
+    projects.set(project.projectId, project);
+  });
   snapshot.tasks.forEach((task, index) => {
     if (taskIds.has(task.taskId)) {
       ctx.addIssue({ code: 'custom', path: ['tasks', index, 'taskId'], message: '任务 ID 不能重复' });
+    }
+    if (task.projectId) {
+      const project = projects.get(task.projectId);
+      if (!project || project.tenantId !== task.tenantId) {
+        ctx.addIssue({ code: 'custom', path: ['tasks', index, 'projectId'], message: '任务项目引用不存在或不属于同一租户' });
+      }
     }
     taskIds.add(task.taskId);
     if (Date.parse(task.updatedAt) < Date.parse(task.createdAt)) {
@@ -84,11 +122,17 @@ export const TaskCenterSnapshotSchema = z.object({
       ctx.addIssue({ code: 'custom', path: ['history', index, 'taskId'], message: '历史记录引用的任务不存在' });
     }
   });
+  snapshot.projectHistory.forEach((entry, index) => {
+    if (!projects.has(entry.projectId)) ctx.addIssue({ code: 'custom', path: ['projectHistory', index, 'projectId'], message: '项目历史记录引用的项目不存在' });
+  });
 });
 
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
+export type ProjectStatus = z.infer<typeof ProjectStatusSchema>;
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;
+export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 export type TaskHistoryEntry = z.infer<typeof TaskHistoryEntrySchema>;
+export type ProjectHistoryEntry = z.infer<typeof ProjectHistoryEntrySchema>;
 export type TaskCenterSnapshot = z.infer<typeof TaskCenterSnapshotSchema>;
 
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
@@ -106,38 +150,46 @@ const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
 
 function timestampFor(clock: () => Date): string { return clock().toISOString(); }
 function defaultSnapshot(clock: () => Date): TaskCenterSnapshot {
-  return { version: 1, revision: 0, updatedAt: timestampFor(clock), tasks: [], history: [] };
+  return { version: 2, revision: 0, updatedAt: timestampFor(clock), tasks: [], history: [], projects: [], projectHistory: [] };
 }
 function parseSnapshot(value: unknown, source: string): TaskCenterSnapshot {
-  const parsed = TaskCenterSnapshotSchema.safeParse(migrateLegacyRoleOnlyAssignments(value));
+  const parsed = TaskCenterSnapshotSchema.safeParse(migrateSnapshot(value));
   if (!parsed.success) {
     throw new Error(`${source} 数据无效：${parsed.error.issues.slice(0, 3).map((issue) => issue.message).join('；')}`);
   }
   return parsed.data;
 }
-function migrateLegacyRoleOnlyAssignments(value: unknown): unknown {
+function migrateSnapshot(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-  const snapshot = value as { tasks?: unknown };
+  const snapshot = value as { version?: unknown; tasks?: unknown; projects?: unknown; projectHistory?: unknown };
   if (!Array.isArray(snapshot.tasks)) return value;
-  let changed = false;
+  let changed = snapshot.version !== 2 || !Array.isArray(snapshot.projects) || !Array.isArray(snapshot.projectHistory);
   const tasks = snapshot.tasks.map((candidate) => {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
-    const task = candidate as { currentAssignee?: unknown; nextAction?: unknown };
+    const task = candidate as { currentAssignee?: unknown; nextAction?: unknown; projectId?: unknown };
+    const projectId = typeof task.projectId === 'string' && task.projectId.trim() ? task.projectId.trim() : null;
     const assignee = task.currentAssignee;
-    if (!assignee || typeof assignee !== 'object' || Array.isArray(assignee)) return candidate;
+    if (!assignee || typeof assignee !== 'object' || Array.isArray(assignee)) {
+      if (task.projectId === projectId) return candidate;
+      changed = true;
+      return { ...task, projectId };
+    }
     const legacy = assignee as { kind?: unknown; role?: unknown };
     if (legacy.kind !== 'responsibility_role' || typeof legacy.role !== 'string' || legacy.role.trim() === '' || Object.hasOwn(assignee, 'actorId')) {
-      return candidate;
+      if (task.projectId === projectId) return candidate;
+      changed = true;
+      return { ...task, projectId };
     }
     changed = true;
     const historicalRole = legacy.role.trim();
     return {
       ...task,
+      projectId,
       currentAssignee: null,
       nextAction: `历史责任角色“${historicalRole}”未绑定具体经办人；请由管理者重新分派`,
     };
   });
-  return changed ? { ...snapshot, tasks } : value;
+  return changed ? { ...snapshot, version: 2, tasks, projects: Array.isArray(snapshot.projects) ? snapshot.projects : [], projectHistory: Array.isArray(snapshot.projectHistory) ? snapshot.projectHistory : [] } : value;
 }
 function safeRead(file: string): TaskCenterSnapshot | null {
   if (!existsSync(file)) return null;
@@ -154,6 +206,32 @@ function optionalString(input: Record<string, unknown>, key: string, max = 500):
   const value = typeof input[key] === 'string' ? input[key].trim() : '';
   if (value.length > max) throw new Error(`${key}长度不能超过 ${max}`);
   return value;
+}
+function nullableId(value: unknown, label: string): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}必须是非空字符串或 null`);
+  if (value.trim().length > 160) throw new Error(`${label}长度不能超过 160`);
+  return value.trim();
+}
+function nullableDueDate(value: unknown, label: string): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = dueDate.safeParse(value);
+  if (!parsed.success) throw new Error(`${label}必须使用 YYYY-MM-DD 格式`);
+  return parsed.data;
+}
+function uniqueActorIds(value: unknown, ownerActorId: string): string[] {
+  if (value === undefined || value === null) return [ownerActorId];
+  if (!Array.isArray(value)) throw new Error('memberActorIds必须是字符串数组');
+  const values = [ownerActorId, ...value];
+  const result: string[] = [];
+  for (const item of values) {
+    if (typeof item !== 'string' || !item.trim()) throw new Error('memberActorIds必须是非空字符串数组');
+    const id = item.trim();
+    if (id.length > 160) throw new Error('memberActorIds单项长度不能超过 160');
+    if (!result.includes(id)) result.push(id);
+  }
+  if (result.length > 100) throw new Error('memberActorIds最多 100 项');
+  return result;
 }
 function uniqueRefs(values: unknown, required = true): string[] {
   if (!Array.isArray(values)) {
@@ -238,12 +316,146 @@ export class TaskCenterStore {
         businessObjectRef: `business://${source}/${encodeURIComponent(entityId)}`,
         caseId, source, title, evidenceRefs: refs, priority: priority.data, dueAt: dueAt.data,
         initiatedBy: actor, currentAssignee: null, status: 'DRAFT', correlationId,
+        projectId: null,
         nextAction: '等待管理者分派责任角色', resultId: null, createdAt: occurredAt, updatedAt: occurredAt,
       });
       snapshot.tasks.push(task);
       this.appendHistory(snapshot, task, { eventType: 'created', fromStatus: null, toStatus: 'DRAFT', actor, reason, evidenceRefs: refs }, occurredAt);
       return task;
     });
+  }
+
+  listProjectsForTenant(tenantId: string): ProjectRecord[] {
+    return this.load().projects.filter((project) => project.tenantId === tenantId).map((project) => structuredClone(project));
+  }
+
+  createProject(input: Record<string, unknown>): ProjectRecord {
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const tenantId = requiredString(input, 'tenantId', 'tenantId', 160);
+    const name = requiredString(input, 'name', '项目名称', 200);
+    const description = optionalString(input, 'description', 2_000);
+    const priority = TaskPrioritySchema.safeParse(input.priority ?? 'medium');
+    if (!priority.success) throw new Error('priority无效');
+    const status = ProjectStatusSchema.safeParse(input.status ?? 'PLANNING');
+    if (!status.success) throw new Error('项目状态无效');
+    const startDate = nullableDueDate(input.startDate, 'startDate');
+    const projectDueDate = nullableDueDate(input.dueDate, 'dueDate');
+    if (startDate && projectDueDate && startDate > projectDueDate) throw new Error('开始日期不能晚于截止日期');
+    const memberActorIds = uniqueActorIds(input.memberActorIds, actor);
+    return this.mutate((snapshot, occurredAt) => {
+      const project = ProjectRecordSchema.parse({
+        projectId: `project-${this.idFactory()}`, tenantId, name, description, priority: priority.data, status: status.data,
+        ownerActorId: actor, memberActorIds, startDate, dueDate: projectDueDate, createdAt: occurredAt, updatedAt: occurredAt,
+      });
+      snapshot.projects.push(project);
+      this.appendProjectHistory(snapshot, project, actor, 'created', '创建项目', occurredAt);
+      return project;
+    });
+  }
+
+  updateProject(input: Record<string, unknown>): ProjectRecord {
+    const projectId = requiredString(input, 'projectId', 'projectId', 160);
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const reason = requiredString(input, 'reason', 'reason', 1_000);
+    return this.mutate((snapshot, occurredAt) => {
+      const project = this.findProject(snapshot, projectId);
+      if (Object.hasOwn(input, 'name')) project.name = requiredString(input, 'name', '项目名称', 200);
+      if (Object.hasOwn(input, 'description')) project.description = optionalString(input, 'description', 2_000);
+      if (Object.hasOwn(input, 'priority')) {
+        const priority = TaskPrioritySchema.safeParse(input.priority);
+        if (!priority.success) throw new Error('priority无效');
+        project.priority = priority.data;
+      }
+      if (Object.hasOwn(input, 'status')) {
+        const status = ProjectStatusSchema.safeParse(input.status);
+        if (!status.success) throw new Error('项目状态无效');
+        project.status = status.data;
+      }
+      if (Object.hasOwn(input, 'startDate')) project.startDate = nullableDueDate(input.startDate, 'startDate');
+      if (Object.hasOwn(input, 'dueDate')) project.dueDate = nullableDueDate(input.dueDate, 'dueDate');
+      if (project.startDate && project.dueDate && project.startDate > project.dueDate) throw new Error('开始日期不能晚于截止日期');
+      if (Object.hasOwn(input, 'memberActorIds')) project.memberActorIds = uniqueActorIds(input.memberActorIds, project.ownerActorId);
+      project.updatedAt = occurredAt;
+      this.appendProjectHistory(snapshot, project, actor, 'updated', reason, occurredAt);
+      return project;
+    });
+  }
+
+  createManualTask(input: Record<string, unknown>): TaskRecord {
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const tenantId = requiredString(input, 'tenantId', 'tenantId', 160);
+    const title = requiredString(input, 'title', '任务标题', 300);
+    const dueAt = dueDate.safeParse(input.dueAt);
+    if (!dueAt.success) throw new Error('dueAt必须使用 YYYY-MM-DD 格式');
+    const priority = TaskPrioritySchema.safeParse(input.priority ?? 'medium');
+    if (!priority.success) throw new Error('priority无效');
+    const projectId = nullableId(input.projectId, 'projectId');
+    const assigneeActorId = nullableId(input.assigneeActorId, 'assigneeActorId') ?? actor;
+    const assigneeRole = optionalString(input, 'assigneeRole', 160) || '项目协同负责人';
+    const nextAction = optionalString(input, 'nextAction', 500) || '等待指定责任人开始处理';
+    return this.mutate((snapshot, occurredAt) => {
+      if (projectId) {
+        const project = this.findProject(snapshot, projectId);
+        if (project.tenantId !== tenantId) throw new Error('项目不属于当前租户');
+      }
+      const taskId = `task-${this.idFactory()}`;
+      const refs = [`hub://collaboration/tasks/${taskId}`];
+      const task = TaskRecordSchema.parse({
+        taskId, tenantId, businessObjectRef: `hub://collaboration/tasks/${taskId}`, caseId: `manual-${taskId}`, source: 'collaboration',
+        title, evidenceRefs: refs, priority: priority.data, dueAt: dueAt.data, initiatedBy: actor,
+        currentAssignee: { kind: 'responsibility_role', role: assigneeRole, actorId: assigneeActorId, assignedAt: occurredAt },
+        status: 'ASSIGNED', correlationId: taskId, projectId, nextAction, resultId: null, createdAt: occurredAt, updatedAt: occurredAt,
+      });
+      snapshot.tasks.push(task);
+      this.appendHistory(snapshot, task, { eventType: 'created', fromStatus: null, toStatus: task.status, actor, reason: '创建协同任务', evidenceRefs: refs }, occurredAt);
+      return task;
+    });
+  }
+
+  updateCollaborationTask(input: Record<string, unknown>): TaskRecord {
+    const taskId = requiredString(input, 'taskId', 'taskId', 160);
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const reason = requiredString(input, 'reason', 'reason', 1_000);
+    return this.mutate((snapshot, occurredAt) => {
+      const task = snapshot.tasks.find((candidate) => candidate.taskId === taskId);
+      if (!task) throw new Error('任务不存在');
+      if (task.source !== 'collaboration') throw new Error('受控经营任务不能通过协同任务接口修改');
+      const fromStatus = task.status;
+      if (Object.hasOwn(input, 'title')) task.title = requiredString(input, 'title', '任务标题', 300);
+      if (Object.hasOwn(input, 'priority')) {
+        const priority = TaskPrioritySchema.safeParse(input.priority);
+        if (!priority.success) throw new Error('priority无效');
+        task.priority = priority.data;
+      }
+      if (Object.hasOwn(input, 'dueAt')) {
+        const due = dueDate.safeParse(input.dueAt);
+        if (!due.success) throw new Error('dueAt必须使用 YYYY-MM-DD 格式');
+        task.dueAt = due.data;
+      }
+      if (Object.hasOwn(input, 'nextAction')) task.nextAction = requiredString(input, 'nextAction', '下一步动作', 500);
+      if (Object.hasOwn(input, 'projectId')) {
+        const projectId = nullableId(input.projectId, 'projectId');
+        if (projectId) {
+          const project = this.findProject(snapshot, projectId);
+          if (project.tenantId !== task.tenantId) throw new Error('项目不属于任务所在租户');
+        }
+        task.projectId = projectId;
+      }
+      if (Object.hasOwn(input, 'status')) {
+        const status = TaskStatusSchema.safeParse(input.status);
+        if (!status.success || !['DRAFT', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(status.data)) throw new Error('协同任务状态无效');
+        task.status = status.data;
+      }
+      task.updatedAt = occurredAt;
+      this.appendHistory(snapshot, task, { eventType: 'reminded', fromStatus, toStatus: task.status, actor, reason, evidenceRefs: task.evidenceRefs }, occurredAt);
+      return task;
+    });
+  }
+
+  projectProgress(projectId: string, tenantId: string): { total: number; completed: number; percent: number } {
+    const tasks = this.load().tasks.filter((task) => task.tenantId === tenantId && task.projectId === projectId);
+    const completed = tasks.filter((task) => task.status === 'COMPLETED').length;
+    return { total: tasks.length, completed, percent: tasks.length ? Math.round((completed / tasks.length) * 100) : 0 };
   }
 
   assign(input: Record<string, unknown>): TaskRecord {
@@ -386,6 +598,12 @@ export class TaskCenterStore {
     return task;
   }
 
+  private findProject(snapshot: TaskCenterSnapshot, projectId: string): ProjectRecord {
+    const project = snapshot.projects.find((candidate) => candidate.projectId === projectId);
+    if (!project) throw new Error('项目不存在');
+    return project;
+  }
+
   private requireAssignedHumanOperator(task: TaskRecord, actor: string): void {
     if (isBlockedNonHumanActor(actor)) {
       throw new Error('Agent 或系统身份不能执行人工任务操作');
@@ -421,6 +639,20 @@ export class TaskCenterStore {
       eventId: `task-event-${this.idFactory()}`,
       taskId: task.taskId,
       ...entry,
+      occurredAt,
+    }));
+  }
+
+  private appendProjectHistory(
+    snapshot: TaskCenterSnapshot, project: ProjectRecord, actor: string,
+    action: ProjectHistoryEntry['action'], reason: string, occurredAt: string,
+  ): void {
+    snapshot.projectHistory.push(ProjectHistoryEntrySchema.parse({
+      eventId: `project-event-${this.idFactory()}`,
+      projectId: project.projectId,
+      actor,
+      action,
+      reason,
       occurredAt,
     }));
   }

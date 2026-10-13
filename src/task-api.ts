@@ -2,8 +2,8 @@ import type { EvidenceInput } from './evidence.ts';
 import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
 import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
-import { TaskCenterStore, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
-import { authorizeTaskAction, type TaskAction, type TaskAuthorizationActor } from './task-authorization.ts';
+import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
+import { authorizeCollaborationAction, authorizeTaskAction, type CollaborationAction, type TaskAction, type TaskAuthorizationActor } from './task-authorization.ts';
 import type { G0DecisionRegisterStore } from './g0-decision-register.ts';
 
 export type TaskApiActor = {
@@ -69,11 +69,65 @@ export class TaskApi {
 
   private isTaskRoute(pathname: string): boolean {
     return pathname === '/api/tasks' || pathname.startsWith('/api/tasks/')
+      || pathname === '/api/projects' || pathname.startsWith('/api/projects/')
       || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(pathname);
   }
 
   private handleAuthorized(request: TaskApiRequest & { actor: TaskApiActor; body: Record<string, unknown> }): TaskApiResponse {
     const { method, pathname, actor, body } = request;
+    if (pathname === '/api/projects') {
+      if (method === 'GET') {
+        const projects = this.dependencies.taskCenter.listProjectsForTenant(actor.tenantId).map((project) => this.projectView(project, actor.tenantId));
+        return { status: 200, body: { projects, total: projects.length } };
+      }
+      this.method(method, 'POST');
+      const denied = this.authorizeCollaboration('project_create', actor);
+      if (denied) return denied;
+      const project = this.dependencies.taskCenter.createProject({ ...body, actor: actor.actorId, tenantId: actor.tenantId });
+      const auditStatus = this.auditProject(project, actor, 'project_created');
+      return { status: 201, body: { project: this.projectView(project, actor.tenantId), committed: true, auditStatus } };
+    }
+
+    const projectTasksMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks$/);
+    if (projectTasksMatch) {
+      this.method(method, 'GET');
+      const project = this.requireProject(decoded(projectTasksMatch[1] ?? ''), actor);
+      return { status: 200, body: { project: this.projectView(project, actor.tenantId), tasks: this.tenantSnapshot(actor).tasks.filter((task) => task.projectId === project.projectId) } };
+    }
+
+    const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
+    if (projectMatch) {
+      const project = this.requireProject(decoded(projectMatch[1] ?? ''), actor);
+      if (method === 'GET') return { status: 200, body: { project: this.projectView(project, actor.tenantId), tasks: this.tenantSnapshot(actor).tasks.filter((task) => task.projectId === project.projectId) } };
+      this.method(method, 'PATCH');
+      const denied = this.authorizeCollaboration('project_update', actor, undefined, project);
+      if (denied) return denied;
+      const updated = this.dependencies.taskCenter.updateProject({ ...body, projectId: project.projectId, actor: actor.actorId, reason: typeof body.reason === 'string' ? body.reason : '更新项目属性' });
+      const auditStatus = this.auditProject(updated, actor, 'project_updated');
+      return { status: 200, body: { project: this.projectView(updated, actor.tenantId), committed: true, auditStatus } };
+    }
+
+    if (pathname === '/api/tasks/manual') {
+      this.method(method, 'POST');
+      const denied = this.authorizeCollaboration('task_create_manual', actor);
+      if (denied) return denied;
+      const task = this.dependencies.taskCenter.createManualTask({ ...body, actor: actor.actorId, tenantId: actor.tenantId });
+      const auditStatus = this.audit(task, actor, 'collaboration_task_created');
+      return { status: 201, body: { task, committed: true, auditStatus } };
+    }
+
+    const collaborationTaskMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/collaboration$/);
+    if (collaborationTaskMatch) {
+      this.method(method, 'PATCH');
+      const task = this.requireMutationTask(decoded(collaborationTaskMatch[1] ?? ''), actor, 'collaboration_update');
+      if (task.source !== 'collaboration') return this.denied(actor, 'collaboration_update', 'UNSUPPORTED_G1_ACTION', task);
+      const action: CollaborationAction = Object.hasOwn(body, 'projectId') ? 'task_move' : 'task_update_manual';
+      const denied = this.authorizeCollaboration(action, actor, task);
+      if (denied) return denied;
+      const updated = this.dependencies.taskCenter.updateCollaborationTask({ ...body, taskId: task.taskId, actor: actor.actorId, reason: typeof body.reason === 'string' ? body.reason : '更新协同任务' });
+      const auditStatus = this.audit(updated, actor, 'collaboration_task_updated');
+      return { status: 200, body: { task: updated, committed: true, auditStatus } };
+    }
     const createMatch = pathname.match(/^\/api\/operating-cases\/([^/]+)\/tasks$/);
     if (createMatch) {
       this.method(method, 'POST');
@@ -150,9 +204,15 @@ export class TaskApi {
     const assignmentMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/assignments$/);
     if (assignmentMatch) {
       this.method(method, 'POST');
-      if (!this.requireG1Scope(actor)) return this.denied(actor, 'assign', 'G0_SCOPE_REQUIRED');
-      const task = this.requireMutationTask(decoded(assignmentMatch[1] ?? ''), actor, 'assign');
-      const denied = this.authorize(task.currentAssignee ? 'reassign' : 'assign', actor, task);
+      const assignmentTaskId = decoded(assignmentMatch[1] ?? '');
+      const scopedTask = this.dependencies.taskCenter.load().tasks.find((candidate) => candidate.taskId === assignmentTaskId && candidate.tenantId === actor.tenantId);
+      // Preserve the G1 fail-closed rule before revealing whether a task in a
+      // different tenant exists. Collaboration tasks remain usable outside G1.
+      if (!scopedTask && !this.requireG1Scope(actor)) return this.denied(actor, 'assign', 'G0_SCOPE_REQUIRED');
+      const task = this.requireMutationTask(assignmentTaskId, actor, 'assign');
+      const denied = task.source === 'collaboration'
+        ? this.authorizeCollaboration('task_move', actor, task)
+        : (!this.requireG1Scope(actor) ? this.denied(actor, 'assign', 'G0_SCOPE_REQUIRED') : this.authorize(task.currentAssignee ? 'reassign' : 'assign', actor, task));
       if (denied) return denied;
       if (!this.isHumanOperatorTarget(bodyValue(body, 'assigneeActorId'))) {
         return this.denied(actor, 'assign', 'HUMAN_OPERATOR_TARGET_REQUIRED', task);
@@ -266,6 +326,16 @@ export class TaskApi {
     return decision.allowed ? null : this.denied(actor, action, decision.code, task);
   }
 
+  private authorizeCollaboration(action: CollaborationAction, actor: TaskApiActor, task?: TaskRecord, project?: ProjectRecord): TaskApiResponse | null {
+    const decision = authorizeCollaborationAction({
+      action,
+      actor: this.authorizationActor(actor),
+      ...(task ? { task: { tenantId: task.tenantId, currentAssignee: task.currentAssignee ?? null } } : {}),
+      ...(project ? { project: { tenantId: project.tenantId, ownerActorId: project.ownerActorId, memberActorIds: project.memberActorIds } } : {}),
+    });
+    return decision.allowed ? null : this.denied(actor, action, decision.code, task);
+  }
+
   private authorizationActor(actor: TaskApiActor): TaskAuthorizationActor {
     return {
       actorId: actor.actorId,
@@ -331,6 +401,16 @@ export class TaskApi {
     return task;
   }
 
+  private requireProject(projectId: string, actor: TaskApiActor): ProjectRecord {
+    const project = this.dependencies.taskCenter.listProjectsForTenant(actor.tenantId).find((candidate) => candidate.projectId === projectId);
+    if (!project) throw new TaskApiError(404, '项目不存在');
+    return project;
+  }
+
+  private projectView(project: ProjectRecord, tenantId: string): ProjectRecord & { progress: { total: number; completed: number; percent: number } } {
+    return { ...project, progress: this.dependencies.taskCenter.projectProgress(project.projectId, tenantId) };
+  }
+
   private auditDenied(actor: TaskApiActor, action: string, policyCode: string, task?: TaskRecord): 'recorded' | 'failed' {
     try {
       this.dependencies.appendEvidence({
@@ -379,5 +459,17 @@ export class TaskApi {
     } catch {
       return 'failed';
     }
+  }
+
+  private auditProject(project: ProjectRecord, actor: TaskApiActor, action: string): 'recorded' | 'failed' {
+    try {
+      this.dependencies.appendEvidence({
+        kind: 'app_event', actor_id: actor.actorId, actor_type: actor.actorType, tenant_id: project.tenantId,
+        object_ref: `hub://collaboration/projects/${project.projectId}`, correlation_id: project.projectId,
+        evidence_refs: [`hub://collaboration/projects/${project.projectId}`], summary: `project ${action}`,
+        payload: { action, projectId: project.projectId, status: project.status },
+      });
+      return 'recorded';
+    } catch { return 'failed'; }
   }
 }

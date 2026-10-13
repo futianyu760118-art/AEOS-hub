@@ -1441,7 +1441,7 @@ const server = createServer(async (req, res) => {
     } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
     return;
   }
-  if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/') || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(url.pathname)) {
+  if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/') || url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/') || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(url.pathname)) {
     try {
       const body = req.method === 'GET' ? {} : await readJsonBody(req);
       const taskResponse = taskApi.handle({

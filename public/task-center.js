@@ -12,6 +12,9 @@ export const TASK_STATUS_LABELS = {
 };
 
 const TERMINAL = new Set(['COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED']);
+export const PROJECT_STATUS_LABELS = {
+  PLANNING: ['计划中', 'neutral'], IN_PROGRESS: ['进行中', 'warn'], ON_HOLD: ['已搁置', 'danger'], COMPLETED: ['已完成', 'ok'], CANCELLED: ['已取消', 'neutral'],
+};
 
 export function taskDisplayState(task, today) {
   const [label, tone] = TASK_STATUS_LABELS[task?.status] || ['未知状态', 'neutral'];
@@ -114,4 +117,40 @@ export function buildTaskAssignmentPayload(fields) {
   if (!assigneeActorId) throw new Error('请填写目标 M01 actor ID。');
   if (!reason) throw new Error('请填写分派说明。');
   return { assigneeRole, assigneeActorId, reason };
+}
+
+export function projectDisplayState(project, tasks = []) {
+  const [label, tone] = PROJECT_STATUS_LABELS[project?.status] || ['未知状态', 'neutral'];
+  const projectTasks = tasks.filter((task) => task?.projectId === project?.projectId);
+  const completed = projectTasks.filter((task) => task.status === 'COMPLETED').length;
+  const progress = project?.progress && Number.isFinite(project.progress.percent)
+    ? project.progress : { total: projectTasks.length, completed, percent: projectTasks.length ? Math.round((completed / projectTasks.length) * 100) : 0 };
+  return { label, tone, progress, ownerLabel: project?.ownerActorId || '未指定负责人' };
+}
+
+export function taskBoardColumns(tasks = []) {
+  const columns = [
+    ['DRAFT', '待规划'], ['ASSIGNED', '待办'], ['ACCEPTED', '处理中'], ['IN_PROGRESS', '处理中'], ['AWAITING_DECISION', '待决策'], ['AWAITING_VERIFY', '待核验'], ['COMPLETED', '已完成'], ['REJECTED', '已退回'], ['FAILED', '已阻塞'], ['CANCELLED', '已取消'],
+  ];
+  return columns.map(([status, label]) => ({ status, label, tasks: tasks.filter((task) => task.status === status) }));
+}
+
+export function filterCollaborationTasks(tasks = [], filters = {}) {
+  const query = String(filters.query || '').trim().toLocaleLowerCase('zh-CN');
+  return tasks.filter((task) => {
+    if (filters.projectId && task.projectId !== filters.projectId) return false;
+    if (filters.status && filters.status !== 'all' && task.status !== filters.status) return false;
+    if (filters.assignee && filters.assignee !== 'all' && task.currentAssignee?.actorId !== filters.assignee) return false;
+    if (!query) return true;
+    return [task.title, task.taskId, task.currentAssignee?.actorId, task.currentAssignee?.role, task.projectId].some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(query));
+  });
+}
+
+export function buildCollaborationTaskPayload(fields) {
+  const title = String(fields?.title ?? '').trim();
+  const dueAt = String(fields?.dueAt ?? '').trim();
+  if (!title) throw new Error('请填写任务标题。');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) throw new Error('请填写 YYYY-MM-DD 格式的截止日期。');
+  const payload = { title, dueAt, priority: String(fields?.priority || 'medium'), projectId: String(fields?.projectId || '').trim() || null, nextAction: String(fields?.nextAction || '').trim() || undefined };
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
 }

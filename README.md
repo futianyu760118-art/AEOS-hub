@@ -41,6 +41,7 @@ AEOS Hub 是 [AEOS（Autonomous Enterprise Operating System）](../../) 的第�
 - **会话管理**：新建 / 切换 / **归档**（可恢复）/ **删除**（同步清理 codex 线程），列表按 Codex 风格排版，悬停浮现操作
 - **Evidence 证据链**：每个 turn 的完整 item 流（消息、推理、工具调用、审批决策、结果）结构化落库，页面内可查看最近条目
 - **AI 港湾**：Agent / Runtime / Project 三类资源的登记与绑定，Runtime 健康验证走真实探针（`POST /api/harbor/runtimes/:id/verify`），不伪装成已连通
+- **任务与项目协同**：任务看板/列表、搜索筛选、普通协同任务、项目列表、项目内看板与自动派生进度；项目和任务写入均由服务端身份、租户范围与 Evidence 审计保护
 - **局域网共享**：`--lan` 一键开放给同事，服务端账号密码验证；关闭浏览器或重启服务后需要重新登录
 - **完全隔离**：与机器上其他 Codex 安装（桌面版等）零接触，详见下文
 
@@ -122,6 +123,7 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 | 管理者首页 | 目标条、经营指标、System Registry、Runtime 状态 |
 | 中枢 Agent | 会话列表（归档/删除/恢复）、流式对话、工具卡片、Guard 授权条、模型下拉 |
 | Attention 中心 | 需人关注事项（示例数据），一键生成决策材料 |
+| 任务 / 项目 | 任务看板和列表、项目属性与项目内任务看板；项目进度仅由关联任务的完成状态派生。`/api/projects` 管理项目，`/api/tasks/manual` 创建普通协同任务，既有受控订单任务接口保持不变。 |
 | Evidence 中心 | evidence.jsonl 事件流浏览与刷新 |
 | 系统配置 | 模型提供商 / 模型 / 密钥 / MCP 清单 / 证据速览 |
 | AI 港湾 | Agent、Runtime、Project 登记与绑定；Runtime 真实健康验证 |
