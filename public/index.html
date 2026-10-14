@@ -130,6 +130,10 @@
           <button class="nav-item" type="button" data-view="squad" data-title="Agent 小队"><i data-lucide="users-round"></i><span>Agent 小队</span></button>
         </div>
         <div class="nav-group">
+          <span class="nav-label">执行面</span>
+          <button class="nav-item" type="button" data-view="execution" data-title="执行面仪表盘"><i data-lucide="radio-tower"></i><span>执行面仪表盘</span></button>
+        </div>
+        <div class="nav-group">
           <span class="nav-label">治理与证据</span>
           <button class="nav-item" type="button" data-view="evidence" data-title="Evidence 证据中心"><i data-lucide="file-search"></i><span>Evidence 证据中心</span></button>
           <button class="nav-item" type="button" data-view="registry" data-title="Capability Registry"><i data-lucide="boxes"></i><span>Capability Registry</span></button>
@@ -532,6 +536,34 @@
               <div id="squad-member-detail" class="squad-member-detail"><div class="harbor-empty"><i data-lucide="users-round"></i><strong>请选择子 Agent</strong><small>查看其独立记忆、最近动作与队内协作消息</small></div></div>
             </section>
           </div>
+        </section>
+
+        <section id="view-execution" class="view app-view hidden">
+          <div class="page-head">
+            <div><span class="page-module">自治运行</span><h1>执行面仪表盘</h1><p>远程执行面智能体：反向连接、心跳、派单与召回</p></div>
+            <div class="page-actions"><button id="btn-execution-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
+          </div>
+
+          <section class="surface execution-surface">
+            <div class="surface-head"><div><h2>在线执行面</h2><p>反向连接的执行面智能体</p></div><span id="execution-agent-count" class="status-pill info">加载中</span></div>
+            <div id="execution-agents" class="execution-table"><div class="registry-loading">正在读取执行面…</div></div>
+          </section>
+
+          <section class="surface execution-surface">
+            <div class="surface-head"><div><h2>派单</h2><p>下发只读查询给执行面智能体</p></div></div>
+            <div class="execution-dispatch">
+              <label class="execution-field">agentId<input id="execution-dispatch-agent" value="runtime-execution-query"></label>
+              <label class="execution-field">path<input id="execution-dispatch-path" value="/external/material-kitting/shortages"></label>
+              <label class="execution-field">params(JSON)<input id="execution-dispatch-params" value='{"demand_no":"HJY20260903-261"}'></label>
+              <button id="btn-execution-dispatch" class="btn primary" type="button"><i data-lucide="send"></i>派单</button>
+            </div>
+            <pre id="execution-dispatch-result" class="execution-result hidden"></pre>
+          </section>
+
+          <section class="surface execution-surface">
+            <div class="surface-head"><div><h2>运行记录</h2><p>最近的派单与结果</p></div></div>
+            <div id="execution-runs" class="execution-table"><div class="registry-loading">暂无运行记录</div></div>
+          </section>
         </section>
 
         <section id="view-config" class="view app-view hidden">

@@ -218,6 +218,8 @@ let registrySnapshot = null;
 let selectedDashboardRisk = null;
 const DASHBOARD_LIVE_REFRESH_MS = 60_000;
 let dashboardLiveRefreshTimer = null;
+let executionRefreshTimer = null;
+const EXECUTION_LIVE_REFRESH_MS = 2_000;
 let pendingRiskAgentDispatch = null;
 const riskAgentDispatches = new Map();
 // 不同 Agent / 不同会话允许并行；同一会话仍由服务端串行，避免上下文交叉。
@@ -283,7 +285,7 @@ const commands = [
 // Local experience review: keep the operating-center implementation intact
 // while temporarily removing its routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通' };
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -686,7 +688,9 @@ function showView(view, options = {}) {
   if (view === 'squad') { loadHarbor({ silent: true }); loadSquad(); }
   if (view === 'attention') loadSquad({ silent: true });
   if (view === 'chat' && curConvId) send({ type: 'view', conversationId: curConvId });
+  if (view === 'execution') loadExecution();
   syncDashboardLiveRefresh();
+  syncExecutionRefresh();
 }
 
 function syncDashboardLiveRefresh() {
@@ -696,6 +700,104 @@ function syncDashboardLiveRefresh() {
   dashboardLiveRefreshTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') loadDashboard({ silent: true, force: true });
   }, DASHBOARD_LIVE_REFRESH_MS);
+}
+
+function syncExecutionRefresh() {
+  window.clearInterval(executionRefreshTimer);
+  executionRefreshTimer = null;
+  if (currentView !== 'execution' || els.app.classList.contains('hidden')) return;
+  executionRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadExecution();
+  }, EXECUTION_LIVE_REFRESH_MS);
+}
+
+let executionControlsWired = false;
+function wireExecutionControls() {
+  if (executionControlsWired) return;
+  executionControlsWired = true;
+  $('#btn-execution-refresh')?.addEventListener('click', () => loadExecution());
+  $('#btn-execution-dispatch')?.addEventListener('click', () => dispatchExecutionQuery());
+  $('#execution-agents')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-recall-agent]');
+    if (button) recallExecutionAgent(button.dataset.recallAgent);
+  });
+}
+
+async function loadExecution() {
+  wireExecutionControls();
+  let data;
+  try {
+    const response = await fetch('/api/execution/agents');
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  renderExecutionAgents(Array.isArray(data?.agents) ? data.agents : []);
+  renderExecutionRuns(Array.isArray(data?.runs) ? data.runs : []);
+}
+
+function renderExecutionAgents(agents) {
+  const countEl = $('#execution-agent-count');
+  const online = agents.filter((agent) => agent.connectionStatus === 'online').length;
+  if (countEl) countEl.textContent = `${online} 个在线`;
+  const root = $('#execution-agents');
+  if (!root) return;
+  if (!agents.length) {
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="radio-tower"></i><strong>暂无执行面智能体在线</strong><small>等执行面（或模拟器）反向连接后这里会实时显示</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  root.innerHTML = `<table class="access-table"><thead><tr><th>agentId</th><th>名称</th><th>连接</th><th>运行状态</th><th>最后心跳</th><th>能力</th><th>操作</th></tr></thead><tbody>${agents.map((agent) => {
+    const connection = agent.connectionStatus === 'online' ? '<b class="status-pill ok">online</b>' : '<b class="status-pill info">offline</b>';
+    const capabilities = (agent.capabilities || []).map((capability) => esc(capability.name)).join(', ');
+    const recall = agent.connectionStatus === 'online' ? `<button class="btn secondary compact" type="button" data-recall-agent="${esc(agent.agentId)}">召回</button>` : '';
+    return `<tr><td>${esc(agent.agentId)}</td><td>${esc(agent.name)}</td><td>${connection}</td><td>${esc(agent.runtimeStatus)}</td><td>${esc(agent.lastSeenAt)}</td><td>${capabilities}</td><td>${recall}</td></tr>`;
+  }).join('')}</tbody></table>`;
+  refreshIcons(root);
+}
+
+function renderExecutionRuns(runs) {
+  const root = $('#execution-runs');
+  if (!root) return;
+  if (!runs.length) {
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="list-checks"></i><strong>暂无运行记录</strong><small>从上方派单后这里会显示执行进度与结果</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  root.innerHTML = `<table class="access-table"><thead><tr><th>runId</th><th>能力</th><th>状态</th><th>开始</th><th>结果</th></tr></thead><tbody>${runs.slice(0, 50).map((run) => {
+    const result = run.result !== undefined && run.result !== null ? esc(JSON.stringify(run.result).slice(0, 200)) : (run.error ? esc(run.error.message || '') : '');
+    return `<tr><td>${esc(run.runId)}</td><td>${esc(run.capability)}</td><td>${esc(run.state)}</td><td>${esc(run.startedAt)}</td><td>${result}</td></tr>`;
+  }).join('')}</tbody></table>`;
+  refreshIcons(root);
+}
+
+async function dispatchExecutionQuery() {
+  const resultEl = $('#execution-dispatch-result');
+  const agentId = $('#execution-dispatch-agent')?.value?.trim() ?? '';
+  const path = $('#execution-dispatch-path')?.value?.trim() ?? '';
+  let params;
+  try {
+    params = JSON.parse($('#execution-dispatch-params')?.value || '{}');
+  } catch {
+    if (resultEl) { resultEl.textContent = 'params 不是合法 JSON'; resultEl.classList.remove('hidden'); }
+    return;
+  }
+  try {
+    const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/dispatch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ capability: 'query_control_platform', input: { path, params } }),
+    });
+    const body = await response.json();
+    if (resultEl) { resultEl.textContent = JSON.stringify(body, null, 2); resultEl.classList.remove('hidden'); }
+  } catch (error) {
+    if (resultEl) { resultEl.textContent = String(error?.message || error); resultEl.classList.remove('hidden'); }
+  }
+  loadExecution();
+}
+
+async function recallExecutionAgent(agentId) {
+  try { await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/recall`, { method: 'POST' }); } catch { /* 召回失败不阻塞界面 */ }
+  loadExecution();
 }
 
 function openPrompt(prompt) {

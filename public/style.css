@@ -2326,3 +2326,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .role-badge-owner { background: #ecfdf5; color: #047857; }
 .btn.danger { border-color: #fecaca; background: #fff; color: #b91c1c; }
 .btn.danger:hover { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
+
+/* 执行面仪表盘 */
+.execution-surface { margin-bottom: 1rem; }
+.execution-table { overflow-x: auto; }
+.execution-dispatch { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; padding: 1rem 0 0.25rem; }
+.execution-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: var(--text); }
+.execution-field input { min-width: 220px; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+.execution-result { margin: 0.75rem 0 0; padding: 0.75rem; background: var(--surface); border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 0.8rem; overflow: auto; max-height: 280px; white-space: pre-wrap; }
