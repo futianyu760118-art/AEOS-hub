@@ -2,6 +2,7 @@ import type { EvidenceInput } from './evidence.ts';
 import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
 import { recommendTaskAssignees, validateAgentAssignment } from './task-dispatch.ts';
 import { startAgentTaskRun, type AgentTaskRunDeps } from './agent-task-runner.ts';
+import { deriveExecutionQuery } from './execution-query.ts';
 import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
 import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
@@ -28,7 +29,7 @@ type TaskApiDependencies = {
   appendEvidence: (input: EvidenceInput) => unknown;
   g0DecisionStore?: Pick<G0DecisionRegisterStore, 'load'>;
   loadHarbor?: () => HarborSnapshot;
-  resolveRuntime?: (runtimeId: string) => AgentTaskRunDeps['runtime'] | undefined;
+  resolveRuntime?: (runtimeId: string) => (AgentTaskRunDeps['runtime'] & { runtimeKind?: string }) | undefined;
   now?: () => Date;
 };
 
@@ -152,7 +153,7 @@ export class TaskApi {
       const denied = this.authorize('create', actor);
       if (denied) return denied;
       const operatingCase = this.requireCase(decoded(createMatch[1] ?? ''));
-      if (operatingCase.source !== 'order') {
+      if (!['order', 'kitting'].includes(operatingCase.source)) {
         return this.denied(actor, 'create', 'ORDER_DELIVERY_CASE_REQUIRED');
       }
       if (!operatingCase.evidenceRefs.length) throw new TaskApiError(422, '经营事项缺少证据上下文，不能创建任务');
@@ -378,6 +379,10 @@ export class TaskApi {
     const eligibility = evaluateAgentTaskEligibility({ taskId: task.taskId, tenantId: task.tenantId, taskType, agent, runtime: harborRuntime, evaluatedAt });
     if (!eligibility.eligible) return this.denied(actor, 'agent_run', 'AGENT_INELIGIBLE', task);
 
+    const runtimeInput = runtime.runtimeKind === 'remote-execution-agent'
+      ? JSON.stringify(deriveExecutionQuery(task.businessObjectRef))
+      : undefined;
+
     const run = await startAgentTaskRun(
       {
         taskId: task.taskId,
@@ -385,6 +390,7 @@ export class TaskApi {
         title: task.title,
         businessObjectRef: task.businessObjectRef,
         evidenceRefs: task.evidenceRefs,
+        ...(runtimeInput ? { runtimeInput } : {}),
       },
       {
         id: agent.id,

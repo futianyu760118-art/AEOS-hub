@@ -101,17 +101,20 @@ export class ExecutionPlaneRegistry {
   private readonly heartbeatTimeoutMs: number;
   private readonly idFactory: () => string;
   private readonly clock: () => Date;
+  private readonly onChange?: () => void;
 
   constructor(options: {
     file: string;
     heartbeatTimeoutMs?: number;
     idFactory?: () => string;
     clock?: () => Date;
+    onChange?: () => void;
   }) {
     this.file = options.file;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
     this.idFactory = options.idFactory ?? randomUUID;
     this.clock = options.clock ?? (() => new Date());
+    this.onChange = options.onChange;
     this.load();
   }
 
@@ -148,6 +151,7 @@ export class ExecutionPlaneRegistry {
     } catch {
       // 持久化失败不影响在线通道。
     }
+    this.onChange?.();
   }
 
   private nowIso(): string {

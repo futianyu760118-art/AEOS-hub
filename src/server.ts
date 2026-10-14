@@ -78,6 +78,7 @@ import { PersonnelApi } from './personnel-api.ts';
 import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError } from './execution-plane.ts';
+import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -139,7 +140,13 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
 const g0DecisionStore = new G0DecisionRegisterStore();
-const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence, resolveRuntime: (runtimeId) => (runtimeId === CODEX_RUNTIME_ID ? codexRuntime : undefined) });
+const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence, resolveRuntime: (runtimeId) => {
+  if (runtimeId === CODEX_RUNTIME_ID) return codexRuntime;
+  if (executionPlane.list().agents.some((agent) => agent.agentId === runtimeId)) {
+    return new ExecutionPlaneRuntimeAdapter(executionPlane, runtimeId);
+  }
+  return undefined;
+} });
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)
@@ -153,8 +160,33 @@ const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: ne
 // ---------- 执行面接入（远程查询智能体：反向连接 + 心跳 + 派单/召回） ----------
 // 服务凭证来自环境变量 EXECUTION_PLANE_TOKEN；未配置则 /ws/agent 拒绝所有连接（fail-closed）。
 const EXECUTION_PLANE_TOKEN = process.env.EXECUTION_PLANE_TOKEN ?? '';
-const executionPlane = new ExecutionPlaneRegistry({ file: join(dataDir, 'execution-plane.json') });
+const executionHealthSyncedAt = new Map<string, { status: 'healthy' | 'unhealthy'; at: number }>();
+const executionPlane = new ExecutionPlaneRegistry({
+  file: join(dataDir, 'execution-plane.json'),
+  onChange: () => syncExecutionHealth(),
+});
 setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
+
+// 执行面心跳 → Harbor runtime 健康（节流：状态变化立即写，否则每 agent 最多 30s 写一次）。
+function syncExecutionHealth(): void {
+  for (const agent of executionPlane.list().agents) {
+    const status: 'healthy' | 'unhealthy' = agent.connectionStatus === 'online' ? 'healthy' : 'unhealthy';
+    const last = executionHealthSyncedAt.get(agent.agentId);
+    const now = Date.now();
+    if (last && last.status === status && now - last.at < 30_000) continue;
+    executionHealthSyncedAt.set(agent.agentId, { status, at: now });
+    try {
+      recordHarborRuntimeVerification(agent.agentId, {
+        status,
+        checkedAt: new Date().toISOString(),
+        message: agent.connectionStatus === 'online' ? '执行面在线' : '执行面离线',
+        code: null,
+      });
+    } catch {
+      // 执行面 Agent 尚未在 Harbor 登记对应 runtime 时忽略。
+    }
+  }
+}
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv

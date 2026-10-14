@@ -27,7 +27,7 @@ const AGENT_PARENT_TYPE_BY_TYPE: Partial<Record<(typeof AGENT_TYPES)[number], (t
 };
 const AGENT_STATUSES = ['draft', 'idle', 'working', 'offline', 'archived'] as const;
 const RUNTIME_STATUSES = ['ready', 'online', 'busy', 'offline', 'unstable'] as const;
-const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli'] as const;
+const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli', 'remote-execution-agent'] as const;
 const RUNTIME_VERIFICATION_STATUSES = ['healthy', 'degraded', 'unhealthy', 'stopped', 'starting', 'unverified'] as const;
 const PROJECT_STATUSES = ['planned', 'in_progress', 'paused', 'completed', 'cancelled'] as const;
 const PROJECT_PRIORITIES = ['urgent', 'high', 'medium', 'low', 'none'] as const;
@@ -734,7 +734,7 @@ export class HarborStore {
     return this.mutate((snapshot) => {
       const timestamp = this.now();
       const runtime = HarborRuntimeSchema.parse({
-        id: `runtime-${this.idFactory()}`,
+        id: optionalText(input, 'id', 160) || `runtime-${this.idFactory()}`,
         name: requiredText(input, 'name', 100),
         kind: enumValue(input, 'kind', RUNTIME_KINDS, 'custom-cli'),
         description: optionalText(input, 'description', 500),

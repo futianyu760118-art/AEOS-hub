@@ -186,6 +186,23 @@ test('allows G1 task creation only for an order delivery operating case', (t) =>
   assert.equal((evidence.at(-1)?.payload as { policyCode?: string }).policyCode, 'ORDER_DELIVERY_CASE_REQUIRED');
 });
 
+test('allows G1 task creation for a kitting operating case', (t) => {
+  const { api, operatingCenter } = fixture(t);
+  const kittingCase = operatingCenter.upsertDashboardRisks([{
+    ...risk,
+    source: 'kitting',
+    orderNo: 'HJY20260903-261',
+    demandLineNo: '18',
+    issueNo: '',
+    summary: '物料齐套状态 BLOCKED',
+    evidenceRef: 'control-platform://kitting-result/SALES_ORDER/HJY20260903-261/18@2026-09-27T15:27:59.953494',
+  }], 'dashboard', 1).created[0]!;
+
+  const created = post(api, `/api/operating-cases/${encodeURIComponent(kittingCase.id)}/tasks`, manager, { priority: 'high', reason: '建立齐套分析任务' });
+  assert.equal(created?.status, 201);
+  assert.equal((created?.body as { task?: { source?: string } }).task?.source, 'kitting');
+});
+
 test('fails closed for a same-tenant Owner from a different organization before verify or reject lookup', (t) => {
   const { api, operatingCase } = fixture(t);
   const created = post(api, `/api/operating-cases/${operatingCase.id}/tasks`, manager, { priority: 'high', reason: '建立闭环' });

@@ -11,6 +11,8 @@ export type AgentRunTaskSource = {
   title: string;
   businessObjectRef: string;
   evidenceRefs: string[];
+  /** 覆盖 startRun 的输入（如执行面查询的 JSON 查询参数）；缺省时用 title。 */
+  runtimeInput?: string;
 };
 
 export type AgentRunOutcome =
@@ -95,7 +97,7 @@ export async function startAgentTaskRun(
   const startedAt = now().toISOString();
   const instructions = buildAgentRunInstructions(agent, task);
   const session = await deps.runtime.createSession({ developerInstructions: instructions });
-  const run = await deps.runtime.startRun(session.id, { input: task.title });
+  const run = await deps.runtime.startRun(session.id, { input: task.runtimeInput ?? task.title });
   const finalRun = await deps.runtime.waitForRun(run.id);
   const endedAt = now().toISOString();
   return {

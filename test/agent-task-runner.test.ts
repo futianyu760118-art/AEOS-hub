@@ -66,3 +66,20 @@ test('startAgentTaskRun resolves instructions and identity server-side and retur
   assert.equal(run.correlationId, 'corr-1');
   assert.deepEqual(run.outcome, { state: 'completed' });
 });
+
+test('startAgentTaskRun passes runtimeInput as the run input when provided', async () => {
+  let receivedInput: string | undefined;
+  const run = await startAgentTaskRun(
+    { taskId: 'task-2', correlationId: 'corr-2', title: '物料齐套核查', businessObjectRef: 'business://kitting/HJY1%3A18', evidenceRefs: [], runtimeInput: '{"path":"/external/material-kitting/results","params":{"demand_no":"HJY1"}}' },
+    { ...agent, id: 'agent-2' },
+    {
+      runtime: {
+        createSession: async () => ({ id: 'session-2' }),
+        startRun: async (_sessionId, request) => { receivedInput = request.input; return { id: 'run-2' }; },
+        waitForRun: async () => ({ state: 'completed' }),
+      },
+    },
+  );
+  assert.equal(receivedInput, '{"path":"/external/material-kitting/results","params":{"demand_no":"HJY1"}}');
+  assert.deepEqual(run.outcome, { state: 'completed' });
+});
