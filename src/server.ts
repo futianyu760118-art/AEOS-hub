@@ -77,11 +77,13 @@ import { KeycloakPersonnelAdmin, readPersonnelAdminConfig } from './keycloak-per
 import { PersonnelApi } from './personnel-api.ts';
 import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError } from './execution-plane.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
 const binary = join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');
 const PORT = Number(process.env.PORT ?? 8787);
+const EXECUTION_WS_PORT = Number(process.env.EXECUTION_WS_PORT ?? 8788);
 const CODEX_RUNTIME_ID = 'runtime-codex-local';
 
 if (!existsSync(binary)) {
@@ -147,6 +149,12 @@ const personnelAdmin = personnelAdminConfig.enabled
   : null;
 const personnelApi = new PersonnelApi({ admin: personnelAdmin, g0DecisionStore, appendEvidence });
 const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: new AccessControlStore(), g0DecisionStore, appendEvidence });
+
+// ---------- 执行面接入（远程查询智能体：反向连接 + 心跳 + 派单/召回） ----------
+// 服务凭证来自环境变量 EXECUTION_PLANE_TOKEN；未配置则 /ws/agent 拒绝所有连接（fail-closed）。
+const EXECUTION_PLANE_TOKEN = process.env.EXECUTION_PLANE_TOKEN ?? '';
+const executionPlane = new ExecutionPlaneRegistry({ file: join(dataDir, 'execution-plane.json') });
+setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
@@ -1698,6 +1706,42 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // ---------- 执行面接入 HTTP API（仪表盘读取 + 派单/召回） ----------
+  const executionAgentsMatch = url.pathname.match(/^\/api\/execution\/agents$/);
+  if (executionAgentsMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    sendJson(res, 200, executionPlane.list());
+    return;
+  }
+  const executionDispatchMatch = url.pathname.match(/^\/api\/execution\/agents\/([^/]+)\/dispatch$/);
+  if (executionDispatchMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const agentId = decodeURIComponent(executionDispatchMatch[1] ?? '').trim();
+      if (!agentId) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'agentId 无效');
+      const input = await readJsonBody(req);
+      const capability = typeof input.capability === 'string' ? input.capability.trim() : '';
+      if (!capability) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capability 不能为空');
+      sendJson(res, 200, executionPlane.dispatch(agentId, capability, input.input));
+    } catch (error) {
+      const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
+      sendJson(res, status, { error: (error as Error).message, ...(error instanceof ExecutionPlaneError ? { code: error.code } : {}) });
+    }
+    return;
+  }
+  const executionRecallMatch = url.pathname.match(/^\/api\/execution\/agents\/([^/]+)\/recall$/);
+  if (executionRecallMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const agentId = decodeURIComponent(executionRecallMatch[1] ?? '').trim();
+      if (!agentId) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'agentId 无效');
+      sendJson(res, 200, executionPlane.recall(agentId));
+    } catch (error) {
+      const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
+      sendJson(res, status, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/evidence') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
@@ -1748,6 +1792,65 @@ const server = createServer(async (req, res) => {
 function statIsDir(fp: string): boolean {
   try { return statSync(fp).isDirectory(); } catch { return false; }
 }
+
+// ---------- 执行面接入 WebSocket（服务凭证 + 反向连接） ----------
+// ---------- 执行面接入 WebSocket（服务凭证 + 反向连接） ----------
+// 独立 http server + 独立端口：`ws` 不支持同一 server 上挂多个不同 path 的 WebSocketServer
+// （非匹配 path 的实例会 abortHandshake(400) 把已升级的连接打掉）。故执行面控制通道走独立端口。
+const executionServer = createServer((_req, res) => {
+  res.writeHead(404);
+  res.end('execution plane control channel (WebSocket only)');
+});
+const executionWss = new WebSocketServer({
+  server: executionServer,
+  path: '/execution-agent',
+  maxPayload: 1024 * 1024,
+  verifyClient: (info: { req: IncomingMessage }) => {
+    if (!EXECUTION_PLANE_TOKEN) return false;
+    const token = info.req.headers['x-aeos-execution-token'];
+    return typeof token === 'string' && token === EXECUTION_PLANE_TOKEN;
+  },
+});
+const executionWsAgent = new Map<WebSocket, string>(); // ws -> agentId（register 后建立）
+executionWss.on('connection', (ws) => {
+  ws.on('message', (raw) => {
+    let msg: Record<string, unknown>;
+    try { msg = JSON.parse(String(raw)); } catch { send(ws, { type: 'error', message: 'invalid json' }); return; }
+    const type = msg.type as string;
+    try {
+      if (type === 'register') {
+        const reply = executionPlane.onRegister(
+          { agentId: msg.agentId, name: msg.name, version: msg.version, capabilities: msg.capabilities },
+          (m) => send(ws, m),
+        );
+        executionWsAgent.set(ws, reply.agentId);
+        send(ws, { type: 'registered', ...reply });
+      } else if (type === 'heartbeat') {
+        const agentId = executionWsAgent.get(ws);
+        if (agentId) executionPlane.onHeartbeat(agentId, { status: msg.status, currentRunId: msg.currentRunId });
+      } else if (type === 'run_update') {
+        const agentId = executionWsAgent.get(ws);
+        if (agentId) executionPlane.onRunUpdate(agentId, { runId: msg.runId, state: msg.state });
+      } else if (type === 'run_complete') {
+        const agentId = executionWsAgent.get(ws);
+        if (agentId) executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result });
+      } else if (type === 'run_failed') {
+        const agentId = executionWsAgent.get(ws);
+        if (agentId) executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });
+      }
+    } catch (error) {
+      send(ws, { type: 'error', message: (error as Error).message });
+    }
+  });
+  ws.on('close', () => {
+    const agentId = executionWsAgent.get(ws);
+    if (agentId) executionPlane.disconnect(agentId);
+    executionWsAgent.delete(ws);
+  });
+});
+executionServer.listen(EXECUTION_WS_PORT, LISTEN_HOST, () => {
+  console.log(`  执行面控制通道: ws://${LISTEN_HOST === '0.0.0.0' ? 'localhost' : LISTEN_HOST}:${EXECUTION_WS_PORT}/execution-agent`);
+});
 
 // ---------- WebSocket ----------
 const wss = new WebSocketServer({
@@ -2032,6 +2135,8 @@ async function shutdown(): Promise<void> {
   const deadline = setTimeout(() => process.exit(1), 20_000);
   deadline.unref();
   server.close();
+  executionServer.close();
+  executionServer.closeAllConnections();
   for (const guard of pendingGuard.values()) clearTimeout(guard.timer);
   for (const ws of allSockets) ws.close(1001, 'server shutting down');
   try { await runtimeSupervisor.stopAll(); process.exitCode = 0; }

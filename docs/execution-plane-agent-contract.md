@@ -1,0 +1,114 @@
+# 执行面智能体接入契约（交接文档）
+
+本文档给**执行面团队**：执行面（目标系统里的查询智能体）要接入管理面（AEOS Hub），
+必须满足本契约。满足后，管理面就能像遥控器下发查询任务、像仪表盘看到执行面心跳与状态、并能召回它。
+
+## 1. 目标与形态
+
+- 执行面智能体 = **可迁移、可召回、每步都汇报的确定性工作单元**（本阶段是「简单查询智能体」）。
+- 运行形态：独立进程/容器，**反向连接**管理面（执行面主动连管理面），穿透 NAT/防火墙，目标系统无需暴露端口。
+- 管理面地址与端口由部署方给出：控制通道默认 `ws://<hub-host>:8788/execution-agent`（独立控制端口，与浏览器界面端口 8787 分开）。
+
+## 2. 通信与鉴权
+
+| 项 | 值 |
+|---|---|
+| 传输 | WebSocket，JSON 文本帧 |
+| 路径 | `/execution-agent`（控制端口默认 8788） |
+| 鉴权 | 连接握手时带请求头 `x-aeos-execution-token: <token>`；token 由管理面下发（环境变量 `EXECUTION_PLANE_TOKEN`）。**未配置或不匹配，管理面直接拒绝连接**。 |
+| 心跳 | 注册成功后按 `heartbeatIntervalMs`（默认 5000ms）周期发送 |
+
+> 生产将升级为管理面签发的短时效凭证（证书/Token），本阶段为预共享 token 的最小实现。
+
+## 3. 消息协议
+
+### 3.1 执行面 → 管理面
+
+| type | 字段 | 说明 |
+|---|---|---|
+| `register` | `agentId, name, version, capabilities:[{name,description}]` | 连接建立后立即发送，`capabilities` 非空 |
+| `heartbeat` | `status(idle/working/error), currentRunId?` | 周期心跳 |
+| `run_update` | `runId, state:'running'` | 开始执行时的进度上报（可选） |
+| `run_complete` | `runId, result` | 查询成功，`result` 为结构化结果 |
+| `run_failed` | `runId, error:{code,message}` | 查询失败 |
+
+### 3.2 管理面 → 执行面
+
+| type | 字段 | 说明 |
+|---|---|---|
+| `registered` | `agentId, heartbeatIntervalMs` | 注册确认，收到后开始心跳 |
+| `dispatch` | `runId, capability, input` | 下发查询任务 |
+| `recall` | `runId?` | 停止当前任务；执行面应中止查询，**无需再回报结果**（管理面已标记 recalled） |
+| `error` | `message` | 协议错误 |
+
+## 4. 查询契约（能力 `query_control_platform`）
+
+- 能力名固定为 `query_control_platform`，在 `register.capabilities` 中声明。
+- `dispatch.input` 结构：`{ path: string, params: object }`，其中 `path` 必须是下表白名单之一。
+- 执行面据此调用**目标系统（公司中控）只读上游接口**并回传结果。
+
+### 4.1 签名（HMAC-SHA256）
+
+- 待签名串 = `timestamp + app_key + endpoint_code + query_string`（字符串直接拼接）。
+- `signature = HMAC-SHA256(app_secret, 待签名串)` 的 hex。
+- `timestamp` 为 Unix 秒；`query_string` 为 URL 编码后的查询串（与请求 URL 中的原始 query string 一致，空格用 `+`）。
+- 请求头：`X-App-Key`、`X-Timestamp`、`X-Signature`。
+- 认证优先级：HMAC API Key → 静态 Bearer TOKEN → OAuth2 client_credentials（本阶段用 HMAC）。
+
+### 4.2 端点白名单（path → endpoint_code）
+
+| path | endpoint_code |
+|---|---|
+| `/common/ping` | `int:health.ping` |
+| `/external/orders/list` | `orders.list` |
+| `/external/order-details/list` | `order_details.list` |
+| `/external/boms/tree` | `boms.tree` |
+| `/external/materials/list` | `materials.list` |
+| `/external/suppliers/list` | `suppliers.list` |
+| `/external/material-kitting/results` | `kitting.results` |
+| `/external/material-kitting/shortages` | `kitting.shortages` |
+| `/external/material-kitting/demands` | `kitting.demands` |
+| `/external/inventory/availability` | `inventory.availability` |
+| `/external/material-supplies/list` | `material.supplies` |
+| `/external/quality-issues/list` | `quality_issues.list` |
+| `/external/quality-trace/list` | `quality_trace.list` |
+| `/external/production/work-orders/list` | `production.work_orders.list` |
+| `/external/production/operations/list` | `production.operations.list` |
+| `/external/production/order-links/list` | `production.order_links.list` |
+| `/external/production/reports/list` | `production.reports.list` |
+| `/external/production/capacity/list` | `production.capacity.list` |
+
+### 4.3 响应信封
+
+统一信封 `{ code, message, data }`：`code == 0` 成功，回传 `data`；否则视为失败，`run_failed` 携带错误码。
+错误码（§12）：`INVALID_ARGUMENT / UNAUTHORIZED / FORBIDDEN / NOT_FOUND / RATE_LIMITED / UPSTREAM_TIMEOUT / UPSTREAM_UNAVAILABLE / INTERNAL_ERROR`。
+
+### 4.4 权威参考实现
+
+- 签名 + 端点 + 信封：`mcp-company-control/mcp_server/upstream_client.py`（**Python 为权威参考**）。
+- 最小查询调用示例：`scripts/company-control-query.py`（复用上游客户端直查一个 path）。
+
+## 5. 召回与生命周期
+
+- `recall`（冷召回）：执行面立即中止当前查询、释放资源；管理面已把该 run 标记为 `recalled`，执行面不回报。
+- 心跳超时（> 3 × 心跳间隔）管理面自动标记 `offline`，不再派单。
+- 断线重连：执行面应主动重连；重连后重新 `register` 即可恢复在线。
+- 后续可扩展：`pause/resume`（热召回/断点续跑），本阶段不要求。
+
+## 6. 安全边界（执行面侧）
+
+- 只读：`path` 白名单外一律拒绝；不直连数据库/文件系统，只走只读上游接口。
+- 权限最小化：只读凭证（app_key/secret）仅能查，不能写。
+- 日志：关键事件（收到派单/完成/失败/被召回）输出到 stdout/stderr，便于采集审计。
+- 不盲信目标系统返回数据（信封 `code!=0` 一律按失败处理）。
+
+## 7. 打包与部署
+
+- 打包为容器镜像：明确入口、健康检查、日志走 stdout/stderr。
+- 启动参数：`EXECUTION_WS_URL`（管理面 `/execution-agent` 地址）、`EXECUTION_PLANE_TOKEN`、`EXECUTION_AGENT_ID`、目标系统凭据。
+- 网络：执行面 → 管理面出方向连接；目标系统无需暴露端口。
+
+## 8. 最小实现骨架（参考）
+
+管理面侧已提供可运行模拟桩 `scripts/execution-plane-simulator.mjs`（Node）与 `scripts/company-control-query.py`（Python），
+二者合起来即完整演示：Node 负责 WS 协议与心跳，Python 负责 HMAC 真查中台。执行面团队可对照这两份文件实现真实智能体。
