@@ -31,7 +31,7 @@
 
 | type | 字段 | 说明 |
 |---|---|---|
-| `register` | `agentId, name, version, sourceSystem, capabilities:[{name,description}]` | 连接建立后立即发送；`sourceSystem` 为来源业务系统名称，`capabilities` 非空 |
+| `register` | `agentId, name, version, protocolVersion, sourceSystem, capabilities:[{name,description,version?,inputSchemaVersion?,outputSchemaVersion?}]` | 连接建立后立即发送；`sourceSystem` 为来源业务系统名称，`capabilities` 非空；`protocolVersion` 当前支持 `1.0` |
 | `heartbeat` | `status(idle/working/error), currentRunId?` | 周期心跳 |
 | `run_update` | `runId, state:'running'` | 开始执行时的进度上报（可选） |
 | `run_complete` | `runId, result` | 查询成功，`result` 为结构化结果 |
@@ -39,14 +39,15 @@
 
 `sourceSystem` 是每个新接入智能体的必填身份信息（最长 160 字符），例如“公司中控平台”或“供应链系统”。
 “本机 / 远程”不由执行面上报：管理面根据控制通道的回环地址自动判定并展示，防止客户端伪造身份。
+`protocolVersion` 当前仅支持 `1.0`；执行面上报不兼容版本时，管理面会拒绝注册并返回明确错误（`PROTOCOL_VERSION_UNSUPPORTED`），不会静默失败。
 
 ### 3.2 管理面 → 执行面
 
 | type | 字段 | 说明 |
 |---|---|---|
 | `registered` | `agentId, heartbeatIntervalMs` | 注册确认，收到后开始心跳 |
-| `dispatch` | `runId, capability, input` | 下发查询任务 |
-| `recall` | `runId?` | 停止当前任务；执行面应中止查询，**无需再回报结果**（管理面已标记 recalled） |
+| `dispatch` | `runId, capability, input` | 下发查询或推理任务（`capability` 决定 `input` 结构） |
+| `recall` | `runId?` | 停止当前任务；执行面应中止执行，**无需再回报结果**（管理面已标记 recalled） |
 | `error` | `message` | 协议错误 |
 
 ## 4. 能力注册表（扩展点）
@@ -117,9 +118,57 @@
 - `business://order/SO-2609-001` → `{ path: "/external/orders/list", params: { keyword: "SO-2609-001" } }`
 
 **桥接约定（重要）**：执行面 `register.agentId` 必须等于管理面 AI 港湾里对应 Runtime 的 `id`
-（本试点固定为 `runtime-execution-query`），否则管理面的 `resolveRuntime` 无法把任务解析到该执行面运行时。
+（本试点固定为 `runtime-control-platform-agent`），否则管理面的 `resolveRuntime` 无法把任务解析到该执行面运行时。
 
 结果回传后，管理面把任务推进到 `AWAITING_VERIFY`；运行中被 `recall` 则推进到 `AWAITING_DECISION`。
+
+### 4.6 能力 `reason_control_platform`（中台推理）
+
+调用中台自有大模型 / 推理智能体完成**只读**分析，返回结构化结论 + 证据 + 数据时间 + 置信度。
+
+**`dispatch.input` 结构**：
+
+```json
+{
+  "prompt": "分析订单 HJY20260903-261 的交付风险",
+  "task_type": "order_delivery_analysis",
+  "context": {},
+  "constraints": { "read_only": true, "require_evidence": true }
+}
+```
+
+- `prompt`：分析问题（由管理面从任务派生或按受控入口下发，最长 2000 字符）。
+- `task_type`：任务类型（`order_delivery_analysis` / `material_kitting_analysis` / `quality_analysis` / `production_analysis` 等）。
+- `constraints.read_only` 必须为 `true`；`require_evidence` 要求结论必须带证据。
+
+**`run_complete.result` 结构**：
+
+```json
+{
+  "summary": "存在缺料导致的延期风险",
+  "conclusions": [
+    {
+      "matter": "关键物料尚未齐套",
+      "evidence_refs": ["control-platform://..."],
+      "risk": "预计影响交付3天",
+      "recommendation": "建议采购负责人核实到货承诺，需人工确认",
+      "confidence": "high"
+    }
+  ],
+  "data_as_of": "2026-10-14T14:30:00+08:00",
+  "data_confidence": "high"
+}
+```
+
+**安全与校验要求**：
+
+- 每条 `conclusion` 必须携带非空 `evidence_refs`；管理面会校验，缺失则标记 `data_confidence: "low"` 并附加 `validation_note`。
+- `STALE_DATA` / `UPSTREAM_UNAVAILABLE` / 空结果必须分别处理，**不得**返回“没有风险 / 没有问题”。
+- 金额、承诺、质量、法律类结论必须标注需人工确认。
+- 默认只读，禁止写操作；模型不得自行扩大权限或调用未授权工具。
+- 中台模型回答不能直接当作业务事实，必须附证据。
+
+> 中台推理接口契约（地址/鉴权/参数/返回/错误码/evidence 规则等）尚未提供时，执行面 `reasoning-adapter` 应返回明确的“未接通”结果，**不得伪造已联通中台大模型**。
 
 ## 5. 召回与生命周期
 

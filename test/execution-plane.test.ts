@@ -150,7 +150,7 @@ test('派单不支持的能力抛 CAPABILITY_UNSUPPORTED', (t) => {
 test('结果回传：run_complete 完成并保存结果', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
-  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', {});
+  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/list', params: {} });
   h.registry.onRunUpdate(h.agentId, { runId });
   h.registry.onRunComplete(h.agentId, { runId, result: { rows: [{ demand_no: 'HJY1' }] } });
   const run = h.registry.list().runs.find((r) => r.runId === runId);
@@ -162,7 +162,7 @@ test('结果回传：run_complete 完成并保存结果', (t) => {
 test('失败回传：run_failed 记录错误', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
-  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', {});
+  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/list', params: {} });
   h.registry.onRunFailed(h.agentId, { runId, error: { code: 'UPSTREAM_UNAVAILABLE', message: '不可达' } });
   const run = h.registry.list().runs.find((r) => r.runId === runId);
   assert.equal(run?.state, 'failed');
@@ -172,7 +172,7 @@ test('失败回传：run_failed 记录错误', (t) => {
 test('召回：发送 recall 并把进行中的 run 标记 recalled', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
-  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', {});
+  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/list', params: {} });
   const result = h.registry.recall(h.agentId);
   assert.equal(result.recalled, true);
   assert.equal(result.runId, runId);
@@ -188,7 +188,7 @@ test('断连：agent 变离线', (t) => {
   h.registry.disconnect(h.agentId);
   assert.equal(h.registry.list().agents[0].connectionStatus, 'offline');
   assert.throws(
-    () => h.registry.dispatch(h.agentId, 'query_control_platform', {}),
+    () => h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/list', params: {} }),
     (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'AGENT_OFFLINE',
   );
 });
@@ -228,4 +228,37 @@ test('历史执行面记录缺少来源系统时标记待补充', (t) => {
   assert.equal(agent?.sourceSystem, '历史记录（来源待补充）');
   assert.equal(agent?.local, false);
   assert.equal(agent?.connectionStatus, 'offline');
+});
+
+test('拒绝不支持的协议版本', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  assert.throws(
+    () => h.registry.onRegister({ agentId: 'agent-x', name: 'x', version: '1', sourceSystem: 's', protocolVersion: '99.0', capabilities: [{ name: 'query_control_platform', description: '' }] }, () => {}),
+    (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'PROTOCOL_VERSION_UNSUPPORTED',
+  );
+});
+
+test('派单拒绝白名单外的查询 path', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  assert.throws(
+    () => h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/delete', params: {} }),
+    (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'INVALID_ARGUMENT',
+  );
+});
+
+test('推理结果缺少 evidence_refs 标记低置信度', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  h.registry.onRegister(
+    { agentId: 'reason-agent', name: '推理智能体', version: '1', sourceSystem: 's', capabilities: [{ name: 'reason_control_platform', description: '' }] },
+    () => {},
+  );
+  const { runId } = h.registry.dispatch('reason-agent', 'reason_control_platform', { prompt: '分析订单', task_type: 'order_delivery_analysis', constraints: { read_only: true, require_evidence: true } });
+  h.registry.onRunComplete('reason-agent', { runId, result: { summary: 's', conclusions: [{ matter: 'x', evidence_refs: [] }] } });
+  const run = h.registry.list().runs.find((r) => r.runId === runId);
+  assert.equal(run?.state, 'completed');
+  assert.equal((run?.result as { data_confidence?: string }).data_confidence, 'low');
+  assert.ok((run?.result as { validation_note?: string }).validation_note);
 });

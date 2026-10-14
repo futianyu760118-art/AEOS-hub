@@ -121,6 +121,41 @@ git add public/app.js public/execution-query-intent.js test/execution-query-inte
 git commit -m "feat: show execution query scope"
 ```
 
+### Task 3: 八类查询的意图—响应—答案一致性校验
+
+**Files:**
+- Create: `public/execution-query-validation.js`
+- Modify: `public/execution-query-summary.js`, `public/app.js`
+- Test: `test/execution-query-summary.test.ts`
+
+**Interfaces:**
+- Consumes: `path`, 用户派发的 `params`，以及中台返回的分页响应。
+- Produces: `validateExecutionQueryResponse(path, params, response)`，返回可展示的分页事实和契约问题；`summarizeExecutionResult(path, data, params)` 基于这些事实回答。
+
+- [x] **Step 1: 编写八类端点的分页语义与异常响应失败测试**
+
+测试“前 5 个供应商”与其他七类端点都必须回答“本页返回 5 条、共匹配 N 条”，并覆盖第二页、每页 20 条但界面只展开 12 条、`total < items.length` 及中台忽略 `page_size`。
+
+- [x] **Step 2: 运行失败测试**
+
+Run: `node --test test/execution-query-summary.test.ts`
+
+Expected: FAIL，因为现有摘要把 `total` 当作本页数量，且不检查分页契约。
+
+- [x] **Step 3: 实现响应校验与分页事实摘要**
+
+仅根据请求参数和响应元数据生成“本页返回 / 当前页 / 每页 / 总匹配”事实；分别计算本页未展开数和后续页可查询数。出现上游分页契约矛盾时在摘要中附数据校验提示，不掩盖返回数据。
+
+- [x] **Step 4: 让聊天结果摘要接收原始派发参数**
+
+调用摘要时传入 `run.input.params`，保证回答与用户原意和实际派发范围一致。
+
+- [x] **Step 5: 运行完整相关回归**
+
+Run: `node --check public/app.js && npm run check:types && node --test test/execution-query-intent.test.ts test/execution-query-summary.test.ts test/execution-plane.test.ts test/execution-capabilities.test.ts`
+
+Expected: PASS。
+
 ## Self-Review
 
 - Spec coverage: Task 1 covers path/parameter correctness, bounded quantities and existing query regressions; Task 2 makes the actual scope visible before results arrive.

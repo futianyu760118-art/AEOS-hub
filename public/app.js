@@ -1,8 +1,8 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
-import { describeExecutionQuery, parseExecutionQuery } from './execution-query-intent.js?v=execution-query-intent-v3-20261014';
-import { summarizeExecutionResult } from './execution-query-summary.js?v=execution-query-summary-v2-20261014';
+import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery, parseExecutionReasoning } from './execution-query-intent.js?v=execution-query-intent-v4-20261014';
+import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v4-20261014';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
@@ -831,15 +831,33 @@ async function sendExecutionQuery() {
     appendExecutionMessage('agent', '请先在左侧选择一个智能体', null);
     return;
   }
+  if (input) input.value = '';
+  appendExecutionMessage('user', text, null);
+
+  const reasoning = parseExecutionReasoning(text);
+  if (reasoning && !reasoning.error) {
+    const pending = appendExecutionMessage('agent', `正在推理：${describeExecutionReasoning(reasoning)}…`, null);
+    try {
+      const response = await fetch(`/api/execution/agents/${encodeURIComponent(selectedExecutionAgent)}/dispatch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ capability: 'reason_control_platform', input: reasoning }),
+      });
+      const body = await response.json();
+      if (!response.ok || body.error) { if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`; return; }
+      pollExecutionRun(body.runId, pending);
+    } catch (error) {
+      if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
+    }
+    return;
+  }
+
   const parsed = parseExecutionQuery(text);
   if (parsed.error) {
     appendExecutionMessage('agent', parsed.error, null);
     return;
   }
-  if (input) input.value = '';
-  appendExecutionMessage('user', text, null);
   const pending = appendExecutionMessage('agent', `正在查询：${describeExecutionQuery(parsed)}…`, null);
-
   try {
     const response = await fetch(`/api/execution/agents/${encodeURIComponent(selectedExecutionAgent)}/dispatch`, {
       method: 'POST',
@@ -869,8 +887,9 @@ function pollExecutionRun(runId, pending) {
     if (run && ['completed', 'failed', 'recalled'].includes(run.state)) {
       if (pending) {
         if (run.state === 'completed') {
-          const path = typeof run.input?.path === 'string' ? run.input.path : '';
-          const summary = summarizeExecutionResult(path, run.result);
+          const summary = run.capability === 'reason_control_platform'
+            ? summarizeReasoningResult(run.result)
+            : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {});
           pending.textEl.textContent = '';
           streamTextInto(pending.textEl, summary);
           if (run.result !== undefined && run.result !== null) {

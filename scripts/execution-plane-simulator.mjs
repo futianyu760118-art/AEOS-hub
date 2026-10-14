@@ -17,7 +17,7 @@ const pythonExe = process.platform === 'win32'
 
 const token = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const wsUrl = process.env.EXECUTION_WS_URL ?? 'ws://127.0.0.1:8788/execution-agent';
-const agentId = process.env.EXECUTION_AGENT_ID ?? 'runtime-execution-query';
+const agentId = process.env.EXECUTION_AGENT_ID ?? 'runtime-control-platform-agent';
 const sourceSystem = process.env.EXECUTION_SOURCE_SYSTEM ?? '公司中控平台（本机演示）';
 
 if (!token) {
@@ -30,7 +30,8 @@ if (!existsSync(pythonExe)) {
 }
 
 const capabilities = [
-  { name: 'query_control_platform', description: '中台只读查询：path + params，HMAC 签名直查上游' },
+  { name: 'query_control_platform', description: '精确查询中台只读业务数据' },
+  { name: 'reason_control_platform', description: '调用中台自有大模型或推理智能体完成只读分析' },
 ];
 
 let ws = null;
@@ -55,8 +56,38 @@ function stopHeartbeat() {
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 }
 
+// 推理能力占位：中台大模型/推理智能体接口尚未接通，返回明确的「未接通」结果，绝不伪造真实推理。
+async function handleReasoningDispatch(msg) {
+  const runId = msg.runId;
+  const input = msg.input && typeof msg.input === 'object' ? msg.input : {};
+  console.log(`[simulator] 收到推理派单 ${runId}: prompt=${String(input.prompt || '').slice(0, 80)}`);
+  send({ type: 'run_update', runId, state: 'running' });
+  if (simulateDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, simulateDelayMs));
+  if (recalled) { console.log(`[simulator] 推理派单 ${runId} 已被召回，跳过执行`); return; }
+  send({
+    type: 'run_complete',
+    runId,
+    result: {
+      summary: '推理能力尚未接通中台大模型（模拟占位）。',
+      conclusions: [{
+        matter: '中台推理接口未接通',
+        evidence_refs: ['control-platform://reasoning/not-connected'],
+        risk: '无法给出真实分析结论',
+        recommendation: '请向中台确认推理接口契约并接入后重试',
+        confidence: 'low',
+      }],
+      data_as_of: new Date().toISOString(),
+      data_confidence: 'low',
+    },
+  });
+}
+
 async function handleDispatch(msg) {
   recalled = false;
+  if (msg.capability === 'reason_control_platform') {
+    await handleReasoningDispatch(msg);
+    return;
+  }
   const runId = msg.runId;
   const input = msg.input && typeof msg.input === 'object' ? msg.input : {};
   const path = typeof input.path === 'string' ? input.path : '';
@@ -98,7 +129,7 @@ function connect() {
   ws = new WebSocket(wsUrl, { headers: { 'x-aeos-execution-token': token } });
   ws.on('open', () => {
     console.log('[simulator] 已连接管理面，发送 register');
-    send({ type: 'register', agentId, name: '查询智能体', version: '1.0.0', sourceSystem, capabilities });
+    send({ type: 'register', agentId, name: '公司中台执行面智能体', version: '1.0.0', sourceSystem, capabilities });
   });
   ws.on('message', (raw) => {
     let msg;

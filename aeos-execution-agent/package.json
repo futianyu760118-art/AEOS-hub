@@ -1,0 +1,17 @@
+{
+  "name": "aeos-execution-agent",
+  "version": "1.0.0",
+  "description": "AEOS 执行面智能体：通过 WebSocket 反向连接 AEOS Hub，承载查询与推理能力",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

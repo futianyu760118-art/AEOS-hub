@@ -26,3 +26,51 @@ test('renders type-specific fields for all other query result categories', () =>
     assert.match(summarizeExecutionResult(path, { total: 1, items: [item] }), expected, String(path));
   }
 });
+
+test('keeps pagination facts separate from the matching total for all eight query categories', () => {
+  const paths = [
+    ['/external/material-kitting/shortages', { material_code: 'M-1', shortage_qty: 1 }],
+    ['/external/material-kitting/results', { demand_no: 'SO-1' }],
+    ['/external/orders/list', { order_no: 'SO-1' }],
+    ['/external/inventory/availability', { material_code: 'M-1' }],
+    ['/external/material-supplies/list', { supply_no: 'PO-1' }],
+    ['/external/quality-issues/list', { issue_no: 'QI-1' }],
+    ['/external/production/work-orders/list', { work_order_no: 'WO-1' }],
+    ['/external/suppliers/list', { supplier_code: 'SUP-1', supplier_name: '供应商A' }],
+  ];
+  for (const [path, item] of paths) {
+    const summary = summarizeExecutionResult(path, {
+      total: 1843, page: 1, page_size: 5, items: Array.from({ length: 5 }, () => item),
+    }, { page: 1, page_size: 5 });
+    assert.match(summary, /本页返回 5 条（第 1 页，每页 5 条）；符合当前条件共 1843 条/, String(path));
+    assert.doesNotMatch(summary, /^查到 1843 条记录/, String(path));
+  }
+});
+
+test('distinguishes hidden rows on this page from records available on later pages', () => {
+  const item = { supplier_code: 'SUP-1', supplier_name: '供应商A' };
+  const secondPage = summarizeExecutionResult('/external/suppliers/list', {
+    total: 1843, page: 2, page_size: 5, items: Array.from({ length: 5 }, () => item),
+  }, { page: 2, page_size: 5 });
+  assert.match(secondPage, /本页返回 5 条（第 2 页，每页 5 条）；符合当前条件共 1843 条/);
+  assert.match(secondPage, /另有 1833 条匹配记录，可查询第 3 页/);
+
+  const cappedPage = summarizeExecutionResult('/external/suppliers/list', {
+    total: 20, page: 1, page_size: 20, items: Array.from({ length: 20 }, () => item),
+  }, { page: 1, page_size: 20 });
+  assert.match(cappedPage, /本页还有 8 条未展开/);
+  assert.doesNotMatch(cappedPage, /另有/);
+});
+
+test('shows a data-validation warning when the upstream pagination contract is contradictory', () => {
+  const summary = summarizeExecutionResult('/external/suppliers/list', {
+    total: 4, page: 1, page_size: 5, items: Array.from({ length: 5 }, () => ({ supplier_code: 'SUP-1' })),
+  }, { page: 1, page_size: 5 });
+  assert.match(summary, /数据校验提示/);
+  assert.match(summary, /总匹配数 4 小于本页返回数 5/);
+
+  const ignoredLimit = summarizeExecutionResult('/external/suppliers/list', {
+    total: 20, page: 1, page_size: 20, items: Array.from({ length: 20 }, () => ({ supplier_code: 'SUP-1' })),
+  }, { page: 1, page_size: 5 });
+  assert.match(ignoredLimit, /中台返回每页 20 条与请求每页 5 条不一致/);
+});

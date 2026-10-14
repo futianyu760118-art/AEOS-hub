@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { validateExecutionInput, validateReasoningResult } from './execution-capabilities.ts';
 
 export type ExecutionAgentRuntimeStatus = 'idle' | 'working' | 'error';
 export type ExecutionAgentConnectionStatus = 'online' | 'offline';
@@ -12,6 +13,9 @@ export type ExecutionRunState = 'dispatched' | 'running' | 'completed' | 'failed
 export interface ExecutionAgentCapability {
   name: string;
   description: string;
+  version?: string;
+  inputSchemaVersion?: string;
+  outputSchemaVersion?: string;
 }
 
 export interface ExecutionAgentRecord {
@@ -65,6 +69,7 @@ interface ConnectedAgent {
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0']);
 
 export function isLoopbackExecutionPeer(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -82,11 +87,17 @@ function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
   if (value.length === 0) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capabilities 不能为空');
   return value.map((cap) => {
     if (!cap || typeof cap !== 'object') throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capability 必须是对象');
-    const name = requireString((cap as Record<string, unknown>).name, 'capability.name', 100);
-    const description = typeof (cap as Record<string, unknown>).description === 'string'
-      ? ((cap as Record<string, unknown>).description as string).slice(0, 500)
-      : '';
-    return { name, description };
+    const record = cap as Record<string, unknown>;
+    const name = requireString(record.name, 'capability.name', 100);
+    const description = typeof record.description === 'string' ? record.description.slice(0, 500) : '';
+    const optional = (field: string) => (typeof record[field] === 'string' ? record[field].slice(0, 40) : undefined);
+    return {
+      name,
+      description,
+      ...(optional('version') ? { version: optional('version') } : {}),
+      ...(optional('inputSchemaVersion') ? { inputSchemaVersion: optional('inputSchemaVersion') } : {}),
+      ...(optional('outputSchemaVersion') ? { outputSchemaVersion: optional('outputSchemaVersion') } : {}),
+    };
   });
 }
 
@@ -177,12 +188,18 @@ export class ExecutionPlaneRegistry {
 
   // ---------- 执行面 → 管理面 ----------
   onRegister(
-    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown },
+    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown },
     send: SendFn,
   ): { agentId: string; heartbeatIntervalMs: number } {
     const agentId = requireString(input.agentId, 'agentId', 160);
     const name = requireString(input.name, 'name', 160);
     const version = typeof input.version === 'string' ? input.version.slice(0, 40) : 'unknown';
+    const protocolVersion = typeof input.protocolVersion === 'string' && input.protocolVersion.trim()
+      ? input.protocolVersion.trim()
+      : '1.0';
+    if (!SUPPORTED_PROTOCOL_VERSIONS.has(protocolVersion)) {
+      throw new ExecutionPlaneError('PROTOCOL_VERSION_UNSUPPORTED', `不支持的执行面协议版本: ${protocolVersion}（支持 ${[...SUPPORTED_PROTOCOL_VERSIONS].join(', ')}）`);
+    }
     const capabilities = parseCapabilities(input.capabilities);
     const local = input.local === true;
     const sourceSystem = requireString(input.sourceSystem, 'sourceSystem', 160);
@@ -231,7 +248,21 @@ export class ExecutionPlaneRegistry {
     const runId = requireString(input.runId, 'runId', 160);
     const run = this.requireRun(runId, agentId);
     run.state = 'completed';
-    run.result = input.result ?? null;
+    if (run.capability === 'reason_control_platform') {
+      const issue = validateReasoningResult(input.result);
+      if (issue) {
+        // 无 evidence_refs 的推理结论：不静默丢弃，标记低置信度并附带校验说明。
+        run.result = {
+          ...(input.result && typeof input.result === 'object' ? (input.result as Record<string, unknown>) : {}),
+          data_confidence: 'low',
+          validation_note: issue,
+        };
+      } else {
+        run.result = input.result ?? null;
+      }
+    } else {
+      run.result = input.result ?? null;
+    }
     run.endedAt = this.nowIso();
     const entry = this.requireAgent(agentId);
     entry.record.currentRunId = null;
@@ -264,6 +295,9 @@ export class ExecutionPlaneRegistry {
     if (!entry.record.capabilities.some((cap) => cap.name === capability)) {
       throw new ExecutionPlaneError('CAPABILITY_UNSUPPORTED', `执行面 ${agentId} 不支持能力 ${capability}`);
     }
+    const inputRecord = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+    const validationError = validateExecutionInput(capability, inputRecord);
+    if (validationError) throw new ExecutionPlaneError('INVALID_ARGUMENT', validationError);
     const runId = `exec-run-${this.idFactory()}`;
     const run: ExecutionRunRecord = {
       runId,

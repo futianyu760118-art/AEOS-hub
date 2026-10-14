@@ -20,5 +20,5 @@ test('loads the Chinese localization layer before rendering the workspace', () =
   assert.match(app, /localizeStaticDocument\(\);\s*refreshIcons\(\);/);
   assert.match(app, /localizeDynamicCopy\(root\)/);
   assert.equal(localizeUiText('中枢 Agent 与 Guard'), '中枢智能体 与 治理门禁');
-  assert.match(html, /app\.js\?v=ui-zh-cn-20261013/);
+  assert.match(html, /app\.js\?v=[a-z0-9-]+/);
 });

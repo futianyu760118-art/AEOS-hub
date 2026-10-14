@@ -79,7 +79,7 @@ import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
-import { ensureExecutionQueryAgent } from './execution-query-agent-seed.ts';
+import { ensureExecutionAgent } from './execution-agent-seed.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -189,9 +189,9 @@ function syncExecutionHealth(): void {
   }
 }
 
-// 幂等自动注册执行面查询 Agent（G1 开箱可用）。失败不阻塞启动，可稍后手动跑 scripts/ensure-execution-query-agent.ts。
+// 幂等自动注册公司中台执行面智能体（G1 开箱可用）。失败不阻塞启动，可稍后手动跑 scripts/ensure-execution-agent.ts。
 try {
-  ensureExecutionQueryAgent();
+  ensureExecutionAgent();
 } catch (error) {
   console.warn('[execution-agent-seed] 自动注册失败:', (error as Error).message);
 }

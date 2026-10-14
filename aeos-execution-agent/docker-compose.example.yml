@@ -1,0 +1,15 @@
+# AEOS 执行面智能体 独立部署示例（不启动整个 AEOS Hub）
+services:
+  aeos-execution-agent:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    # 若需调试可暴露端口；本 Agent 主动出方向连接 Hub，通常无需映射端口。
+    # ports:
+    #   - "127.0.0.1:8788:8788"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

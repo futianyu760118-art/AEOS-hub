@@ -1,3 +1,5 @@
+import { validateExecutionQueryResponse } from './execution-query-validation.js?v=execution-query-validation-v1-20261014';
+
 const FIELD_LABELS = {
   demand_no: '需求单号', demand_line_no: '需求行号', material_code: '物料编码', material_name: '物料名称',
   required_qty: '需求量', available_qty: '可用量', future_supply_qty: '未来供给量', shortage_qty: '缺料量',
@@ -36,12 +38,16 @@ function rowDetails(item, fields) {
 }
 
 /** Renders the business fields that belong to the endpoint instead of a generic row title. */
-export function summarizeExecutionResult(path, data) {
-  const items = Array.isArray(data?.items) ? data.items : [];
-  const total = typeof data?.total === 'number' ? data.total : items.length;
-  if (!items.length) return '没有查到相关记录。';
+export function summarizeExecutionResult(path, data, requestParams = {}) {
+  const response = validateExecutionQueryResponse(path, requestParams, data);
+  const { items, total, page, pageSize, returned, issues } = response;
+  const paginationFact = `本页返回 ${returned} 条（第 ${page} 页，每页 ${pageSize} 条）；符合当前条件共 ${total} 条`;
+  const validationNotice = issues.length ? `\n数据校验提示：${issues.map((issue) => issue.message).join('；')}` : '';
+  if (!items.length) return `${paginationFact}。\n没有查到相关记录。${validationNotice}`;
   const cap = items.slice(0, 12);
-  const more = total > cap.length;
+  const hiddenOnPage = items.length - cap.length;
+  const remainingAfterPage = Math.max(0, total - ((page - 1) * pageSize + returned));
+  const remainder = `${hiddenOnPage ? `\n本页还有 ${hiddenOnPage} 条未展开。` : ''}${remainingAfterPage ? `\n另有 ${remainingAfterPage} 条匹配记录，可查询第 ${page + 1} 页。` : ''}`;
   if (typeof path === 'string' && path.includes('/material-kitting/shortages')) {
     const totalQty = items.reduce((sum, item) => sum + (Number(item.shortage_qty) || 0), 0);
     const lines = cap.map((item, index) => {
@@ -50,7 +56,7 @@ export function summarizeExecutionResult(path, data) {
       const normalized = details.replace(`缺料原因：${item.shortage_reason}`, `缺料原因：${shortageReasonLabel(item.shortage_reason)}`);
       return `${index + 1}. ${title}${normalized ? `（${normalized}）` : ''}`;
     });
-    return `查到缺料记录 ${total} 条，当前页合计缺料 ${totalQty} 件：\n${lines.join('\n')}${more ? `\n…其余 ${total - cap.length} 条未列出` : ''}`;
+    return `${paginationFact}；当前页合计缺料 ${totalQty} 件：\n${lines.join('\n')}${remainder}${validationNotice}`;
   }
   const format = RESULT_FORMATS.find((candidate) => typeof path === 'string' && path.includes(candidate.path));
   const lines = cap.map((item, index) => {
@@ -58,5 +64,29 @@ export function summarizeExecutionResult(path, data) {
     const details = rowDetails(item, format?.fields || Object.keys(item).slice(0, 8));
     return `${index + 1}. ${title}${details ? `（${details}）` : ''}`;
   });
-  return `查到 ${total} 条记录：\n${lines.join('\n')}${more ? `\n…其余 ${total - cap.length} 条未列出` : ''}`;
+  return `${paginationFact}：\n${lines.join('\n')}${remainder}${validationNotice}`;
+}
+
+/** 把推理能力结果转成可读中文摘要。 */
+export function summarizeReasoningResult(result) {
+  const summary = typeof result?.summary === 'string' ? result.summary : '';
+  const conclusions = Array.isArray(result?.conclusions) ? result.conclusions : [];
+  const dataAsOf = typeof result?.data_as_of === 'string' ? result.data_as_of : '';
+  const confidence = typeof result?.data_confidence === 'string' ? result.data_confidence : '';
+  const validationNote = typeof result?.validation_note === 'string' ? result.validation_note : '';
+
+  const lines = [];
+  if (summary) lines.push(`结论：${summary}`);
+  conclusions.forEach((conclusion, index) => {
+    const matter = conclusion?.matter || `结论 ${index + 1}`;
+    lines.push(`${index + 1}. ${matter}`);
+    if (conclusion?.risk) lines.push(`   风险：${conclusion.risk}`);
+    if (conclusion?.recommendation) lines.push(`   建议：${conclusion.recommendation}`);
+    if (conclusion?.confidence) lines.push(`   置信度：${conclusion.confidence}`);
+    if (Array.isArray(conclusion?.evidence_refs) && conclusion.evidence_refs.length) lines.push(`   证据：${conclusion.evidence_refs.join('；')}`);
+  });
+  if (dataAsOf) lines.push(`数据时间：${dataAsOf}`);
+  if (confidence) lines.push(`数据置信度：${confidence}`);
+  if (validationNote) lines.push(`校验说明：${validationNote}`);
+  return lines.length ? lines.join('\n') : '推理未返回有效结论。';
 }

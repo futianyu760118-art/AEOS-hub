@@ -227,3 +227,36 @@ export function describeExecutionQuery(query) {
   const filters = Object.entries(params).filter(([key]) => !['page', 'page_size', 'request_id'].includes(key)).map(([key, value]) => `${key}=${value}`);
   return `查询${intent?.label || '业务数据'}${filters.length ? `（${filters.join('，')}）` : ''}；第 ${params.page || 1} 页，最多 ${params.page_size || DEFAULT_PAGE_SIZE} 条`;
 }
+
+// ---------- 推理意图（reason_control_platform） ----------
+const REASONING_TRIGGERS = /分析|评估|判断|风险|建议|预测|影响|是否|为什么|怎么办|能否|会不会/i;
+
+const REASON_TASK_TYPE_BY_INTENT = {
+  order: 'order_delivery_analysis',
+  shortage: 'material_kitting_analysis',
+  kitting: 'material_kitting_analysis',
+  supply: 'supply_analysis',
+  inventory: 'inventory_analysis',
+  quality: 'quality_analysis',
+  production: 'production_analysis',
+  supplier: 'supplier_analysis',
+};
+
+/** 识别推理型问题，返回受控推理请求；非推理意图返回 null。 */
+export function parseExecutionReasoning(text) {
+  const query = String(text || '').trim();
+  if (!query) return { error: '请输入分析内容，例如：分析订单 HJY20260903-261 的交付风险。' };
+  if (!REASONING_TRIGGERS.test(query)) return null;
+  const intent = INTENTS.find((candidate) => candidate.test.test(query));
+  const task_type = intent ? (REASON_TASK_TYPE_BY_INTENT[intent.name] || 'operating_case_analysis') : 'operating_case_analysis';
+  return {
+    prompt: query,
+    task_type,
+    context: {},
+    constraints: { read_only: true, require_evidence: true },
+  };
+}
+
+export function describeExecutionReasoning(request) {
+  return `中台推理（${request.task_type}）`;
+}
