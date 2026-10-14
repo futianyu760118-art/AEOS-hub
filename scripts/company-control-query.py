@@ -15,6 +15,12 @@ import json
 import os
 import sys
 
+# Windows 控制台 stdout 默认 GBK；本脚本被 Node execFile 以 UTF-8 读取，必须强制 UTF-8 输出，
+# 否则中文会被 GBK 字节 + UTF-8 解码双重错位变成乱码。
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # mcp_server 包位于 mcp-company-control 目录；以 cwd 为准加入 sys.path。
 sys.path.insert(0, os.getcwd())
 
