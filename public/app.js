@@ -735,6 +735,26 @@ async function loadExecution() {
   renderExecutionRuns(Array.isArray(data?.runs) ? data.runs : []);
 }
 
+function executionConnectionLabel(status) {
+  return status === 'online' ? '在线' : status === 'offline' ? '离线' : status;
+}
+
+function executionRuntimeStatusLabel(status) {
+  return ({ idle: '空闲', working: '执行中', error: '异常' })[status] || status;
+}
+
+function executionRunStateLabel(state) {
+  return ({ dispatched: '已派单', running: '执行中', completed: '已完成', failed: '失败', recalled: '已召回' })[state] || state;
+}
+
+function executionTimeLabel(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function renderExecutionAgents(agents) {
   const countEl = $('#execution-agent-count');
   const online = agents.filter((agent) => agent.connectionStatus === 'online').length;
@@ -746,11 +766,11 @@ function renderExecutionAgents(agents) {
     refreshIcons(root);
     return;
   }
-  root.innerHTML = `<table class="access-table"><thead><tr><th>agentId</th><th>名称</th><th>连接</th><th>运行状态</th><th>最后心跳</th><th>能力</th><th>操作</th></tr></thead><tbody>${agents.map((agent) => {
-    const connection = agent.connectionStatus === 'online' ? '<b class="status-pill ok">online</b>' : '<b class="status-pill info">offline</b>';
-    const capabilities = (agent.capabilities || []).map((capability) => esc(capability.name)).join(', ');
+  root.innerHTML = `<table class="access-table"><thead><tr><th>智能体标识</th><th>名称</th><th>连接</th><th>运行状态</th><th>最后心跳</th><th>能力</th><th>操作</th></tr></thead><tbody>${agents.map((agent) => {
+    const connection = agent.connectionStatus === 'online' ? '<b class="status-pill ok">在线</b>' : '<b class="status-pill info">离线</b>';
+    const capabilities = (agent.capabilities || []).map((capability) => esc(capability.description || capability.name)).join('、');
     const recall = agent.connectionStatus === 'online' ? `<button class="btn secondary compact" type="button" data-recall-agent="${esc(agent.agentId)}">召回</button>` : '';
-    return `<tr><td>${esc(agent.agentId)}</td><td>${esc(agent.name)}</td><td>${connection}</td><td>${esc(agent.runtimeStatus)}</td><td>${esc(agent.lastSeenAt)}</td><td>${capabilities}</td><td>${recall}</td></tr>`;
+    return `<tr><td>${esc(agent.agentId)}</td><td>${esc(agent.name)}</td><td>${connection}</td><td>${esc(executionRuntimeStatusLabel(agent.runtimeStatus))}</td><td>${esc(executionTimeLabel(agent.lastSeenAt))}</td><td>${capabilities}</td><td>${recall}</td></tr>`;
   }).join('')}</tbody></table>`;
   refreshIcons(root);
 }
@@ -763,9 +783,9 @@ function renderExecutionRuns(runs) {
     refreshIcons(root);
     return;
   }
-  root.innerHTML = `<table class="access-table"><thead><tr><th>runId</th><th>能力</th><th>状态</th><th>开始</th><th>结果</th></tr></thead><tbody>${runs.slice(0, 50).map((run) => {
+  root.innerHTML = `<table class="access-table"><thead><tr><th>运行标识</th><th>能力</th><th>状态</th><th>开始时间</th><th>结果</th></tr></thead><tbody>${runs.slice(0, 50).map((run) => {
     const result = run.result !== undefined && run.result !== null ? esc(JSON.stringify(run.result).slice(0, 200)) : (run.error ? esc(run.error.message || '') : '');
-    return `<tr><td>${esc(run.runId)}</td><td>${esc(run.capability)}</td><td>${esc(run.state)}</td><td>${esc(run.startedAt)}</td><td>${result}</td></tr>`;
+    return `<tr><td>${esc(run.runId)}</td><td>${esc(run.capability)}</td><td>${esc(executionRunStateLabel(run.state))}</td><td>${esc(executionTimeLabel(run.startedAt))}</td><td>${result}</td></tr>`;
   }).join('')}</tbody></table>`;
   refreshIcons(root);
 }

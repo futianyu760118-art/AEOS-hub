@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=dashboard-chain-layout-20261009" />
+  <link rel="stylesheet" href="/style.css?v=execution-zh-20261014" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -552,9 +552,9 @@
           <section class="surface execution-surface">
             <div class="surface-head"><div><h2>派单</h2><p>下发只读查询给执行面智能体</p></div></div>
             <div class="execution-dispatch">
-              <label class="execution-field">agentId<input id="execution-dispatch-agent" value="runtime-execution-query"></label>
-              <label class="execution-field">path<input id="execution-dispatch-path" value="/external/material-kitting/shortages"></label>
-              <label class="execution-field">params(JSON)<input id="execution-dispatch-params" value='{"demand_no":"HJY20260903-261"}'></label>
+              <label class="execution-field">智能体标识<input id="execution-dispatch-agent" value="runtime-execution-query"></label>
+              <label class="execution-field">路径（path）<input id="execution-dispatch-path" value="/external/material-kitting/shortages"></label>
+              <label class="execution-field">参数（JSON）<input id="execution-dispatch-params" value='{"demand_no":"HJY20260903-261"}'></label>
               <button id="btn-execution-dispatch" class="btn primary" type="button"><i data-lucide="send"></i>派单</button>
             </div>
             <pre id="execution-dispatch-result" class="execution-result hidden"></pre>
@@ -713,6 +713,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=ui-zh-cn-20261013"></script>
+  <script type="module" src="/app.js?v=execution-zh-20261014"></script>
 </body>
 </html>
