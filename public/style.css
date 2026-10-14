@@ -2353,5 +2353,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-message.agent .execution-bubble { background: var(--surface); border: 1px solid var(--line-subtle); }
 .execution-text { white-space: pre-wrap; word-break: break-word; }
 .execution-data { margin: 0.5rem 0 0; padding: 0.5rem; background: rgba(0, 0, 0, 0.04); border-radius: 6px; font-size: 0.72rem; overflow: auto; max-height: 240px; }
+.execution-raw { margin-top: 0.5rem; font-size: 0.72rem; }
+.execution-raw summary { cursor: pointer; opacity: 0.65; }
+.execution-raw summary:hover { opacity: 1; }
 .execution-composer { display: flex; gap: 0.5rem; padding: 0.75rem 1rem 1rem; border-top: 1px solid var(--line-subtle); }
 .execution-composer input { flex: 1; padding: 0.55rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }

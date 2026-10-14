@@ -763,6 +763,60 @@ function parseExecutionQuery(text) {
   return { path, params };
 }
 
+const EXECUTION_FIELD_LABELS = {
+  demand_no: '需求单号', demand_line_no: '行号', material_code: '物料编码', material_name: '物料名称',
+  required_qty: '需求量', available_qty: '可用量', future_supply_qty: '在途供给', shortage_qty: '缺料量',
+  required_date: '需求日期', estimated_available_date: '预计可用日期', shortage_reason: '缺料原因',
+  supply_source: '供给来源', owner_department: '责任部门', kit_status: '齐套状态', status: '状态',
+  customer: '客户', amount: '金额', order_no: '订单号', risk_level: '风险等级', supplier_name: '供应商',
+};
+
+function shortageReasonLabel(reason) {
+  return ({ NO_SUPPLY: '无供给', SUPPLY_LATE: '供给延后', CAPACITY_SHORT: '产能不足', QUALITY_HOLD: '质量冻结' })[reason] || reason || '';
+}
+
+// 把结构化查询结果转成可读的自然语言摘要。
+function summarizeExecutionResult(path, data) {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  if (!items.length) return '没有查到相关记录。';
+  const cap = items.slice(0, 12);
+  const more = total > cap.length;
+
+  if (typeof path === 'string' && path.includes('/material-kitting/shortages')) {
+    const totalQty = items.reduce((sum, item) => sum + (Number(item.shortage_qty) || 0), 0);
+    const lines = cap.map((item, index) => {
+      const name = item.material_name || item.material_code || '未知物料';
+      const qty = Number(item.shortage_qty) || 0;
+      const date = item.required_date || '';
+      const reason = shortageReasonLabel(item.shortage_reason);
+      return `${index + 1}. ${name}：缺 ${qty} 件${date ? `（需求 ${date}）` : ''}${reason ? `，${reason}` : ''}`;
+    });
+    return `查到缺料记录 ${total} 条，合计缺料 ${totalQty} 件：\n${lines.join('\n')}${more ? `\n…其余 ${total - cap.length} 条未列出` : ''}`;
+  }
+
+  const lines = cap.map((item, index) => {
+    const name = item.material_name || item.order_no || item.name || item.demand_no || `记录 ${index + 1}`;
+    const detail = ['kit_status', 'status', 'required_qty', 'shortage_qty', 'required_date', 'amount', 'risk_level']
+      .map((key) => (item[key] !== undefined && item[key] !== null && item[key] !== '' ? `${EXECUTION_FIELD_LABELS[key] || key}：${item[key]}` : ''))
+      .filter(Boolean).join('，');
+    return `${index + 1}. ${name}${detail ? `（${detail}）` : ''}`;
+  });
+  return `查到 ${total} 条记录：\n${lines.join('\n')}${more ? `\n…其余 ${total - cap.length} 条未列出` : ''}`;
+}
+
+// 打字机式流式输出到指定元素。
+function streamTextInto(element, text) {
+  let index = 0;
+  const chunk = 3;
+  const step = () => {
+    index = Math.min(index + chunk, text.length);
+    element.textContent = text.slice(0, index);
+    if (index < text.length) setTimeout(step, 16);
+  };
+  step();
+}
+
 async function loadExecution() {
   wireExecutionControls();
   let data;
@@ -878,13 +932,21 @@ function pollExecutionRun(runId, pending) {
     if (run && ['completed', 'failed', 'recalled'].includes(run.state)) {
       if (pending) {
         if (run.state === 'completed') {
-          const count = Array.isArray(run.result?.items) ? run.result.items.length : (run.result?.total ?? '');
-          pending.textEl.textContent = `查询完成${count !== '' ? `，返回 ${count} 条记录` : ''}`;
+          const path = typeof run.input?.path === 'string' ? run.input.path : '';
+          const summary = summarizeExecutionResult(path, run.result);
+          pending.textEl.textContent = '';
+          streamTextInto(pending.textEl, summary);
           if (run.result !== undefined && run.result !== null) {
+            const details = document.createElement('details');
+            details.className = 'execution-raw';
+            const summaryEl = document.createElement('summary');
+            summaryEl.textContent = '查看原始数据';
             const dataEl = document.createElement('pre');
             dataEl.className = 'execution-data';
             dataEl.textContent = JSON.stringify(run.result, null, 2).slice(0, 2000);
-            pending.inner.appendChild(dataEl);
+            details.appendChild(summaryEl);
+            details.appendChild(dataEl);
+            pending.inner.appendChild(details);
           }
         } else if (run.state === 'failed') {
           pending.textEl.textContent = `查询失败：${run.error?.message || '未知错误'}`;
