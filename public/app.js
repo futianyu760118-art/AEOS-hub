@@ -712,15 +712,52 @@ function syncExecutionRefresh() {
 }
 
 let executionControlsWired = false;
+let selectedExecutionAgent = null;
+
 function wireExecutionControls() {
   if (executionControlsWired) return;
   executionControlsWired = true;
   $('#btn-execution-refresh')?.addEventListener('click', () => loadExecution());
-  $('#btn-execution-dispatch')?.addEventListener('click', () => dispatchExecutionQuery());
-  $('#execution-agents')?.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-recall-agent]');
-    if (button) recallExecutionAgent(button.dataset.recallAgent);
+  $('#btn-execution-send')?.addEventListener('click', () => sendExecutionQuery());
+  $('#execution-chat-input')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') sendExecutionQuery(); });
+  $('#execution-agent-list')?.addEventListener('click', (event) => {
+    const item = event.target.closest('[data-execution-agent]');
+    if (item) selectExecutionAgent(item.dataset.executionAgent);
   });
+}
+
+function executionConnectionLabel(status) {
+  return status === 'online' ? '在线' : status === 'offline' ? '离线' : status;
+}
+
+// 自然语言 → 执行面查询：识别意图（缺料/齐套/订单/库存/供给/质量/生产）并提取单号。
+function parseExecutionQuery(text) {
+  const t = String(text || '').trim();
+  if (!t) return { error: '请输入查询内容，例如：查 HJY20260903-261 的缺料' };
+  let path = '';
+  if (/缺料|短缺|shortage/i.test(t)) path = '/external/material-kitting/shortages';
+  else if (/齐套|套料|kitting/i.test(t)) path = '/external/material-kitting/results';
+  else if (/订单|order/i.test(t)) path = '/external/orders/list';
+  else if (/库存|可用量|inventory/i.test(t)) path = '/external/inventory/availability';
+  else if (/供给|供应|supply/i.test(t)) path = '/external/material-supplies/list';
+  else if (/质量|quality/i.test(t)) path = '/external/quality-issues/list';
+  else if (/生产|工单|production/i.test(t)) path = '/external/production/work-orders/list';
+  if (!path) return { error: '没识别出查询类型。可用的：缺料、齐套、订单、库存、供给、质量、生产' };
+
+  const codeMatch = t.match(/[A-Za-z]{2,}[0-9A-Za-z\-:]*/);
+  const code = codeMatch ? codeMatch[0] : '';
+  let params = {};
+  if (path === '/external/material-kitting/shortages') {
+    if (!code) return { error: '请带上单号，例如：查 HJY20260903-261 的缺料' };
+    params = { demand_no: code.split(':')[0] };
+  } else if (path === '/external/material-kitting/results') {
+    if (!code) return { error: '请带上单号，例如：查 HJY20260903-261:18 的齐套' };
+    const [no, line] = code.split(':');
+    params = { demand_no: no, ...(line ? { demand_line_no: line } : {}) };
+  } else {
+    params = { keyword: code || '' };
+  }
+  return { path, params };
 }
 
 async function loadExecution() {
@@ -731,93 +768,134 @@ async function loadExecution() {
     if (!response.ok) return;
     data = await response.json();
   } catch { return; }
-  renderExecutionAgents(Array.isArray(data?.agents) ? data.agents : []);
-  renderExecutionRuns(Array.isArray(data?.runs) ? data.runs : []);
+  renderExecutionAgentList(Array.isArray(data?.agents) ? data.agents : []);
 }
 
-function executionConnectionLabel(status) {
-  return status === 'online' ? '在线' : status === 'offline' ? '离线' : status;
-}
-
-function executionRuntimeStatusLabel(status) {
-  return ({ idle: '空闲', working: '执行中', error: '异常' })[status] || status;
-}
-
-function executionRunStateLabel(state) {
-  return ({ dispatched: '已派单', running: '执行中', completed: '已完成', failed: '失败', recalled: '已召回' })[state] || state;
-}
-
-function executionTimeLabel(iso) {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
-function renderExecutionAgents(agents) {
-  const countEl = $('#execution-agent-count');
-  const online = agents.filter((agent) => agent.connectionStatus === 'online').length;
-  if (countEl) countEl.textContent = `${online} 个在线`;
-  const root = $('#execution-agents');
+function renderExecutionAgentList(agents) {
+  const root = $('#execution-agent-list');
   if (!root) return;
   if (!agents.length) {
-    root.innerHTML = '<div class="harbor-empty"><i data-lucide="radio-tower"></i><strong>暂无执行面智能体在线</strong><small>等执行面（或模拟器）反向连接后这里会实时显示</small></div>';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="radio-tower"></i><strong>暂无执行面在线</strong><small>等执行面（或模拟器）反向连接后这里会显示</small></div>';
     refreshIcons(root);
     return;
   }
-  root.innerHTML = `<table class="access-table"><thead><tr><th>智能体标识</th><th>名称</th><th>连接</th><th>运行状态</th><th>最后心跳</th><th>能力</th><th>操作</th></tr></thead><tbody>${agents.map((agent) => {
-    const connection = agent.connectionStatus === 'online' ? '<b class="status-pill ok">在线</b>' : '<b class="status-pill info">离线</b>';
-    const capabilities = (agent.capabilities || []).map((capability) => esc(capability.description || capability.name)).join('、');
-    const recall = agent.connectionStatus === 'online' ? `<button class="btn secondary compact" type="button" data-recall-agent="${esc(agent.agentId)}">召回</button>` : '';
-    return `<tr><td>${esc(agent.agentId)}</td><td>${esc(agent.name)}</td><td>${connection}</td><td>${esc(executionRuntimeStatusLabel(agent.runtimeStatus))}</td><td>${esc(executionTimeLabel(agent.lastSeenAt))}</td><td>${capabilities}</td><td>${recall}</td></tr>`;
-  }).join('')}</tbody></table>`;
+  root.innerHTML = agents.map((agent) => {
+    const online = agent.connectionStatus === 'online';
+    const selected = selectedExecutionAgent === agent.agentId;
+    return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
+      <span class="execution-agent-name">${esc(agent.name)}</span>
+      <span class="execution-agent-meta">${esc(agent.agentId)}</span>
+      <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
+    </button>`;
+  }).join('');
   refreshIcons(root);
 }
 
-function renderExecutionRuns(runs) {
-  const root = $('#execution-runs');
-  if (!root) return;
-  if (!runs.length) {
-    root.innerHTML = '<div class="harbor-empty"><i data-lucide="list-checks"></i><strong>暂无运行记录</strong><small>从上方派单后这里会显示执行进度与结果</small></div>';
-    refreshIcons(root);
-    return;
-  }
-  root.innerHTML = `<table class="access-table"><thead><tr><th>运行标识</th><th>能力</th><th>状态</th><th>开始时间</th><th>结果</th></tr></thead><tbody>${runs.slice(0, 50).map((run) => {
-    const result = run.result !== undefined && run.result !== null ? esc(JSON.stringify(run.result).slice(0, 200)) : (run.error ? esc(run.error.message || '') : '');
-    return `<tr><td>${esc(run.runId)}</td><td>${esc(run.capability)}</td><td>${esc(executionRunStateLabel(run.state))}</td><td>${esc(executionTimeLabel(run.startedAt))}</td><td>${result}</td></tr>`;
-  }).join('')}</tbody></table>`;
-  refreshIcons(root);
+function selectExecutionAgent(agentId) {
+  selectedExecutionAgent = agentId;
+  loadExecution();
+  const title = $('#execution-chat-title');
+  const subtitle = $('#execution-chat-subtitle');
+  if (title) title.textContent = `与「${agentId}」对话`;
+  if (subtitle) subtitle.textContent = '用自然语言提问，例如：查 HJY20260903-261 的缺料';
 }
 
-async function dispatchExecutionQuery() {
-  const resultEl = $('#execution-dispatch-result');
-  const agentId = $('#execution-dispatch-agent')?.value?.trim() ?? '';
-  const path = $('#execution-dispatch-path')?.value?.trim() ?? '';
-  let params;
-  try {
-    params = JSON.parse($('#execution-dispatch-params')?.value || '{}');
-  } catch {
-    if (resultEl) { resultEl.textContent = 'params 不是合法 JSON'; resultEl.classList.remove('hidden'); }
+function executionMessageBubble(role, text) {
+  const bubble = document.createElement('div');
+  bubble.className = `execution-message ${role}`;
+  const inner = document.createElement('div');
+  inner.className = 'execution-bubble';
+  const textEl = document.createElement('div');
+  textEl.className = 'execution-text';
+  textEl.textContent = text;
+  inner.appendChild(textEl);
+  bubble.appendChild(inner);
+  return { bubble, inner, textEl };
+}
+
+function appendExecutionMessage(role, text, data) {
+  const root = $('#execution-messages');
+  if (!root) return null;
+  const empty = root.querySelector('.harbor-empty');
+  if (empty) empty.remove();
+  const { bubble, inner, textEl } = executionMessageBubble(role, text);
+  if (data !== undefined && data !== null) {
+    const dataEl = document.createElement('pre');
+    dataEl.className = 'execution-data';
+    dataEl.textContent = JSON.stringify(data, null, 2).slice(0, 2000);
+    inner.appendChild(dataEl);
+  }
+  root.appendChild(bubble);
+  root.scrollTop = root.scrollHeight;
+  return { inner, textEl };
+}
+
+async function sendExecutionQuery() {
+  const input = $('#execution-chat-input');
+  const text = input?.value?.trim() ?? '';
+  if (!text) return;
+  if (!selectedExecutionAgent) {
+    appendExecutionMessage('agent', '请先在左侧选择一个智能体', null);
     return;
   }
+  const parsed = parseExecutionQuery(text);
+  if (parsed.error) {
+    appendExecutionMessage('agent', parsed.error, null);
+    return;
+  }
+  if (input) input.value = '';
+  appendExecutionMessage('user', text, null);
+  const pending = appendExecutionMessage('agent', '正在查询…', null);
+
   try {
-    const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/dispatch`, {
+    const response = await fetch(`/api/execution/agents/${encodeURIComponent(selectedExecutionAgent)}/dispatch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ capability: 'query_control_platform', input: { path, params } }),
+      body: JSON.stringify({ capability: 'query_control_platform', input: { path: parsed.path, params: parsed.params } }),
     });
     const body = await response.json();
-    if (resultEl) { resultEl.textContent = JSON.stringify(body, null, 2); resultEl.classList.remove('hidden'); }
+    if (!response.ok || body.error) {
+      if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`;
+      return;
+    }
+    pollExecutionRun(body.runId, pending);
   } catch (error) {
-    if (resultEl) { resultEl.textContent = String(error?.message || error); resultEl.classList.remove('hidden'); }
+    if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
   }
-  loadExecution();
 }
 
-async function recallExecutionAgent(agentId) {
-  try { await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/recall`, { method: 'POST' }); } catch { /* 召回失败不阻塞界面 */ }
-  loadExecution();
+function pollExecutionRun(runId, pending) {
+  const deadline = Date.now() + 60_000;
+  const tick = async () => {
+    let runs = [];
+    try {
+      const response = await fetch('/api/execution/agents');
+      if (response.ok) { const data = await response.json(); runs = data.runs || []; }
+    } catch { /* 忽略轮询错误，下一轮重试 */ }
+    const run = runs.find((item) => item.runId === runId);
+    if (run && ['completed', 'failed', 'recalled'].includes(run.state)) {
+      if (pending) {
+        if (run.state === 'completed') {
+          const count = Array.isArray(run.result?.items) ? run.result.items.length : (run.result?.total ?? '');
+          pending.textEl.textContent = `查询完成${count !== '' ? `，返回 ${count} 条记录` : ''}`;
+          if (run.result !== undefined && run.result !== null) {
+            const dataEl = document.createElement('pre');
+            dataEl.className = 'execution-data';
+            dataEl.textContent = JSON.stringify(run.result, null, 2).slice(0, 2000);
+            pending.inner.appendChild(dataEl);
+          }
+        } else if (run.state === 'failed') {
+          pending.textEl.textContent = `查询失败：${run.error?.message || '未知错误'}`;
+        } else {
+          pending.textEl.textContent = '查询已被召回';
+        }
+      }
+      return;
+    }
+    if (Date.now() < deadline) setTimeout(tick, 500);
+    else if (pending) pending.textEl.textContent = '查询超时，请稍后重试';
+  };
+  tick();
 }
 
 function openPrompt(prompt) {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=execution-zh-20261014" />
+  <link rel="stylesheet" href="/style.css?v=execution-chat-20261014" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -540,30 +540,27 @@
 
         <section id="view-execution" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">自治运行</span><h1>执行面仪表盘</h1><p>远程执行面智能体：反向连接、心跳、派单与召回</p></div>
+            <div><span class="page-module">自治运行</span><h1>执行面</h1><p>用自然语言向执行面查询智能体提问</p></div>
             <div class="page-actions"><button id="btn-execution-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
-          <section class="surface execution-surface">
-            <div class="surface-head"><div><h2>在线执行面</h2><p>反向连接的执行面智能体</p></div><span id="execution-agent-count" class="status-pill info">加载中</span></div>
-            <div id="execution-agents" class="execution-table"><div class="registry-loading">正在读取执行面…</div></div>
-          </section>
+          <div class="execution-chat-layout">
+            <aside class="surface execution-agents-panel">
+              <div class="surface-head"><div><h2>智能体</h2><p>在线执行面</p></div></div>
+              <div id="execution-agent-list" class="execution-agent-list"><div class="registry-loading">正在读取执行面…</div></div>
+            </aside>
 
-          <section class="surface execution-surface">
-            <div class="surface-head"><div><h2>派单</h2><p>下发只读查询给执行面智能体</p></div></div>
-            <div class="execution-dispatch">
-              <label class="execution-field">智能体标识<input id="execution-dispatch-agent" value="runtime-execution-query"></label>
-              <label class="execution-field">路径（path）<input id="execution-dispatch-path" value="/external/material-kitting/shortages"></label>
-              <label class="execution-field">参数（JSON）<input id="execution-dispatch-params" value='{"demand_no":"HJY20260903-261"}'></label>
-              <button id="btn-execution-dispatch" class="btn primary" type="button"><i data-lucide="send"></i>派单</button>
-            </div>
-            <pre id="execution-dispatch-result" class="execution-result hidden"></pre>
-          </section>
-
-          <section class="surface execution-surface">
-            <div class="surface-head"><div><h2>运行记录</h2><p>最近的派单与结果</p></div></div>
-            <div id="execution-runs" class="execution-table"><div class="registry-loading">暂无运行记录</div></div>
-          </section>
+            <section class="surface execution-chat-panel">
+              <div class="surface-head"><div><h2 id="execution-chat-title">对话</h2><p id="execution-chat-subtitle">请先在左侧选择一个智能体</p></div></div>
+              <div id="execution-messages" class="execution-messages">
+                <div class="harbor-empty"><i data-lucide="messages-square"></i><strong>开始对话</strong><small>选择左侧智能体后，用自然语言提问，例如「查 HJY20260903-261 的缺料」</small></div>
+              </div>
+              <div class="execution-composer">
+                <input id="execution-chat-input" type="text" placeholder="例如：查 HJY20260903-261 的缺料" autocomplete="off" />
+                <button id="btn-execution-send" class="btn primary" type="button"><i data-lucide="send"></i>发送</button>
+              </div>
+            </section>
+          </div>
         </section>
 
         <section id="view-config" class="view app-view hidden">
@@ -713,6 +710,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=execution-zh-20261014"></script>
+  <script type="module" src="/app.js?v=execution-chat-20261014"></script>
 </body>
 </html>

@@ -2327,10 +2327,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn.danger { border-color: #fecaca; background: #fff; color: #b91c1c; }
 .btn.danger:hover { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
 
-/* 执行面仪表盘 */
-.execution-surface { margin-bottom: 1rem; }
-.execution-table { overflow-x: auto; }
-.execution-dispatch { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; padding: 1rem 0 0.25rem; }
-.execution-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: var(--text); }
-.execution-field input { min-width: 220px; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
-.execution-result { margin: 0.75rem 0 0; padding: 0.75rem; background: var(--surface); border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 0.8rem; overflow: auto; max-height: 280px; white-space: pre-wrap; }
+/* 执行面聊天界面 */
+.execution-chat-layout { display: grid; grid-template-columns: 260px 1fr; gap: 1rem; align-items: stretch; }
+.execution-agents-panel { min-height: 480px; display: flex; flex-direction: column; }
+.execution-agent-list { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; }
+.execution-agent-item { display: flex; flex-direction: column; gap: 0.2rem; align-items: flex-start; width: 100%; text-align: left; padding: 0.6rem 0.7rem; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; }
+.execution-agent-item:hover:not(:disabled) { border-color: var(--line); background: var(--hover); }
+.execution-agent-item.selected { border-color: var(--accent); }
+.execution-agent-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.execution-agent-name { font-weight: 600; }
+.execution-agent-meta { font-size: 0.75rem; opacity: 0.7; word-break: break-all; }
+
+.execution-chat-panel { display: flex; flex-direction: column; min-height: 480px; }
+.execution-messages { flex: 1; display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; overflow-y: auto; max-height: 520px; }
+.execution-message { display: flex; }
+.execution-message.user { justify-content: flex-end; }
+.execution-message.agent { justify-content: flex-start; }
+.execution-bubble { max-width: 78%; padding: 0.6rem 0.8rem; border-radius: 12px; }
+.execution-message.user .execution-bubble { background: var(--accent); color: #fff; }
+.execution-message.agent .execution-bubble { background: var(--surface); border: 1px solid var(--line-subtle); }
+.execution-text { white-space: pre-wrap; word-break: break-word; }
+.execution-data { margin: 0.5rem 0 0; padding: 0.5rem; background: rgba(0, 0, 0, 0.04); border-radius: 6px; font-size: 0.72rem; overflow: auto; max-height: 240px; }
+.execution-composer { display: flex; gap: 0.5rem; padding: 0.75rem 1rem 1rem; border-top: 1px solid var(--line-subtle); }
+.execution-composer input { flex: 1; padding: 0.55rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
