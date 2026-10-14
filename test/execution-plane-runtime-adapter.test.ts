@@ -26,11 +26,18 @@ function makeHarness(t: { after: (fn: () => void) => void }): Harness {
   return { registry, adapter, clock, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+function dispatchInput(): string {
+  return JSON.stringify({
+    capability: 'query_control_platform',
+    input: { path: '/external/material-kitting/results', params: { demand_no: 'HJY1' } },
+  });
+}
+
 test('startRun 用合法 JSON 派单并返回 running run', async (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
   const session = await h.adapter.createSession({ developerInstructions: 'x' });
-  const run = await h.adapter.startRun(session.id, { input: JSON.stringify({ path: '/external/material-kitting/results', params: { demand_no: 'HJY1' } }) });
+  const run = await h.adapter.startRun(session.id, { input: dispatchInput() });
   assert.equal(run.state, 'running');
   assert.ok(run.id.startsWith('exec-run-'));
 });
@@ -39,7 +46,7 @@ test('waitForRun 在 run_complete 后返回 completed', async (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
   const session = await h.adapter.createSession();
-  const run = await h.adapter.startRun(session.id, { input: JSON.stringify({ path: '/external/material-kitting/results', params: {} }) });
+  const run = await h.adapter.startRun(session.id, { input: dispatchInput() });
   h.registry.onRunComplete('runtime-execution-query', { runId: run.id, result: { items: [{ demand_no: 'HJY1' }] } });
   const final = await h.adapter.waitForRun(run.id);
   assert.equal(final.state, 'completed');
@@ -49,7 +56,7 @@ test('waitForRun 在 run_failed 后返回 failed', async (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
   const session = await h.adapter.createSession();
-  const run = await h.adapter.startRun(session.id, { input: JSON.stringify({ path: '/external/material-kitting/results', params: {} }) });
+  const run = await h.adapter.startRun(session.id, { input: dispatchInput() });
   h.registry.onRunFailed('runtime-execution-query', { runId: run.id, error: { code: 'UPSTREAM_UNAVAILABLE', message: '不可达' } });
   const final = await h.adapter.waitForRun(run.id);
   assert.equal(final.state, 'failed');
@@ -60,7 +67,7 @@ test('waitForRun 在召回后返回 interrupted', async (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
   const session = await h.adapter.createSession();
-  const run = await h.adapter.startRun(session.id, { input: JSON.stringify({ path: '/external/material-kitting/results', params: {} }) });
+  const run = await h.adapter.startRun(session.id, { input: dispatchInput() });
   h.registry.recall('runtime-execution-query');
   const final = await h.adapter.waitForRun(run.id);
   assert.equal(final.state, 'interrupted');
@@ -75,12 +82,21 @@ test('startRun 非法 JSON 直接返回 failed run', async (t) => {
   assert.equal(run.failure?.code, 'INVALID_ARGUMENT');
 });
 
+test('startRun 缺少 capability 直接返回 failed run', async (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const session = await h.adapter.createSession();
+  const run = await h.adapter.startRun(session.id, { input: JSON.stringify({ input: { path: '/x' } }) });
+  assert.equal(run.state, 'failed');
+  assert.equal(run.failure?.code, 'INVALID_ARGUMENT');
+});
+
 test('startRun 执行面离线返回 failed run（AGENT_OFFLINE）', async (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
   h.registry.disconnect('runtime-execution-query');
   const session = await h.adapter.createSession();
-  const run = await h.adapter.startRun(session.id, { input: JSON.stringify({ path: '/external/material-kitting/results', params: {} }) });
+  const run = await h.adapter.startRun(session.id, { input: dispatchInput() });
   assert.equal(run.state, 'failed');
   assert.equal(run.failure?.code, 'AGENT_OFFLINE');
 });

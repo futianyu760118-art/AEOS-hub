@@ -2,7 +2,7 @@ import type { EvidenceInput } from './evidence.ts';
 import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
 import { recommendTaskAssignees, validateAgentAssignment } from './task-dispatch.ts';
 import { startAgentTaskRun, type AgentTaskRunDeps } from './agent-task-runner.ts';
-import { deriveExecutionQuery } from './execution-query.ts';
+import { hasExecutionCapability, resolveExecutionDispatch } from './execution-capabilities.ts';
 import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
 import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
@@ -379,8 +379,11 @@ export class TaskApi {
     const eligibility = evaluateAgentTaskEligibility({ taskId: task.taskId, tenantId: task.tenantId, taskType, agent, runtime: harborRuntime, evaluatedAt });
     if (!eligibility.eligible) return this.denied(actor, 'agent_run', 'AGENT_INELIGIBLE', task);
 
-    const runtimeInput = runtime.runtimeKind === 'remote-execution-agent'
-      ? JSON.stringify(deriveExecutionQuery(task.businessObjectRef))
+    const executionCapability = runtime.runtimeKind === 'remote-execution-agent'
+      ? agent.registration.allowedRuntimeCapabilities.find((capability) => hasExecutionCapability(capability))
+      : undefined;
+    const runtimeInput = executionCapability
+      ? JSON.stringify(resolveExecutionDispatch({ businessObjectRef: task.businessObjectRef, title: task.title }, executionCapability))
       : undefined;
 
     const run = await startAgentTaskRun(

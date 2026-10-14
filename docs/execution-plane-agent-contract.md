@@ -3,6 +3,11 @@
 本文档给**执行面团队**：执行面（目标系统里的查询智能体）要接入管理面（AEOS Hub），
 必须满足本契约。满足后，管理面就能像遥控器下发查询任务、像仪表盘看到执行面心跳与状态、并能召回它。
 
+本文档分两段：
+
+- **A 通用传输协议**（§1–§3、§5–§7）：所有执行面智能体**一律遵守**，接入新智能体无需改动。
+- **B 能力注册表**（§4）：每个智能体对外提供的能力在此声明；**接新智能体 = 新增一条能力定义**，其余不动。
+
 ## 1. 目标与形态
 
 - 执行面智能体 = **可迁移、可召回、每步都汇报的确定性工作单元**（本阶段是「简单查询智能体」）。
@@ -41,10 +46,22 @@
 | `recall` | `runId?` | 停止当前任务；执行面应中止查询，**无需再回报结果**（管理面已标记 recalled） |
 | `error` | `message` | 协议错误 |
 
-## 4. 查询契约（能力 `query_control_platform`）
+## 4. 能力注册表（扩展点）
 
-- 能力名固定为 `query_control_platform`，在 `register.capabilities` 中声明。
-- `dispatch.input` 结构：`{ path: string, params: object }`，其中 `path` 必须是下表白名单之一。
+管理面通过 `register.capabilities` 与 `dispatch.capability` 识别能力。每条能力契约包含：
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 能力标识（如 `query_control_platform`） |
+| `input` | `dispatch.input` 结构，由管理面从 G1 任务自动推导 |
+| `output` | `run_complete.result` 结构，由执行面回传 |
+
+**接新智能体 = 新增一条能力定义**（执行面在 `register.capabilities` 声明新能力 + 管理面注册一个新解析器），
+通用传输协议（§1–§3、§5–§7）不动。下面 §4.1–§4.5 是当前唯一内置能力 `query_control_platform` 的完整契约。
+
+- 能力名：`query_control_platform`（中台只读查询）。
+- `input` 结构：`{ path: string, params: object }`，其中 `path` 必须是下表白名单之一。
+- `output`：中台统一信封的 `data` 字段（结构化查询结果）。
 - 执行面据此调用**目标系统（公司中控）只读上游接口**并回传结果。
 
 ### 4.1 签名（HMAC-SHA256）

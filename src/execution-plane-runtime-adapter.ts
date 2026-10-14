@@ -86,18 +86,18 @@ export class ExecutionPlaneRuntimeAdapter implements AgentRuntime {
   // ---------- RuntimeRunApi ----------
   async startRun(sessionId: string, request: StartRuntimeRunRequest): Promise<RuntimeRun> {
     const inputText = typeof request.input === 'string' ? request.input : JSON.stringify(request.input ?? '');
-    let query: { path?: unknown; params?: unknown };
+    let dispatch: { capability?: unknown; input?: unknown };
     try {
-      query = JSON.parse(inputText);
+      dispatch = JSON.parse(inputText);
     } catch {
-      return this.failedRun(sessionId, 'INVALID_ARGUMENT', '查询输入不是合法 JSON');
+      return this.failedRun(sessionId, 'INVALID_ARGUMENT', '派单输入不是合法 JSON');
     }
-    const path = typeof query.path === 'string' ? query.path : '';
-    const params = query.params && typeof query.params === 'object' ? (query.params as Record<string, unknown>) : {};
-    if (!path) return this.failedRun(sessionId, 'INVALID_ARGUMENT', '查询输入缺少 path');
+    const capability = typeof dispatch.capability === 'string' ? dispatch.capability : '';
+    const input = dispatch.input && typeof dispatch.input === 'object' ? (dispatch.input as Record<string, unknown>) : {};
+    if (!capability) return this.failedRun(sessionId, 'INVALID_ARGUMENT', '派单输入缺少 capability');
 
     try {
-      const { runId } = this.registry.dispatch(this.agentId, 'query_control_platform', { path, params });
+      const { runId } = this.registry.dispatch(this.agentId, capability, input);
       const run: RuntimeRun = { id: runId, runtimeInstanceId: this.agentId, sessionId, state: 'running', createdAt: this.iso() };
       this.runs.set(runId, run);
       return run;
