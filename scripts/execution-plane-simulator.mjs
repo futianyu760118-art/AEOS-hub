@@ -17,7 +17,7 @@ const pythonExe = process.platform === 'win32'
 
 const token = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const wsUrl = process.env.EXECUTION_WS_URL ?? 'ws://127.0.0.1:8788/execution-agent';
-const agentId = process.env.EXECUTION_AGENT_ID ?? 'execution-query-agent';
+const agentId = process.env.EXECUTION_AGENT_ID ?? 'runtime-execution-query';
 
 if (!token) {
   console.error('[simulator] 缺少 EXECUTION_PLANE_TOKEN 环境变量（需与管理面一致）');

@@ -784,7 +784,6 @@ function renderExecutionAgentList(agents) {
     const selected = selectedExecutionAgent === agent.agentId;
     return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
       <span class="execution-agent-name">${esc(agent.name)}</span>
-      <span class="execution-agent-meta">${esc(agent.agentId)}</span>
       <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
     </button>`;
   }).join('');
