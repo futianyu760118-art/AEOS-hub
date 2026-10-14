@@ -3915,6 +3915,7 @@ function renderTaskCenter() {
     const actions = [
       `<button class="btn ghost compact" type="button" data-task-action="detail" data-task-id="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起历史' : '查看历史'}</button>`,
       `<button class="btn ghost compact" type="button" data-task-action="agent-candidates" data-task-id="${esc(task.taskId)}"><i data-lucide="shield-check"></i>${agentCandidates ? '收起接手条件' : '查看 Agent 接手条件'}</button>`,
+      task.currentAssignee?.kind === 'agent' ? `<button class="btn primary compact" type="button" data-task-action="agent-run" data-task-id="${esc(task.taskId)}"><i data-lucide="bot"></i>运行 Agent</button>` : '',
       capabilities.canAssign ? `<button class="btn secondary compact" type="button" data-task-action="assign" data-task-id="${esc(task.taskId)}"><i data-lucide="user-round-check"></i>${task.currentAssignee ? '改派责任' : '分派责任'}</button>` : '',
       capabilities.canAccept ? `<button class="btn secondary compact" type="button" data-task-action="accept" data-task-id="${esc(task.taskId)}"><i data-lucide="handshake"></i>记录接受</button>` : '',
       capabilities.canStart ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
@@ -4059,6 +4060,21 @@ async function performTaskAction(taskId, action) {
     if (!taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot).canAssign) { toast('当前会话无权分派该任务。', true); return; }
     editingTaskAssignmentId = taskId;
     renderTaskCenter();
+    return;
+  }
+  if (action === 'agent-run') {
+    if (task.currentAssignee?.kind !== 'agent') { toast('该任务尚未分派给 Agent。', true); return; }
+    if (!window.confirm('确认运行该任务分派的 Agent？运行期间会等待结果。')) return;
+    toast('Agent 运行中，请稍候…');
+    try {
+      await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`, 'POST', {});
+      taskDetails.delete(taskId);
+      taskAgentCandidates.delete(taskId);
+      await loadTasks({ silent: true });
+      toast('Agent 运行完成，结果已回写任务');
+    } catch (error) {
+      toast(`Agent 运行失败：${error.message}`, true);
+    }
     return;
   }
   const capabilities = taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot);
