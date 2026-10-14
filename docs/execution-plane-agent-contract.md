@@ -88,6 +88,19 @@
 - 签名 + 端点 + 信封：`mcp-company-control/mcp_server/upstream_client.py`（**Python 为权威参考**）。
 - 最小查询调用示例：`scripts/company-control-query.py`（复用上游客户端直查一个 path）。
 
+### 4.5 G1 受控任务接入（管理面派单）
+
+管理面把经营事项（如「物料齐套状态 BLOCKED」）建成 G1 受控任务并分派给执行面 Agent 后，
+`dispatch.input` 由管理面从任务的 `businessObjectRef` **自动推导**，执行面无需关心推导逻辑：
+
+- `business://kitting/HJY20260903-261%3A18` → `{ path: "/external/material-kitting/results", params: { demand_no: "HJY20260903-261", demand_line_no: "18" } }`
+- `business://order/SO-2609-001` → `{ path: "/external/orders/list", params: { keyword: "SO-2609-001" } }`
+
+**桥接约定（重要）**：执行面 `register.agentId` 必须等于管理面 AI 港湾里对应 Runtime 的 `id`
+（本试点固定为 `runtime-execution-query`），否则管理面的 `resolveRuntime` 无法把任务解析到该执行面运行时。
+
+结果回传后，管理面把任务推进到 `AWAITING_VERIFY`；运行中被 `recall` 则推进到 `AWAITING_DECISION`。
+
 ## 5. 召回与生命周期
 
 - `recall`（冷召回）：执行面立即中止当前查询、释放资源；管理面已把该 run 标记为 `recalled`，执行面不回报。
@@ -105,10 +118,13 @@
 ## 7. 打包与部署
 
 - 打包为容器镜像：明确入口、健康检查、日志走 stdout/stderr。
-- 启动参数：`EXECUTION_WS_URL`（管理面 `/execution-agent` 地址）、`EXECUTION_PLANE_TOKEN`、`EXECUTION_AGENT_ID`、目标系统凭据。
+- 启动参数：`EXECUTION_WS_URL`（管理面 `/execution-agent` 地址）、`EXECUTION_PLANE_TOKEN`、`EXECUTION_AGENT_ID`（G1 接入时固定为 `runtime-execution-query`）、目标系统凭据。
 - 网络：执行面 → 管理面出方向连接；目标系统无需暴露端口。
 
 ## 8. 最小实现骨架（参考）
 
 管理面侧已提供可运行模拟桩 `scripts/execution-plane-simulator.mjs`（Node）与 `scripts/company-control-query.py`（Python），
 二者合起来即完整演示：Node 负责 WS 协议与心跳，Python 负责 HMAC 真查中台。执行面团队可对照这两份文件实现真实智能体。
+
+接入 G1 时：管理面启动会自动注册执行面 Agent（`scripts/ensure-execution-query-agent.ts`，幂等），
+模拟器以 `EXECUTION_AGENT_ID=runtime-execution-query` 连接即可被 G1 任务分派。

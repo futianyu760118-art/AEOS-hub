@@ -79,6 +79,7 @@ import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
+import { ensureExecutionQueryAgent } from './execution-query-agent-seed.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -186,6 +187,13 @@ function syncExecutionHealth(): void {
       // 执行面 Agent 尚未在 Harbor 登记对应 runtime 时忽略。
     }
   }
+}
+
+// 幂等自动注册执行面查询 Agent（G1 开箱可用）。失败不阻塞启动，可稍后手动跑 scripts/ensure-execution-query-agent.ts。
+try {
+  ensureExecutionQueryAgent();
+} catch (error) {
+  console.warn('[execution-agent-seed] 自动注册失败:', (error as Error).message);
 }
 
 // ---------- 状态 ----------

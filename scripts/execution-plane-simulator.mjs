@@ -35,6 +35,9 @@ const capabilities = [
 let ws = null;
 let heartbeatTimer = null;
 let currentChild = null;
+let recalled = false;
+// 模拟慢查询（毫秒）：用于端到端验证「派单中召回」。默认 0 = 立即执行。
+const simulateDelayMs = Number(process.env.EXECUTION_SIMULATE_DELAY_MS ?? 0);
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -51,7 +54,8 @@ function stopHeartbeat() {
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 }
 
-function handleDispatch(msg) {
+async function handleDispatch(msg) {
+  recalled = false;
   const runId = msg.runId;
   const input = msg.input && typeof msg.input === 'object' ? msg.input : {};
   const path = typeof input.path === 'string' ? input.path : '';
@@ -62,12 +66,15 @@ function handleDispatch(msg) {
     return;
   }
   send({ type: 'run_update', runId, state: 'running' });
+  if (simulateDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, simulateDelayMs));
+  if (recalled) { console.log(`[simulator] 派单 ${runId} 已被召回，跳过执行`); return; }
   currentChild = execFile(
     pythonExe,
     [queryHelper, path, JSON.stringify(params)],
     { cwd: mcpCompanyControlDir, timeout: 30_000 },
     (err, stdout) => {
       currentChild = null;
+      if (recalled) return;
       if (err) {
         send({ type: 'run_failed', runId, error: { code: 'EXECUTION_FAILED', message: String(err.message || err) } });
         return;
@@ -102,6 +109,7 @@ function connect() {
       handleDispatch(msg);
     } else if (msg.type === 'recall') {
       console.log(`[simulator] 收到召回${msg.runId ? ' ' + msg.runId : ''}`);
+      recalled = true;
       if (currentChild) { currentChild.kill(); currentChild = null; }
       // 不回报结果：管理面已在 recall 时把 run 标记为 recalled。
     } else if (msg.type === 'error') {
