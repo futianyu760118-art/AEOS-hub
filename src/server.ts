@@ -77,7 +77,7 @@ import { KeycloakPersonnelAdmin, readPersonnelAdminConfig } from './keycloak-per
 import { PersonnelApi } from './personnel-api.ts';
 import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
-import { ExecutionPlaneRegistry, ExecutionPlaneError } from './execution-plane.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionQueryAgent } from './execution-query-agent-seed.ts';
 
@@ -147,7 +147,7 @@ const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appe
     return new ExecutionPlaneRuntimeAdapter(executionPlane, runtimeId);
   }
   return undefined;
-} });
+}, findExecutionRun: (runId) => executionPlane.list().runs.find((run) => run.runId === runId) });
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)
@@ -1852,7 +1852,8 @@ const executionWss = new WebSocketServer({
   },
 });
 const executionWsAgent = new Map<WebSocket, string>(); // ws -> agentId（register 后建立）
-executionWss.on('connection', (ws) => {
+executionWss.on('connection', (ws, request) => {
+  const peerAddress = request.socket.remoteAddress;
   ws.on('message', (raw) => {
     let msg: Record<string, unknown>;
     try { msg = JSON.parse(String(raw)); } catch { send(ws, { type: 'error', message: 'invalid json' }); return; }
@@ -1860,7 +1861,14 @@ executionWss.on('connection', (ws) => {
     try {
       if (type === 'register') {
         const reply = executionPlane.onRegister(
-          { agentId: msg.agentId, name: msg.name, version: msg.version, capabilities: msg.capabilities },
+          {
+            agentId: msg.agentId,
+            name: msg.name,
+            version: msg.version,
+            capabilities: msg.capabilities,
+            sourceSystem: msg.sourceSystem,
+            local: isLoopbackExecutionPeer(peerAddress),
+          },
           (m) => send(ws, m),
         );
         executionWsAgent.set(ws, reply.agentId);

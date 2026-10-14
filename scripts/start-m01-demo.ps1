@@ -26,7 +26,7 @@ function Get-M01Settings {
     if ($separator -lt 1) { continue }
     $settings[$line.Substring(0, $separator).Trim()] = $line.Substring($separator + 1)
   }
-  foreach ($name in @('M01_CLIENT_SECRET', 'M01_KEYCLOAK_HTTPS_PORT', 'M01_KEYCLOAK_EXTERNAL_HOSTNAME', 'M01_HUB_HTTPS_PORT', 'M01_HUB_EXTERNAL_HOSTNAME', 'M01_LISTEN_ADDRESS')) {
+  foreach ($name in @('M01_CLIENT_SECRET', 'M01_KEYCLOAK_HTTPS_PORT', 'M01_KEYCLOAK_EXTERNAL_HOSTNAME', 'M01_HUB_HTTPS_PORT', 'M01_HUB_EXTERNAL_HOSTNAME', 'M01_LISTEN_ADDRESS', 'EXECUTION_PLANE_TOKEN')) {
     if (-not $settings.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($settings[$name]) -or $settings[$name] -eq '__REPLACE_BEFORE_START__') {
       throw "M01 runtime configuration is incomplete: $name must be configured in deploy/m01/.env."
     }

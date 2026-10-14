@@ -19,7 +19,7 @@ function makeHarness(t: { after: (fn: () => void) => void }): Harness {
   const registry = new ExecutionPlaneRegistry({ file: join(dir, 'execution-plane.json'), clock: () => clock.current });
   const agentId = 'runtime-execution-query';
   registry.onRegister(
-    { agentId, name: '查询智能体', version: '1.0.0', capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }] },
+    { agentId, name: '查询智能体', version: '1.0.0', sourceSystem: '公司中控平台', capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }] },
     () => {},
   );
   const adapter = new ExecutionPlaneRuntimeAdapter(registry, agentId, () => clock.current);

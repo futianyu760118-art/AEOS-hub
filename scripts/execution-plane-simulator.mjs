@@ -18,6 +18,7 @@ const pythonExe = process.platform === 'win32'
 const token = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const wsUrl = process.env.EXECUTION_WS_URL ?? 'ws://127.0.0.1:8788/execution-agent';
 const agentId = process.env.EXECUTION_AGENT_ID ?? 'runtime-execution-query';
+const sourceSystem = process.env.EXECUTION_SOURCE_SYSTEM ?? '公司中控平台（本机演示）';
 
 if (!token) {
   console.error('[simulator] 缺少 EXECUTION_PLANE_TOKEN 环境变量（需与管理面一致）');
@@ -97,7 +98,7 @@ function connect() {
   ws = new WebSocket(wsUrl, { headers: { 'x-aeos-execution-token': token } });
   ws.on('open', () => {
     console.log('[simulator] 已连接管理面，发送 register');
-    send({ type: 'register', agentId, name: '查询智能体', version: '1.0.0', capabilities });
+    send({ type: 'register', agentId, name: '查询智能体', version: '1.0.0', sourceSystem, capabilities });
   });
   ws.on('message', (raw) => {
     let msg;

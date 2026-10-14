@@ -17,7 +17,7 @@ const PROJECT_STATUSES = ['PLANNING', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CA
 const TASK_EVENT_TYPES = [
   'created', 'assigned', 'reassigned', 'accepted', 'started', 'decision_requested',
   'result_submitted', 'verified', 'rejected', 'failed', 'cancelled', 'withdrawn',
-  'evidence_supplemented', 'escalated', 'reminded',
+  'evidence_supplemented', 'escalated', 'project_linked', 'reminded',
 ] as const;
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED']);
 const timestamp = z.string().datetime({ offset: true });
@@ -67,6 +67,13 @@ export const TaskRecordSchema = z.object({
   projectId: text(160, 1).nullable(),
   nextAction: text(500),
   resultId: text(160, 1).nullable(),
+  agentRun: z.object({
+    runtimeRunId: text(160, 1),
+    runtimeSessionId: text(160, 1),
+    agentId: text(160, 1),
+    startedAt: timestamp,
+    endedAt: timestamp,
+  }).strict().optional(),
   createdAt: timestamp,
   updatedAt: timestamp,
 }).strict();
@@ -468,6 +475,26 @@ export class TaskCenterStore {
     });
   }
 
+  linkTaskToProject(input: Record<string, unknown>): TaskRecord {
+    const taskId = requiredString(input, 'taskId', 'taskId', 160);
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const reason = requiredString(input, 'reason', 'reason', 1_000);
+    const projectId = nullableId(input.projectId, 'projectId');
+    return this.mutate((snapshot, occurredAt) => {
+      const task = snapshot.tasks.find((candidate) => candidate.taskId === taskId);
+      if (!task) throw new Error('任务不存在');
+      if (projectId) {
+        const project = this.findProject(snapshot, projectId);
+        if (project.tenantId !== task.tenantId) throw new Error('项目不属于任务所在租户');
+      }
+      const fromStatus = task.status;
+      task.projectId = projectId;
+      task.updatedAt = occurredAt;
+      this.appendHistory(snapshot, task, { eventType: 'project_linked', fromStatus, toStatus: task.status, actor, reason, evidenceRefs: task.evidenceRefs }, occurredAt);
+      return task;
+    });
+  }
+
   projectProgress(projectId: string, tenantId: string): { total: number; completed: number; percent: number } {
     const tasks = this.load().tasks.filter((task) => task.tenantId === tenantId && task.projectId === projectId);
     const completed = tasks.filter((task) => task.status === 'COMPLETED').length;
@@ -602,6 +629,13 @@ export class TaskCenterStore {
     const reason = requiredString(input, 'reason', 'reason', 1_000);
     const outcome = input.outcome === 'completed' || input.outcome === 'failed' || input.outcome === 'awaiting_decision' ? input.outcome : null;
     if (!outcome) throw new Error('outcome 只能是 completed、failed 或 awaiting_decision');
+    const agentRun = z.object({
+      runtimeRunId: text(160, 1),
+      runtimeSessionId: text(160, 1),
+      agentId: text(160, 1),
+      startedAt: timestamp,
+      endedAt: timestamp,
+    }).strict().parse(input.agentRun);
     const refs = uniqueRefs(input.evidenceRefs);
     return this.mutate((snapshot, occurredAt) => {
       const task = this.findOpenTask(snapshot, taskId);
@@ -618,6 +652,7 @@ export class TaskCenterStore {
       }
       task.status = toStatus;
       task.nextAction = nextAction;
+      task.agentRun = agentRun;
       task.updatedAt = occurredAt;
       this.appendHistory(snapshot, task, {
         eventType: outcome === 'completed' ? 'result_submitted' : outcome === 'failed' ? 'failed' : 'escalated',

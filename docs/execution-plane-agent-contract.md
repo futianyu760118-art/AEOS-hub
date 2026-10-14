@@ -31,11 +31,14 @@
 
 | type | 字段 | 说明 |
 |---|---|---|
-| `register` | `agentId, name, version, capabilities:[{name,description}]` | 连接建立后立即发送，`capabilities` 非空 |
+| `register` | `agentId, name, version, sourceSystem, capabilities:[{name,description}]` | 连接建立后立即发送；`sourceSystem` 为来源业务系统名称，`capabilities` 非空 |
 | `heartbeat` | `status(idle/working/error), currentRunId?` | 周期心跳 |
 | `run_update` | `runId, state:'running'` | 开始执行时的进度上报（可选） |
 | `run_complete` | `runId, result` | 查询成功，`result` 为结构化结果 |
 | `run_failed` | `runId, error:{code,message}` | 查询失败 |
+
+`sourceSystem` 是每个新接入智能体的必填身份信息（最长 160 字符），例如“公司中控平台”或“供应链系统”。
+“本机 / 远程”不由执行面上报：管理面根据控制通道的回环地址自动判定并展示，防止客户端伪造身份。
 
 ### 3.2 管理面 → 执行面
 
@@ -135,7 +138,7 @@
 ## 7. 打包与部署
 
 - 打包为容器镜像：明确入口、健康检查、日志走 stdout/stderr。
-- 启动参数：`EXECUTION_WS_URL`（管理面 `/execution-agent` 地址）、`EXECUTION_PLANE_TOKEN`、`EXECUTION_AGENT_ID`（G1 接入时固定为 `runtime-execution-query`）、目标系统凭据。
+- 启动参数：`EXECUTION_WS_URL`（管理面 `/execution-agent` 地址）、`EXECUTION_PLANE_TOKEN`、`EXECUTION_AGENT_ID`（G1 接入时固定为 `runtime-execution-query`）、`EXECUTION_SOURCE_SYSTEM`（来源系统名称）、目标系统凭据。
 - 网络：执行面 → 管理面出方向连接；目标系统无需暴露端口。
 
 ## 8. 最小实现骨架（参考）

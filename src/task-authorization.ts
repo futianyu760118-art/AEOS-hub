@@ -1,5 +1,5 @@
 export const TASK_ACTIONS = [
-  'create', 'assign', 'reassign', 'accept', 'start', 'supplement_evidence', 'submit_result', 'verify', 'reject',
+  'create', 'assign', 'reassign', 'project_link', 'accept', 'start', 'supplement_evidence', 'submit_result', 'verify', 'reject',
 ] as const;
 
 export type TaskAction = typeof TASK_ACTIONS[number];
@@ -32,7 +32,7 @@ export type CollaborationAuthorizationInput = {
   project?: CollaborationProject | null;
 };
 
-const MANAGER_ACTIONS = new Set<TaskAction>(['create', 'assign', 'reassign']);
+const MANAGER_ACTIONS = new Set<TaskAction>(['create', 'assign', 'reassign', 'project_link']);
 const OPERATOR_ACTIONS = new Set<TaskAction>(['accept', 'start', 'supplement_evidence', 'submit_result']);
 const OWNER_ACTIONS = new Set<TaskAction>(['verify', 'reject']);
 

@@ -1,6 +1,8 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
+import { describeExecutionQuery, parseExecutionQuery } from './execution-query-intent.js?v=execution-query-intent-v3-20261014';
+import { summarizeExecutionResult } from './execution-query-summary.js?v=execution-query-summary-v2-20261014';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
@@ -205,8 +207,11 @@ let taskBoardView = 'board';
 let selectedProjectId = null;
 let g0DecisionSnapshot = null;
 const taskDetails = new Map();
+const projectTaskDetails = new Map();
 const taskAgentCandidates = new Map();
 let editingTaskAssignmentId = null;
+let editingCollaborationAssignmentId = null;
+let editingTaskProjectId = null;
 let selectedInboxItemId = null;
 let editingDailyQuestionConfig = null;
 let latestDailyQuestionConflictConfig = null;
@@ -733,78 +738,6 @@ function executionConnectionLabel(status) {
   return status === 'online' ? '在线' : status === 'offline' ? '离线' : status;
 }
 
-// 自然语言 → 执行面查询：识别意图（缺料/齐套/订单/库存/供给/质量/生产）并提取单号。
-function parseExecutionQuery(text) {
-  const t = String(text || '').trim();
-  if (!t) return { error: '请输入查询内容，例如：查 HJY20260903-261 的缺料' };
-  let path = '';
-  if (/缺料|短缺|shortage/i.test(t)) path = '/external/material-kitting/shortages';
-  else if (/齐套|套料|kitting/i.test(t)) path = '/external/material-kitting/results';
-  else if (/订单|order/i.test(t)) path = '/external/orders/list';
-  else if (/库存|可用量|inventory/i.test(t)) path = '/external/inventory/availability';
-  else if (/供给|供应|supply/i.test(t)) path = '/external/material-supplies/list';
-  else if (/质量|quality/i.test(t)) path = '/external/quality-issues/list';
-  else if (/生产|工单|production/i.test(t)) path = '/external/production/work-orders/list';
-  if (!path) return { error: '没识别出查询类型。可用的：缺料、齐套、订单、库存、供给、质量、生产' };
-
-  const codeMatch = t.match(/[A-Za-z]{2,}[0-9A-Za-z\-:]*/);
-  const code = codeMatch ? codeMatch[0] : '';
-  let params = {};
-  if (path === '/external/material-kitting/shortages') {
-    if (!code) return { error: '请带上单号，例如：查 HJY20260903-261 的缺料' };
-    params = { demand_no: code.split(':')[0] };
-  } else if (path === '/external/material-kitting/results') {
-    if (!code) return { error: '请带上单号，例如：查 HJY20260903-261:18 的齐套' };
-    const [no, line] = code.split(':');
-    params = { demand_no: no, ...(line ? { demand_line_no: line } : {}) };
-  } else {
-    params = { keyword: code || '' };
-  }
-  return { path, params };
-}
-
-const EXECUTION_FIELD_LABELS = {
-  demand_no: '需求单号', demand_line_no: '行号', material_code: '物料编码', material_name: '物料名称',
-  required_qty: '需求量', available_qty: '可用量', future_supply_qty: '在途供给', shortage_qty: '缺料量',
-  required_date: '需求日期', estimated_available_date: '预计可用日期', shortage_reason: '缺料原因',
-  supply_source: '供给来源', owner_department: '责任部门', kit_status: '齐套状态', status: '状态',
-  customer: '客户', amount: '金额', order_no: '订单号', risk_level: '风险等级', supplier_name: '供应商',
-};
-
-function shortageReasonLabel(reason) {
-  return ({ NO_SUPPLY: '无供给', SUPPLY_LATE: '供给延后', CAPACITY_SHORT: '产能不足', QUALITY_HOLD: '质量冻结' })[reason] || reason || '';
-}
-
-// 把结构化查询结果转成可读的自然语言摘要。
-function summarizeExecutionResult(path, data) {
-  const items = Array.isArray(data?.items) ? data.items : [];
-  const total = typeof data?.total === 'number' ? data.total : items.length;
-  if (!items.length) return '没有查到相关记录。';
-  const cap = items.slice(0, 12);
-  const more = total > cap.length;
-
-  if (typeof path === 'string' && path.includes('/material-kitting/shortages')) {
-    const totalQty = items.reduce((sum, item) => sum + (Number(item.shortage_qty) || 0), 0);
-    const lines = cap.map((item, index) => {
-      const name = item.material_name || item.material_code || '未知物料';
-      const qty = Number(item.shortage_qty) || 0;
-      const date = item.required_date || '';
-      const reason = shortageReasonLabel(item.shortage_reason);
-      return `${index + 1}. ${name}：缺 ${qty} 件${date ? `（需求 ${date}）` : ''}${reason ? `，${reason}` : ''}`;
-    });
-    return `查到缺料记录 ${total} 条，合计缺料 ${totalQty} 件：\n${lines.join('\n')}${more ? `\n…其余 ${total - cap.length} 条未列出` : ''}`;
-  }
-
-  const lines = cap.map((item, index) => {
-    const name = item.material_name || item.order_no || item.name || item.demand_no || `记录 ${index + 1}`;
-    const detail = ['kit_status', 'status', 'required_qty', 'shortage_qty', 'required_date', 'amount', 'risk_level']
-      .map((key) => (item[key] !== undefined && item[key] !== null && item[key] !== '' ? `${EXECUTION_FIELD_LABELS[key] || key}：${item[key]}` : ''))
-      .filter(Boolean).join('，');
-    return `${index + 1}. ${name}${detail ? `（${detail}）` : ''}`;
-  });
-  return `查到 ${total} 条记录：\n${lines.join('\n')}${more ? `\n…其余 ${total - cap.length} 条未列出` : ''}`;
-}
-
 // 打字机式流式输出到指定元素。
 function streamTextInto(element, text) {
   let index = 0;
@@ -839,8 +772,12 @@ function renderExecutionAgentList(agents) {
   root.innerHTML = agents.map((agent) => {
     const online = agent.connectionStatus === 'online';
     const selected = selectedExecutionAgent === agent.agentId;
+    const location = agent.local === true ? '本机' : '远程';
+    const sourceSystem = typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
+      ? agent.sourceSystem.trim()
+      : '来源待补充';
     return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-      <span class="execution-agent-name">${esc(agent.name)}</span>
+      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceSystem)}">来源：${esc(sourceSystem)}</span></span></span>
       <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
     </button>`;
   }).join('');
@@ -853,7 +790,7 @@ function selectExecutionAgent(agentId) {
   const title = $('#execution-chat-title');
   const subtitle = $('#execution-chat-subtitle');
   if (title) title.textContent = `与「${agentId}」对话`;
-  if (subtitle) subtitle.textContent = '用自然语言提问，例如：查 HJY20260903-261 的缺料';
+  if (subtitle) subtitle.textContent = '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
 }
 
 function executionMessageBubble(role, text) {
@@ -901,7 +838,7 @@ async function sendExecutionQuery() {
   }
   if (input) input.value = '';
   appendExecutionMessage('user', text, null);
-  const pending = appendExecutionMessage('agent', '正在查询…', null);
+  const pending = appendExecutionMessage('agent', `正在查询：${describeExecutionQuery(parsed)}…`, null);
 
   try {
     const response = await fetch(`/api/execution/agents/${encodeURIComponent(selectedExecutionAgent)}/dispatch`, {
@@ -3800,18 +3737,59 @@ function collaborationBoardGroups(tasks) {
   ];
 }
 
+function agentRunOutputText(value) {
+  if (value === null || value === undefined) return '智能体未返回可展示的正文。';
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+}
+
+function renderAgentRunResult(agentRun, compact = false) {
+  if (!agentRun) return compact ? '' : '<div class="agent-run-result empty"><i data-lucide="bot"></i><span>尚无已关联的智能体运行记录。</span></div>';
+  const execution = agentRun.execution || { state: 'unavailable', message: '运行结果暂不可读取。' };
+  const state = execution.state || 'unavailable';
+  const tone = state === 'completed' ? 'ok' : state === 'failed' || state === 'recalled' ? 'danger' : state === 'unavailable' ? 'neutral' : 'warn';
+  const label = state === 'completed' ? '已回传' : state === 'failed' ? '运行失败' : state === 'recalled' ? '已召回' : state === 'unavailable' ? '记录不可用' : '运行中';
+  const body = execution.result !== null && execution.result !== undefined
+    ? `<pre>${esc(agentRunOutputText(execution.result))}</pre>`
+    : `<p>${esc(execution.error?.message || execution.message || '尚未收到执行面结果。')}</p>`;
+  return `<details class="agent-run-result${compact ? ' compact' : ''}"${compact ? '' : ' open'}><summary><span><i data-lucide="bot"></i>智能体回传结果</span><b class="status-pill ${tone}">${label}</b></summary><div class="agent-run-result-meta"><span>Run：${esc(agentRun.runtimeRunId || '—')}</span><span>智能体：${esc(agentRun.agentId || '—')}</span>${execution.capability ? `<span>能力：${esc(execution.capability)}</span>` : ''}</div><div class="agent-run-result-body">${body}</div><small>该回传仅供分析与核验参考，不代表业务动作已完成。</small></details>`;
+}
+
+function renderTaskRunHistory(details) {
+  if (!details) return '';
+  const history = Array.isArray(details.history) ? details.history : [];
+  return `${renderAgentRunResult(details.task?.agentRun)}<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>`;
+}
+
+function selectableHumanAssignees() {
+  return personnelUsers.filter((user) => user.enabled && user.roles?.includes('operator') && user.actorId);
+}
+
+function renderHumanAssignmentFields(task) {
+  const candidates = selectableHumanAssignees();
+  const currentActorId = task.currentAssignee?.kind === 'responsibility_role' ? task.currentAssignee.actorId : '';
+  const currentRole = task.currentAssignee?.kind === 'responsibility_role' ? task.currentAssignee.role : '项目协同负责人';
+  const includesCurrent = currentActorId && candidates.some((user) => user.actorId === currentActorId);
+  const users = includesCurrent ? candidates : (currentActorId ? [{ actorId: currentActorId, username: currentActorId, firstName: '', lastName: '', roles: [], enabled: true }, ...candidates] : candidates);
+  const displayName = (user) => [user.lastName, user.firstName].filter(Boolean).join('') || user.username || user.actorId;
+  const roles = [...new Set([currentRole, '项目协同负责人', '项目负责人', '执行负责人', '业务核验人'])];
+  return `<label>接手人<select name="assigneeActorId" required aria-label="接手人" ${users.length ? '' : 'disabled'}><option value="">请选择已启用的执行人员</option>${users.map((user) => `<option value="${esc(user.actorId)}"${user.actorId === currentActorId ? ' selected' : ''}>${esc(displayName(user))}${user.username && user.username !== displayName(user) ? `（${esc(user.username)}）` : ''}</option>`).join('')}</select></label><label>责任角色<select name="assigneeRole" required aria-label="责任角色">${roles.map((role) => `<option value="${esc(role)}"${role === currentRole ? ' selected' : ''}>${esc(role)}</option>`).join('')}</select></label>${users.length ? '' : '<p class="assignment-empty-note">暂无可选人员。请先在“系统配置 → 人员管理”启用具备 operator 角色的账号。</p>'}`;
+}
+
 function renderCollaborationCard(task, compact = false) {
   const state = taskDisplayState(task, localDateKey());
   const project = (projectCenterState.projects || []).find((item) => item.projectId === task.projectId);
   const editable = collaborationTaskEditor(task);
+  const details = taskDetails.get(task.taskId);
   const nextStatus = task.status === 'DRAFT' || task.status === 'ASSIGNED' ? 'IN_PROGRESS' : task.status === 'IN_PROGRESS' ? 'COMPLETED' : '';
   return `<article class="collaboration-card${state.needsAttention ? ' needs-attention' : ''}" ${task.source === 'collaboration' && editable ? `draggable="true" data-card-id="${esc(task.taskId)}"` : ''}>
     <div class="collaboration-card-top"><span class="status-pill ${esc(state.tone)}">${esc(state.label)}</span><span class="card-spacer"></span><code>${esc(task.taskId.slice(-8))}</code></div>
     <strong>${esc(task.title)}</strong>
     <p>${project ? `<i data-lucide="folder"></i>${esc(project.name)}` : '<i data-lucide="layers"></i>未归属项目'}</p>
     <div class="collaboration-card-meta"><span><i data-lucide="user-round"></i>${esc(task.currentAssignee?.actorId || '待分派')}</span><span><i data-lucide="calendar"></i>${esc(task.dueAt)}</span><span>${esc(task.priority)}</span></div>
-    ${compact ? '' : `<small>${esc(state.nextAction)}</small>`}
-    <div class="collaboration-card-actions">${nextStatus ? `<button class="text-action task-progress-action" type="button" data-collab-task-status="${esc(nextStatus)}" data-collab-task-id="${esc(task.taskId)}">${nextStatus === 'COMPLETED' ? '标记完成' : '开始处理'}<i data-lucide="arrow-right"></i></button>` : ''}${collaborationManager() && task.source === 'collaboration' ? `<button class="text-action task-progress-action" type="button" data-collab-task-assign="${esc(task.taskId)}">改派<i data-lucide="user-round-check"></i></button>` : ''}</div>
+    ${compact ? renderAgentRunResult(task.agentRun, true) : `<small>${esc(state.nextAction)}</small>`}
+    <div class="collaboration-card-actions">${nextStatus ? `<button class="text-action task-progress-action" type="button" data-collab-task-status="${esc(nextStatus)}" data-collab-task-id="${esc(task.taskId)}">${nextStatus === 'COMPLETED' ? '标记完成' : '开始处理'}<i data-lucide="arrow-right"></i></button>` : ''}<button class="text-action task-progress-action" type="button" data-collab-task-detail="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起运行与历史' : '查看运行与历史'}</button>${collaborationManager() && task.source === 'collaboration' ? `<button class="text-action task-progress-action" type="button" data-collab-task-assign="${esc(task.taskId)}">改派<i data-lucide="user-round-check"></i></button>` : ''}</div>
+    ${editingCollaborationAssignmentId === task.taskId ? `<form class="task-assignment-form collaboration-assignment-form" data-collab-task-assignment-form data-task-id="${esc(task.taskId)}">${renderHumanAssignmentFields(task)}<label>改派说明<input name="reason" maxlength="1000" required value="调整协同任务负责人。" aria-label="改派说明" /></label><button class="btn primary compact" type="submit" ${selectableHumanAssignees().length ? '' : 'disabled'}>确认改派</button><button class="btn ghost compact" type="button" data-collab-task-assign-cancel="${esc(task.taskId)}">取消</button></form>` : ''}
+    ${details ? renderTaskRunHistory(details) : ''}
   </article>`;
 }
 
@@ -3868,13 +3846,22 @@ function renderProjectWorkspace() {
   const project = (projectCenterState.projects || []).find((item) => item.projectId === selectedProjectId);
   if (!project) { els.projectWorkspace.classList.add('hidden'); els.projectWorkspace.innerHTML = ''; return; }
   const display = projectDisplayState(project, taskCenterState.tasks || []);
-  const tasks = (taskCenterState.tasks || []).filter((task) => task.projectId === project.projectId);
+  const linkedDetails = projectTaskDetails.get(project.projectId);
+  const detailedTasks = new Map((linkedDetails?.tasks || []).map((task) => [task.taskId, task]));
+  const tasks = (taskCenterState.tasks || []).filter((task) => task.projectId === project.projectId).map((task) => detailedTasks.get(task.taskId) || task);
   const boardBody = tasks.length
     ? collaborationBoardGroups(tasks).map((column) => `<section class="collaboration-column"><header><span>${esc(column.label)}</span><b>${column.tasks.length}</b></header><div class="collaboration-column-body">${column.tasks.map((task) => renderCollaborationCard(task, true)).join('') || '<p class="empty-column">暂无任务</p>'}</div></section>`).join('')
-    : `<div class="project-empty-state"><p>此项目还没有协同任务。</p>${collaborationManager() ? `<button class="btn primary compact" data-project-new-task="${esc(project.projectId)}" type="button"><i data-lucide="plus"></i>在此项目新建任务</button>` : `<p class="empty-column">仅 manager 角色可新建协同任务。</p>`}</div>`;
+    : `<div class="project-empty-state"><p>此项目还没有关联任务。</p>${collaborationManager() ? `<button class="btn primary compact" data-project-new-task="${esc(project.projectId)}" type="button"><i data-lucide="plus"></i>在此项目新建任务</button>` : `<p class="empty-column">仅 manager 角色可新建协同任务。</p>`}</div>`;
   els.projectWorkspace.classList.remove('hidden');
   els.projectWorkspace.innerHTML = `<section class="surface project-workspace-board"><div class="surface-head"><div><h2><i data-lucide="folder-open"></i>${esc(project.name)}</h2><p>${esc(project.description || '未填写项目描述')}</p></div><button class="btn ghost compact" data-project-close type="button">返回项目列表</button></div><div class="project-workspace-layout"><div class="project-task-board">${boardBody}</div><aside class="project-detail-panel"><h3>项目属性</h3><dl><div><dt>状态</dt><dd><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></dd></div><div><dt>优先级</dt><dd>${esc(display.priorityLabel)}</dd></div><div><dt>负责人</dt><dd>${esc(project.ownerActorId)}</dd></div><div><dt>成员</dt><dd>${esc((project.memberActorIds || []).join('、'))}</dd></div><div><dt>开始日期</dt><dd>${esc(project.startDate || '—')}</dd></div><div><dt>截止日期</dt><dd>${esc(project.dueDate || '—')}</dd></div></dl><div class="project-progress"><span>进度 ${display.progress.percent}%</span><i><b style="width:${display.progress.percent}%"></b></i><small>${display.progress.completed}/${display.progress.total} 项任务已完成</small></div>${collaborationManager() ? `<div class="project-detail-actions"><button class="btn secondary compact" data-project-edit="${esc(project.projectId)}" type="button">编辑属性</button><button class="btn secondary compact" data-project-status="IN_PROGRESS" data-project-id="${esc(project.projectId)}" type="button">设为进行中</button><button class="btn ghost compact" data-project-status="COMPLETED" data-project-id="${esc(project.projectId)}" type="button">标记完成</button>${project.status !== 'CANCELLED' ? `<button class="btn ghost compact" data-project-status="CANCELLED" data-project-id="${esc(project.projectId)}" type="button">取消项目</button>` : ''}</div>` : ''}</aside></div></section>`;
   refreshIcons(els.projectWorkspace);
+}
+
+async function loadProjectTaskDetails(projectId) {
+  const data = await taskRequest(`/api/projects/${encodeURIComponent(projectId)}`);
+  projectTaskDetails.set(projectId, data);
+  if (selectedProjectId === projectId) renderProjectWorkspace();
+  return data;
 }
 
 function openProjectTaskCreate(projectId) {
@@ -3893,20 +3880,49 @@ async function updateCollaborationTaskStatus(taskId, status) {
   } catch (error) { toast(`更新任务失败：${error.message}`, true); }
 }
 
+async function loadAssignablePersonnel() {
+  if (personnelUsers.length) return personnelUsers;
+  const response = await personnelApiRequest('/api/system/personnel/users');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
+  personnelUsers = Array.isArray(data.users) ? data.users : [];
+  return personnelUsers;
+}
+
 async function assignCollaborationTask(taskId) {
   const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
   if (!task || !collaborationManager()) return;
-  const assigneeActorId = window.prompt('目标稳定 M01 / local-dev actor ID：', task.currentAssignee?.actorId || '');
-  if (!assigneeActorId?.trim()) return;
-  const assigneeRole = window.prompt('责任角色：', task.currentAssignee?.role || '项目协同负责人');
-  if (!assigneeRole?.trim()) return;
-  const reason = window.prompt('改派说明（将写入审计记录）：', '调整协同任务负责人。');
-  if (!reason?.trim()) return;
+  editingCollaborationAssignmentId = editingCollaborationAssignmentId === taskId ? null : taskId;
+  if (editingCollaborationAssignmentId) {
+    try {
+      await loadAssignablePersonnel();
+    } catch (error) {
+      toast(`无法读取可改派人员：${error.message}`, true);
+    }
+  }
+  renderCollaborationTaskBoard();
+  renderProjectWorkspace();
+}
+
+async function submitCollaborationTaskAssignment(event) {
+  const form = event.target.closest('[data-collab-task-assignment-form]');
+  if (!form) return;
+  event.preventDefault();
+  const taskId = form.dataset.taskId;
+  const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
+  if (!task || !collaborationManager()) { toast('当前会话无权改派该任务。', true); return; }
+  const submit = $('button[type="submit"]', form);
   try {
-    await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/assignments`, 'POST', { assigneeActorId, assigneeRole, reason });
-    await loadTasks({ silent: true });
+    const payload = buildTaskAssignmentPayload(Object.fromEntries(new FormData(form).entries()));
+    submit.disabled = true;
+    await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/assignments`, 'POST', payload);
+    editingCollaborationAssignmentId = null;
+    taskDetails.delete(taskId);
+    projectTaskDetails.clear();
+    await Promise.all([loadTasks({ silent: true }), loadProjects({ silent: true })]);
     toast('任务负责人已更新');
   } catch (error) { toast(`改派任务失败：${error.message}`, true); }
+  finally { if (submit?.isConnected) submit.disabled = false; }
 }
 
 async function updateProjectStatus(projectId, status) {
@@ -3978,9 +3994,10 @@ function renderTaskCenter() {
     const agentCandidates = taskAgentCandidates.get(task.taskId);
     const history = Array.isArray(details?.history) ? details.history : [];
     const actions = [
-      `<button class="btn ghost compact" type="button" data-task-action="detail" data-task-id="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起历史' : '查看历史'}</button>`,
+      `<button class="btn ghost compact" type="button" data-task-action="detail" data-task-id="${esc(task.taskId)}"><i data-lucide="history"></i>${details ? '收起运行与历史' : '查看运行与历史'}</button>`,
       `<button class="btn ghost compact" type="button" data-task-action="agent-candidates" data-task-id="${esc(task.taskId)}"><i data-lucide="shield-check"></i>${agentCandidates ? '收起接手条件' : '查看 Agent 接手条件'}</button>`,
       task.currentAssignee?.kind === 'agent' ? `<button class="btn primary compact" type="button" data-task-action="agent-run" data-task-id="${esc(task.taskId)}"><i data-lucide="bot"></i>运行 Agent</button>` : '',
+      collaborationManager() ? `<button class="btn ghost compact" type="button" data-task-action="project-link" data-task-id="${esc(task.taskId)}"><i data-lucide="folder-input"></i>${task.projectId ? '调整项目' : '关联项目'}</button>` : '',
       capabilities.canAssign ? `<button class="btn secondary compact" type="button" data-task-action="assign" data-task-id="${esc(task.taskId)}"><i data-lucide="user-round-check"></i>${task.currentAssignee ? '改派责任' : '分派责任'}</button>` : '',
       capabilities.canAccept ? `<button class="btn secondary compact" type="button" data-task-action="accept" data-task-id="${esc(task.taskId)}"><i data-lucide="handshake"></i>记录接受</button>` : '',
       capabilities.canStart ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
@@ -3995,9 +4012,10 @@ function renderTaskCenter() {
       <div class="task-next-action"><i data-lucide="arrow-right"></i><span><b>下一步：</b>${esc(state.nextAction)}</span></div>
       ${state.awaitingBusinessVerification ? '<div class="task-verify-note"><i data-lucide="shield-check"></i>分析结果仍为待核验状态，只有业务 Owner 的核验记录才能完成任务。</div>' : ''}
       <div class="case-actions task-actions">${actions}</div>
-      ${editingTaskAssignmentId === task.taskId && capabilities.canAssign ? `<form class="task-assignment-form" data-task-assignment-form data-task-id="${esc(task.taskId)}"><input name="assigneeRole" maxlength="120" required value="${esc(task.currentAssignee?.role || '')}" placeholder="责任角色" aria-label="责任角色" /><input name="assigneeActorId" maxlength="160" required value="${esc(task.currentAssignee?.actorId || '')}" placeholder="目标稳定 M01 actor ID" aria-label="目标稳定 M01 actor ID" /><input name="reason" maxlength="1000" required placeholder="分派/改派说明（将留痕）" aria-label="分派说明" /><button class="btn primary compact" type="submit">保存分派</button><button class="btn ghost compact" type="button" data-task-action="cancel-assign" data-task-id="${esc(task.taskId)}">取消</button></form>` : ''}
+      ${editingTaskAssignmentId === task.taskId && capabilities.canAssign ? `<form class="task-assignment-form" data-task-assignment-form data-task-id="${esc(task.taskId)}">${renderHumanAssignmentFields(task)}<label>分派说明<input name="reason" maxlength="1000" required placeholder="说明本次分派原因（将留痕）" aria-label="分派说明" /></label><button class="btn primary compact" type="submit" ${selectableHumanAssignees().length ? '' : 'disabled'}>保存分派</button><button class="btn ghost compact" type="button" data-task-action="cancel-assign" data-task-id="${esc(task.taskId)}">取消</button></form>` : ''}
+      ${editingTaskProjectId === task.taskId ? `<form class="task-project-link-form" data-task-project-link-form data-task-id="${esc(task.taskId)}"><label>关联项目<select name="projectId" aria-label="关联项目"><option value="">不关联任何项目</option>${(projectCenterState.projects || []).map((project) => `<option value="${esc(project.projectId)}"${project.projectId === task.projectId ? ' selected' : ''}>${esc(project.name)}</option>`).join('')}</select></label><button class="btn primary compact" type="submit">保存关联</button><button class="btn ghost compact" type="button" data-task-action="cancel-project-link" data-task-id="${esc(task.taskId)}">取消</button></form>` : ''}
       ${agentCandidates ? renderAgentCandidatePanel(agentCandidates) : ''}
-      ${details ? `<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
+      ${details ? `${renderAgentRunResult(details.task?.agentRun)}<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
     </article>`;
   }).join('') : '<div class="dashboard-loading">暂无责任任务。请先从上方选择经营事项创建任务。</div>';
   populateCollaborationProjectOptions();
@@ -4071,10 +4089,11 @@ async function createProject(event) {
 }
 
 async function loadTaskDetail(taskId) {
-  if (taskDetails.has(taskId)) { taskDetails.delete(taskId); renderTaskCenter(); return; }
+  if (taskDetails.has(taskId)) { taskDetails.delete(taskId); renderTaskCenter(); renderProjectWorkspace(); return; }
   const data = await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}`);
   taskDetails.set(taskId, data);
   renderTaskCenter();
+  renderProjectWorkspace();
 }
 
 async function loadTaskAgentCandidates(taskId) {
@@ -4115,15 +4134,35 @@ async function submitTaskAssignment(event) {
   }
 }
 
+async function submitTaskProjectLink(event) {
+  const form = event.target.closest('[data-task-project-link-form]');
+  if (!form) return;
+  event.preventDefault();
+  const taskId = form.dataset.taskId;
+  const submit = $('button[type="submit"]', form);
+  try {
+    submit.disabled = true;
+    const projectId = String(new FormData(form).get('projectId') || '');
+    await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/project`, 'PATCH', { projectId: projectId || null, reason: projectId ? '关联项目以跟踪任务与智能体结果' : '解除项目关联' });
+    editingTaskProjectId = null;
+    projectTaskDetails.clear();
+    await Promise.all([loadTasks({ silent: true }), loadProjects({ silent: true })]);
+    toast(projectId ? '任务已关联项目，运行结果将同步显示在项目工作区。' : '任务已解除项目关联。');
+  } catch (error) { toast(`关联项目失败：${error.message}`, true); }
+  finally { if (submit?.isConnected) submit.disabled = false; }
+}
+
 async function performTaskAction(taskId, action) {
   const task = (taskCenterState.tasks || []).find((item) => item.taskId === taskId);
   if (!task) return;
   if (action === 'detail') { await loadTaskDetail(taskId); return; }
   if (action === 'agent-candidates') { await loadTaskAgentCandidates(taskId); return; }
   if (action === 'cancel-assign') { editingTaskAssignmentId = null; renderTaskCenter(); return; }
+  if (action === 'cancel-project-link') { editingTaskProjectId = null; renderTaskCenter(); return; }
   if (action === 'assign') {
     if (!taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot).canAssign) { toast('当前会话无权分派该任务。', true); return; }
     editingTaskAssignmentId = taskId;
+    try { await loadAssignablePersonnel(); } catch (error) { toast(`无法读取可分派人员：${error.message}`, true); }
     renderTaskCenter();
     return;
   }
@@ -4135,11 +4174,25 @@ async function performTaskAction(taskId, action) {
       await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`, 'POST', {});
       taskDetails.delete(taskId);
       taskAgentCandidates.delete(taskId);
+      projectTaskDetails.clear();
       await loadTasks({ silent: true });
       toast('Agent 运行完成，结果已回写任务');
     } catch (error) {
-      toast(`Agent 运行失败：${error.message}`, true);
+      const message = String(error?.message || '未知错误');
+      if (message.includes('已有待核验或已核验结果')) {
+        toast('该任务已有智能体结果，正在等待业务核验；请点击“查看运行与历史”。', true);
+      } else {
+        toast(`Agent 运行失败：${message}`, true);
+      }
     }
+    return;
+  }
+  if (action === 'project-link') {
+    if (!collaborationManager()) { toast('只有 manager 人工账号可以关联项目。', true); return; }
+    const projects = projectCenterState.projects || [];
+    if (!projects.length) { toast('请先在项目模块创建项目。', true); return; }
+    editingTaskProjectId = taskId;
+    renderTaskCenter();
     return;
   }
   const capabilities = taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot);
@@ -5866,15 +5919,20 @@ $$('[data-task-view]').forEach((button) => button.addEventListener('click', () =
 els.taskBoard?.addEventListener('click', (event) => {
   const action = event.target.closest('[data-collab-task-status]');
   if (action) void updateCollaborationTaskStatus(action.dataset.collabTaskId, action.dataset.collabTaskStatus);
+  const detail = event.target.closest('[data-collab-task-detail]');
+  if (detail) void loadTaskDetail(detail.dataset.collabTaskDetail).catch((error) => toast(`读取运行与历史失败：${error.message}`, true));
   const assignment = event.target.closest('[data-collab-task-assign]');
   if (assignment) void assignCollaborationTask(assignment.dataset.collabTaskAssign);
+  const cancelAssignment = event.target.closest('[data-collab-task-assign-cancel]');
+  if (cancelAssignment) { editingCollaborationAssignmentId = null; renderCollaborationTaskBoard(); renderProjectWorkspace(); }
 });
+els.taskBoard?.addEventListener('submit', (event) => { void submitCollaborationTaskAssignment(event); });
 els.taskList.addEventListener('click', (event) => {
   const button = event.target.closest('[data-task-action]');
   if (!button) return;
   void performTaskAction(button.dataset.taskId, button.dataset.taskAction).catch((error) => toast(`更新任务失败：${error.message}`, true));
 });
-els.taskList.addEventListener('submit', (event) => { void submitTaskAssignment(event); });
+els.taskList.addEventListener('submit', (event) => { void submitTaskAssignment(event); void submitTaskProjectLink(event); });
 els.btnProjectsRefresh?.addEventListener('click', () => { void Promise.all([loadProjects(), loadTasks({ silent: true })]); });
 els.btnProjectCreate?.addEventListener('click', () => {
   if (!collaborationManager()) { toast('只有 manager 人工账号可以创建项目。', true); return; }
@@ -5890,6 +5948,7 @@ els.projectList?.addEventListener('click', (event) => {
   if (!row) return;
   selectedProjectId = row.dataset.projectOpen;
   renderProjectWorkspace();
+  void loadProjectTaskDetails(selectedProjectId).catch((error) => toast(`项目任务详情加载失败：${error.message}`, true));
   els.projectWorkspace.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 els.projectWorkspace?.addEventListener('click', (event) => {
@@ -5906,9 +5965,14 @@ els.projectWorkspace?.addEventListener('click', (event) => {
   if (edit) void editProject(edit.dataset.projectEdit);
   const taskStatus = event.target.closest('[data-collab-task-status]');
   if (taskStatus) void updateCollaborationTaskStatus(taskStatus.dataset.collabTaskId, taskStatus.dataset.collabTaskStatus);
+  const detail = event.target.closest('[data-collab-task-detail]');
+  if (detail) void loadTaskDetail(detail.dataset.collabTaskDetail).catch((error) => toast(`读取运行与历史失败：${error.message}`, true));
   const assignment = event.target.closest('[data-collab-task-assign]');
   if (assignment) void assignCollaborationTask(assignment.dataset.collabTaskAssign);
+  const cancelAssignment = event.target.closest('[data-collab-task-assign-cancel]');
+  if (cancelAssignment) { editingCollaborationAssignmentId = null; renderCollaborationTaskBoard(); renderProjectWorkspace(); }
 });
+els.projectWorkspace?.addEventListener('submit', (event) => { void submitCollaborationTaskAssignment(event); });
 els.btnInboxRefresh.addEventListener('click', () => loadInbox());
 els.btnInboxReadAll?.addEventListener('click', () => { void markAllInboxRead(); });
 els.inboxSearch?.addEventListener('input', renderInbox);

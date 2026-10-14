@@ -8,6 +8,7 @@ import { OperatingCenterStore, type OperatingCase, type OperatingResult } from '
 import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
 import { authorizeCollaborationAction, authorizeTaskAction, type CollaborationAction, type TaskAction, type TaskAuthorizationActor } from './task-authorization.ts';
 import type { G0DecisionRegisterStore } from './g0-decision-register.ts';
+import type { ExecutionRunRecord } from './execution-plane.ts';
 
 export type TaskApiActor = {
   actorId: string;
@@ -30,6 +31,7 @@ type TaskApiDependencies = {
   g0DecisionStore?: Pick<G0DecisionRegisterStore, 'load'>;
   loadHarbor?: () => HarborSnapshot;
   resolveRuntime?: (runtimeId: string) => (AgentTaskRunDeps['runtime'] & { runtimeKind?: string }) | undefined;
+  findExecutionRun?: (runId: string) => ExecutionRunRecord | undefined;
   now?: () => Date;
 };
 
@@ -109,13 +111,13 @@ export class TaskApi {
     if (projectTasksMatch) {
       this.method(method, 'GET');
       const project = this.requireProject(decoded(projectTasksMatch[1] ?? ''), actor);
-      return { status: 200, body: { project: this.projectView(project, actor.tenantId), tasks: this.tenantSnapshot(actor).tasks.filter((task) => task.projectId === project.projectId) } };
+      return { status: 200, body: { project: this.projectView(project, actor.tenantId), tasks: this.tenantSnapshot(actor).tasks.filter((task) => task.projectId === project.projectId).map((task) => this.taskView(task)) } };
     }
 
     const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
     if (projectMatch) {
       const project = this.requireProject(decoded(projectMatch[1] ?? ''), actor);
-      if (method === 'GET') return { status: 200, body: { project: this.projectView(project, actor.tenantId), tasks: this.tenantSnapshot(actor).tasks.filter((task) => task.projectId === project.projectId) } };
+      if (method === 'GET') return { status: 200, body: { project: this.projectView(project, actor.tenantId), tasks: this.tenantSnapshot(actor).tasks.filter((task) => task.projectId === project.projectId).map((task) => this.taskView(task)) } };
       this.method(method, 'PATCH');
       const denied = this.authorizeCollaboration('project_update', actor, undefined, project);
       if (denied) return denied;
@@ -145,6 +147,23 @@ export class TaskApi {
       const auditStatus = this.audit(updated, actor, 'collaboration_task_updated');
       return { status: 200, body: { task: updated, committed: true, auditStatus } };
     }
+
+    const projectLinkMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/project$/);
+    if (projectLinkMatch) {
+      this.method(method, 'PATCH');
+      const task = this.requireMutationTask(decoded(projectLinkMatch[1] ?? ''), actor, 'project_link');
+      const denied = task.source === 'collaboration'
+        ? this.authorizeCollaboration('task_move', actor, task)
+        : (!this.requireG1Scope(actor) ? this.denied(actor, 'project_link', 'G0_SCOPE_REQUIRED') : this.authorize('project_link', actor, task));
+      if (denied) return denied;
+      const updated = this.dependencies.taskCenter.linkTaskToProject({
+        taskId: task.taskId, projectId: bodyValue(body, 'projectId'), actor: actor.actorId,
+        reason: typeof body.reason === 'string' ? body.reason : '关联项目以跟踪任务与智能体结果',
+      });
+      const auditStatus = this.audit(updated, actor, 'task_project_linked');
+      return { status: 200, body: { task: updated, committed: true, auditStatus } };
+    }
+
     const createMatch = pathname.match(/^\/api\/operating-cases\/([^/]+)\/tasks$/);
     if (createMatch) {
       this.method(method, 'POST');
@@ -187,7 +206,7 @@ export class TaskApi {
       this.method(method, 'GET');
       const task = this.requireTask(decoded(detailMatch[1] ?? ''), actor);
       const history = this.dependencies.taskCenter.load().history.filter((entry) => entry.taskId === task.taskId);
-      return { status: 200, body: { task, history } };
+      return { status: 200, body: { task: this.taskView(task), history } };
     }
 
     const candidatesMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/agent-candidates$/);
@@ -437,6 +456,13 @@ export class TaskApi {
       resultId,
       evidenceRefs,
       nextAction,
+      agentRun: {
+        runtimeRunId: run.runtimeRunId,
+        runtimeSessionId: run.runtimeSessionId,
+        agentId: run.agentId,
+        startedAt: run.startedAt,
+        endedAt: run.endedAt,
+      },
     });
     const auditStatus = this.audit(updated, actor, 'agent_task_run_recorded', resultId);
     return { status: 200, body: { task: updated, run, resultId, committed: true, auditStatus } };
@@ -539,6 +565,22 @@ export class TaskApi {
 
   private projectView(project: ProjectRecord, tenantId: string): ProjectRecord & { progress: { total: number; completed: number; percent: number } } {
     return { ...project, progress: this.dependencies.taskCenter.projectProgress(project.projectId, tenantId) };
+  }
+
+  private taskView(task: TaskRecord): Record<string, unknown> {
+    if (!task.agentRun) return { ...task, agentRun: null };
+    const executionRun = this.dependencies.findExecutionRun?.(task.agentRun.runtimeRunId);
+    const execution = executionRun
+      ? {
+        state: executionRun.state,
+        capability: executionRun.capability,
+        startedAt: executionRun.startedAt,
+        endedAt: executionRun.endedAt,
+        result: executionRun.result ?? null,
+        error: executionRun.error ?? null,
+      }
+      : { state: 'unavailable', message: '该运行记录不在当前执行面保留范围内。' };
+    return { ...task, agentRun: { ...task.agentRun, execution } };
   }
 
   private auditDenied(actor: TaskApiActor, action: string, policyCode: string, task?: TaskRecord): 'recorded' | 'failed' {

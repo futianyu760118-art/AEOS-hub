@@ -24,6 +24,10 @@ export interface ExecutionAgentRecord {
   lastSeenAt: string;
   currentRunId: string | null;
   registeredAt: string;
+  /** 是否从本机回环地址（127.0.0.1/::1）连接：本地执行面 vs 远程目标系统。 */
+  local: boolean;
+  /** 执行智能体所属的业务系统，由注册方声明。 */
+  sourceSystem: string;
 }
 
 export interface ExecutionRunRecord {
@@ -61,6 +65,10 @@ interface ConnectedAgent {
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
+
+export function isLoopbackExecutionPeer(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
 
 function requireString(value: unknown, field: string, maxLen = 200): string {
   if (typeof value !== 'string' || !value.trim()) throw new ExecutionPlaneError('INVALID_ARGUMENT', `${field} 不能为空`);
@@ -127,7 +135,16 @@ export class ExecutionPlaneRegistry {
         for (const record of raw.agents as ExecutionAgentRecord[]) {
           // 重启后没有活跃连接：一律视为离线，仅保留最近一次画像供仪表盘展示。
           this.agents.set(record.agentId, {
-            record: { ...record, connectionStatus: 'offline', runtimeStatus: 'idle', currentRunId: null },
+            record: {
+              ...record,
+              local: record.local === true,
+              sourceSystem: typeof record.sourceSystem === 'string' && record.sourceSystem.trim()
+                ? record.sourceSystem.trim()
+                : '历史记录（来源待补充）',
+              connectionStatus: 'offline',
+              runtimeStatus: 'idle',
+              currentRunId: null,
+            },
             send: () => {},
           });
         }
@@ -160,13 +177,15 @@ export class ExecutionPlaneRegistry {
 
   // ---------- 执行面 → 管理面 ----------
   onRegister(
-    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown },
+    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown },
     send: SendFn,
   ): { agentId: string; heartbeatIntervalMs: number } {
     const agentId = requireString(input.agentId, 'agentId', 160);
     const name = requireString(input.name, 'name', 160);
     const version = typeof input.version === 'string' ? input.version.slice(0, 40) : 'unknown';
     const capabilities = parseCapabilities(input.capabilities);
+    const local = input.local === true;
+    const sourceSystem = requireString(input.sourceSystem, 'sourceSystem', 160);
 
     const now = this.nowIso();
     const existing = this.agents.get(agentId);
@@ -180,6 +199,8 @@ export class ExecutionPlaneRegistry {
       lastSeenAt: now,
       currentRunId: existing?.record.currentRunId ?? null,
       registeredAt: existing?.record.registeredAt ?? now,
+      local,
+      sourceSystem,
     };
     this.agents.set(agentId, { record, send });
     this.persist();

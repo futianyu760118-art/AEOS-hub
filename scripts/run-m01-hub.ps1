@@ -25,7 +25,7 @@ foreach ($line in [System.IO.File]::ReadAllLines($environmentFile)) {
   $settings[$name] = $value
 }
 
-foreach ($name in @('M01_CLIENT_SECRET', 'M01_KEYCLOAK_HTTPS_PORT', 'M01_KEYCLOAK_EXTERNAL_HOSTNAME', 'M01_HUB_HTTPS_PORT', 'M01_HUB_EXTERNAL_HOSTNAME', 'M01_LISTEN_ADDRESS')) {
+foreach ($name in @('M01_CLIENT_SECRET', 'M01_KEYCLOAK_HTTPS_PORT', 'M01_KEYCLOAK_EXTERNAL_HOSTNAME', 'M01_HUB_HTTPS_PORT', 'M01_HUB_EXTERNAL_HOSTNAME', 'M01_LISTEN_ADDRESS', 'EXECUTION_PLANE_TOKEN')) {
   if (-not $settings.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($settings[$name]) -or $settings[$name] -eq '__REPLACE_BEFORE_START__') {
     throw "M01 runtime configuration is incomplete: $name must be configured in deploy/m01/.env."
   }
@@ -51,6 +51,7 @@ $env:M01_CLIENT_SECRET = $settings['M01_CLIENT_SECRET']
 $env:M01_REDIRECT_URI = "https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT'])/api/auth/callback"
 $env:M01_AUDIENCE = 'aeos-hub-web'
 $env:AEOS_M01_ALLOWED_ROLES = 'manager,supervisor,operator,owner,analyst'
+$env:EXECUTION_PLANE_TOKEN = $settings['EXECUTION_PLANE_TOKEN']
 
 # Personnel administration is fail-closed: it is enabled only when the feature
 # flag is on and a non-sentinel service-client secret is present in the ignored

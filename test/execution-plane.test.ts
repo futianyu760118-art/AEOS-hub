@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ExecutionPlaneRegistry, ExecutionPlaneError } from '../src/execution-plane.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from '../src/execution-plane.ts';
 
 interface Harness {
   registry: ExecutionPlaneRegistry;
@@ -30,7 +30,7 @@ function makeHarness(t: { after: (fn: () => void) => void }): Harness {
   });
   const agentId = 'agent-query-1';
   registry.onRegister(
-    { agentId, name: '查询智能体', version: '1.0.0', capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }] },
+    { agentId, name: '查询智能体', version: '1.0.0', sourceSystem: '公司中控平台', capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }] },
     (msg) => sent.push(msg),
   );
   return {
@@ -51,6 +51,31 @@ test('注册后 agent 在线并出现在 list 中', (t) => {
   assert.equal(agents[0].agentId, h.agentId);
   assert.equal(agents[0].connectionStatus, 'online');
   assert.equal(agents[0].runtimeStatus, 'idle');
+  assert.equal(agents[0].sourceSystem, '公司中控平台');
+});
+
+test('注册校验：来源系统不能为空', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  assert.throws(
+    () => h.registry.onRegister({
+      agentId: 'agent-source-empty', name: '查询智能体', version: '1.0.0', sourceSystem: ' ',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }],
+    }, () => {}),
+    (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'INVALID_ARGUMENT' && /sourceSystem 不能为空/.test(err.message),
+  );
+});
+
+test('注册校验：来源系统不能超过 160 字符', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  assert.throws(
+    () => h.registry.onRegister({
+      agentId: 'agent-source-long', name: '查询智能体', version: '1.0.0', sourceSystem: '系'.repeat(161),
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }],
+    }, () => {}),
+    (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'INVALID_ARGUMENT' && /sourceSystem 过长/.test(err.message),
+  );
 });
 
 test('注册校验：缺少 capabilities 抛 INVALID_ARGUMENT', (t) => {
@@ -60,6 +85,21 @@ test('注册校验：缺少 capabilities 抛 INVALID_ARGUMENT', (t) => {
     () => h.registry.onRegister({ agentId: 'agent-x', name: 'x', version: '1', capabilities: undefined }, () => {}),
     (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'INVALID_ARGUMENT',
   );
+});
+
+test('回环连接地址会被识别为本机执行面', () => {
+  assert.equal(isLoopbackExecutionPeer('127.0.0.1'), true);
+  assert.equal(isLoopbackExecutionPeer('::1'), true);
+  assert.equal(isLoopbackExecutionPeer('::ffff:127.0.0.1'), true);
+  assert.equal(isLoopbackExecutionPeer('10.0.0.25'), false);
+  assert.equal(isLoopbackExecutionPeer(undefined), false);
+});
+
+test('执行面注册仅信任连接对端地址判定本机身份', () => {
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.match(server, /executionWss\.on\('connection', \(ws, request\) => \{\s+const peerAddress = request\.socket\.remoteAddress;/);
+  assert.match(server, /local: isLoopbackExecutionPeer\(peerAddress\),/);
+  assert.doesNotMatch(server, /local:\s*msg\.local/);
 });
 
 test('心跳刷新 lastSeenAt 与 runtimeStatus', (t) => {
@@ -169,4 +209,23 @@ test('重启后从持久化文件恢复为离线', (t) => {
   const agent = registry2.list().agents.find((a) => a.agentId === h.agentId);
   assert.ok(agent);
   assert.equal(agent.connectionStatus, 'offline');
+});
+
+test('历史执行面记录缺少来源系统时标记待补充', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  writeFileSync(h.file, JSON.stringify({
+    agents: [{
+      agentId: 'legacy-agent', name: '旧查询智能体', version: '0.9.0',
+      capabilities: [{ name: 'query_control_platform', description: '旧能力' }],
+      connectionStatus: 'online', runtimeStatus: 'working', lastSeenAt: '2026-10-14T00:00:00.000Z',
+      currentRunId: 'legacy-run', registeredAt: '2026-10-14T00:00:00.000Z',
+    }],
+    runs: [],
+  }), 'utf8');
+  const reloaded = new ExecutionPlaneRegistry({ file: h.file });
+  const agent = reloaded.list().agents.find((item) => item.agentId === 'legacy-agent');
+  assert.equal(agent?.sourceSystem, '历史记录（来源待补充）');
+  assert.equal(agent?.local, false);
+  assert.equal(agent?.connectionStatus, 'offline');
 });
