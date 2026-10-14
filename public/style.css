@@ -2328,9 +2328,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn.danger:hover { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
 
 /* 执行面聊天界面 */
-.execution-chat-layout { display: grid; grid-template-columns: 260px 1fr; gap: 1rem; align-items: stretch; }
-.execution-agents-panel { min-height: 480px; display: flex; flex-direction: column; }
-.execution-agent-list { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; }
+#view-execution.app-view { height: 100%; min-height: 560px; display: flex; flex-direction: column; padding-bottom: 16px; }
+.execution-chat-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px 1fr; gap: 1rem; align-items: stretch; transition: grid-template-columns 0.2s ease; }
+.execution-chat-layout.collapsed { grid-template-columns: 44px 1fr; }
+.execution-chat-layout.collapsed .execution-agents-panel .surface-head > div,
+.execution-chat-layout.collapsed .execution-agent-list { display: none; }
+.execution-chat-layout.collapsed .execution-agents-panel .surface-head { justify-content: center; padding: 0.5rem 0; }
+.execution-agents-panel { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.execution-agent-list { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; overflow-y: auto; }
 .execution-agent-item { display: flex; flex-direction: column; gap: 0.2rem; align-items: flex-start; width: 100%; text-align: left; padding: 0.6rem 0.7rem; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; }
 .execution-agent-item:hover:not(:disabled) { border-color: var(--line); background: var(--hover); }
 .execution-agent-item.selected { border-color: var(--accent); }
@@ -2338,8 +2343,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-agent-name { font-weight: 600; }
 .execution-agent-meta { font-size: 0.75rem; opacity: 0.7; word-break: break-all; }
 
-.execution-chat-panel { display: flex; flex-direction: column; min-height: 480px; }
-.execution-messages { flex: 1; display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; overflow-y: auto; max-height: 520px; }
+.execution-chat-panel { display: flex; flex-direction: column; min-height: 0; }
+.execution-messages { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; overflow-y: auto; }
 .execution-message { display: flex; }
 .execution-message.user { justify-content: flex-end; }
 .execution-message.agent { justify-content: flex-start; }

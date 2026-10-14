@@ -719,6 +719,9 @@ function wireExecutionControls() {
   executionControlsWired = true;
   $('#btn-execution-refresh')?.addEventListener('click', () => loadExecution());
   $('#btn-execution-send')?.addEventListener('click', () => sendExecutionQuery());
+  $('#btn-execution-agents-toggle')?.addEventListener('click', () => {
+    $('.execution-chat-layout')?.classList.toggle('collapsed');
+  });
   $('#execution-chat-input')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') sendExecutionQuery(); });
   $('#execution-agent-list')?.addEventListener('click', (event) => {
     const item = event.target.closest('[data-execution-agent]');
