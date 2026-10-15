@@ -148,7 +148,7 @@ const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appe
     return new ExecutionPlaneRuntimeAdapter(executionPlane, runtimeId);
   }
   return undefined;
-}, findExecutionRun: (runId) => executionPlane.list().runs.find((run) => run.runId === runId) });
+}, findExecutionRun: (runId) => executionPlane.list().runs.find((run) => run.runId === runId), findExecutionIntent: (agentId, capability) => executionPlane.list().agents.find((agent) => agent.agentId === agentId)?.capabilities.find((cap) => cap.name === capability)?.intent });
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)

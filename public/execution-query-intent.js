@@ -260,3 +260,41 @@ export function parseExecutionReasoning(text) {
 export function describeExecutionReasoning(request) {
   return `中台推理（${request.task_type}）`;
 }
+
+// ---------- 通用关键词回退（按 Agent 注册的 intent 解析，供无 LLM 时兜底） ----------
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const GENERIC_CODE_RE = /(?<![A-Za-z0-9])([A-Za-z0-9]+(?:[.:_-][A-Za-z0-9]+)*)(?![A-Za-z0-9])/;
+
+/** 按 Agent 声明的查询语义（intent）做确定性关键词解析；无法识别时返回 null。 */
+export function parseExecutionQueryByIntent(text, intent) {
+  const query = String(text || '').trim();
+  const paths = intent?.paths;
+  if (!query || !Array.isArray(paths) || !paths.length) return null;
+
+  const pathEntry = paths.find((p) => {
+    const keywords = [p.label, ...(p.keywords || [])].filter(Boolean);
+    return keywords.some((keyword) => query.toLowerCase().includes(String(keyword).toLowerCase()));
+  });
+  if (!pathEntry) return null;
+
+  const params = {};
+  const paramList = Array.isArray(pathEntry.params) ? pathEntry.params : [];
+  for (const param of paramList) {
+    const labels = [param.label, ...(param.keywords || [])].filter(Boolean);
+    for (const label of labels) {
+      const match = query.match(new RegExp(`${escapeRegExp(label)}\\s*(?:为|是|:|：)?\\s*([A-Za-z0-9][A-Za-z0-9.:_-]*)`, 'i'));
+      if (match) { params[param.name] = match[1]; break; }
+    }
+  }
+
+  // 兜底：把第一个编码类 token 给第一个参数。
+  if (!Object.keys(params).length && paramList.length) {
+    const codeMatch = query.match(GENERIC_CODE_RE);
+    if (codeMatch) params[paramList[0].name] = codeMatch[1];
+  }
+
+  return { path: pathEntry.path, params };
+}

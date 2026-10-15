@@ -1,7 +1,7 @@
 import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
-import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery, parseExecutionReasoning } from './execution-query-intent.js?v=execution-query-intent-v4-20261014';
+import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery, parseExecutionReasoning, parseExecutionQueryByIntent } from './execution-query-intent.js?v=execution-query-intent-v5-20261015';
 import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
@@ -43,7 +43,7 @@ const els = {
   navTaskCount: $('#nav-task-count'), taskDraftCount: $('#task-draft-count'), taskActiveCount: $('#task-active-count'),
   taskVerifyCount: $('#task-verify-count'), taskAttentionCount: $('#task-attention-count'), taskCaseSelect: $('#task-case-select'),
   taskPriority: $('#task-priority'), taskCreateControls: $('#task-create-controls'), taskCreateHint: $('#task-create-hint'), taskReadonlyNote: $('#task-readonly-note'), btnTaskCreate: $('#btn-task-create'),
-  btnTasksRefresh: $('#btn-tasks-refresh'), controlledTaskSection: $('#controlled-task-section'), taskListCount: $('#task-list-count'), taskList: $('#task-list'),
+  btnTasksRefresh: $('#btn-tasks-refresh'), controlledTaskSection: $('#controlled-task-section'), taskListCount: $('#task-list-count'), taskSearch: $('#task-search'), taskList: $('#task-list'),
   btnTaskManualCreate: $('#btn-task-manual-create'), manualTaskCreatePanel: $('#manual-task-create-panel'), manualTaskForm: $('#manual-task-form'), manualTaskProject: $('#manual-task-project'), taskSearch: $('#task-search'), taskStatusFilter: $('#task-status-filter'), taskProjectFilter: $('#task-project-filter'), taskBoard: $('#task-board'),
   btnProjectsRefresh: $('#btn-projects-refresh'), btnProjectCreate: $('#btn-project-create'), projectCreatePanel: $('#project-create-panel'), projectForm: $('#project-form'), projectSearch: $('#project-search'), projectStatusFilter: $('#project-status-filter'), projectList: $('#project-list'), projectWorkspace: $('#project-workspace'),
   btnG0Refresh: $('#btn-g0-refresh'), g0Readiness: $('#g0-readiness'), g0DecisionStatus: $('#g0-decision-status'),
@@ -795,9 +795,13 @@ function selectExecutionAgent(agentId) {
   if (subtitle) subtitle.textContent = '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
 }
 
-function selectedAgentHasIntent() {
+function selectedAgentIntent() {
   const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
-  return Boolean(agent && Array.isArray(agent.capabilities) && agent.capabilities.some((cap) => cap.intent));
+  return agent?.capabilities?.find((cap) => cap.intent)?.intent;
+}
+
+function selectedAgentHasIntent() {
+  return Boolean(selectedAgentIntent());
 }
 
 function executionMessageBubble(role, text) {
@@ -886,6 +890,12 @@ async function sendExecutionQuery() {
     if (remote?.kind === 'query') {
       const query = { path: remote.path, params: remote.params };
       await dispatchExecution(selectedExecutionAgent, 'query_control_platform', query, `正在查询：${describeExecutionQuery(query)}…`);
+      return;
+    }
+    // LLM 失败/不可用 → 按 Agent 注册的 intent 做关键词回退（确定性，不依赖模型）。
+    const fallback = parseExecutionQueryByIntent(text, selectedAgentIntent());
+    if (fallback) {
+      await dispatchExecution(selectedExecutionAgent, 'query_control_platform', { path: fallback.path, params: fallback.params }, `正在查询：${describeExecutionQuery(fallback)}…`);
       return;
     }
     appendExecutionMessage('agent', '意图识别失败，请换一种说法重试', null);
@@ -4041,7 +4051,12 @@ function renderTaskCenter() {
   els.taskListCount.textContent = `${controlledTasks.length} 项任务`;
   els.taskListCount.className = `status-pill ${attention ? 'warn' : 'neutral'}`;
 
-  els.taskList.innerHTML = display.length ? display.map(({ task, state, capabilities }) => {
+  const searchTerm = (els.taskSearch?.value || '').trim().toLowerCase();
+  const visible = searchTerm
+    ? display.filter(({ task }) => [task.title, task.caseId, task.taskId, task.currentAssignee?.actorId].some((value) => value && String(value).toLowerCase().includes(searchTerm)))
+    : display;
+
+  els.taskList.innerHTML = visible.length ? visible.map(({ task, state, capabilities }) => {
     const details = taskDetails.get(task.taskId);
     const agentCandidates = taskAgentCandidates.get(task.taskId);
     const history = Array.isArray(details?.history) ? details.history : [];
@@ -4056,6 +4071,7 @@ function renderTaskCenter() {
       capabilities.canSupplementEvidence ? `<button class="btn ghost compact" type="button" data-task-action="evidence" data-task-id="${esc(task.taskId)}"><i data-lucide="paperclip"></i>补充证据</button>` : '',
       capabilities.canSubmitPendingResult ? `<button class="btn secondary compact" type="button" data-task-action="result" data-task-id="${esc(task.taskId)}"><i data-lucide="file-check-2"></i>登记待核验结果</button>` : '',
       capabilities.canVerify ? `<button class="btn primary compact" type="button" data-task-action="verify" data-task-id="${esc(task.taskId)}"><i data-lucide="badge-check"></i>业务核验</button>` : '',
+      capabilities.canDelete ? `<button class="btn ghost compact danger" type="button" data-task-action="delete" data-task-id="${esc(task.taskId)}"><i data-lucide="trash-2"></i>删除</button>` : '',
     ].filter(Boolean).join('');
     return `<article class="task-card${state.needsAttention ? ' needs-attention' : ''}">
       <div class="task-card-top"><span class="case-source ${esc(task.source)}">${esc(operatingSourceLabel(task.source))}</span><code>${esc(task.taskId.slice(-12))}</code><span class="task-card-spacer"></span><b class="status-pill ${esc(state.tone)}">${esc(state.label)}${state.overdue ? ' · 已逾期' : ''}</b></div>
@@ -4069,7 +4085,7 @@ function renderTaskCenter() {
       ${agentCandidates ? renderAgentCandidatePanel(agentCandidates) : ''}
       ${details ? `${renderAgentRunResult(details.task?.agentRun)}<ol class="task-history">${history.length ? history.map((entry) => `<li><span>${esc(formatHarborTime(entry.occurredAt))}</span><b>${esc(entry.eventType)}</b><p>${esc(entry.actor)} · ${esc(entry.reason)}</p></li>`).join('') : '<li><p>暂无历史记录</p></li>'}</ol>` : ''}
     </article>`;
-  }).join('') : '<div class="dashboard-loading">暂无责任任务。请先从上方选择经营事项创建任务。</div>';
+  }).join('') : (searchTerm ? '<div class="dashboard-loading">没有匹配的任务。</div>' : '<div class="dashboard-loading">暂无责任任务。请先从上方选择经营事项创建任务。</div>');
   populateCollaborationProjectOptions();
   renderCollaborationTaskBoard();
   refreshIcons($('#view-tasks'));
@@ -4236,6 +4252,20 @@ async function performTaskAction(taskId, action) {
       } else {
         toast(`Agent 运行失败：${message}`, true);
       }
+    }
+    return;
+  }
+  if (action === 'delete') {
+    if (!taskUiCapabilities(task, authSession, registeredTaskOwnerActorId(), g0DecisionSnapshot).canDelete) { toast('当前会话无权删除该任务。', true); return; }
+    if (!window.confirm('确认删除该任务？删除后不可恢复。')) return;
+    try {
+      await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}`, 'DELETE', {});
+      taskDetails.delete(taskId);
+      taskAgentCandidates.delete(taskId);
+      await loadTasks({ silent: true });
+      toast('任务已删除');
+    } catch (error) {
+      toast(`删除失败：${error?.message || '未知错误'}`, true);
     }
     return;
   }
@@ -5880,6 +5910,7 @@ els.dailyQuestionForm.addEventListener('submit', saveDailyQuestions);
 els.dailyQuestionModal.addEventListener('mousedown', (event) => { if (event.target === els.dailyQuestionModal) closeDailyQuestionModal(); });
 els.btnCasesRefresh.addEventListener('click', () => loadOperatingCenter());
 els.btnTasksRefresh.addEventListener('click', () => loadTasks());
+els.taskSearch?.addEventListener('input', () => renderTaskCenter());
 els.btnG0Refresh.addEventListener('click', () => loadG0DecisionView());
 els.btnOpenG0Governance?.addEventListener('click', () => {
   if (!g0ConfigEntryVisible(authSession)) return;

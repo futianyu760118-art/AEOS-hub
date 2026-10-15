@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeExecutionQuery, parseExecutionQuery } from '../public/execution-query-intent.js';
+import { describeExecutionQuery, parseExecutionQuery, parseExecutionQueryByIntent } from '../public/execution-query-intent.js';
 
 const now = new Date('2026-10-14T08:00:00.000Z');
 
@@ -104,4 +104,14 @@ test('describes the bounded query scope before dispatch', () => {
   assert.ok(!('error' in result));
   assert.match(describeExecutionQuery(result), /2026-10-12/);
   assert.match(describeExecutionQuery(result), /最多 20 条/);
+});
+
+test('parseExecutionQueryByIntent 按 intent 关键词匹配非中台路径', () => {
+  const intent = { paths: [{ path: '/api/boss/orders', label: '订单', keywords: ['订单', 'order'], params: [{ name: 'order_no', label: '订单号' }] }] };
+  assert.deepEqual(parseExecutionQueryByIntent('查订单 BO-1001', intent), { path: '/api/boss/orders', params: { order_no: 'BO-1001' } });
+});
+
+test('parseExecutionQueryByIntent 无匹配时返回 null', () => {
+  const intent = { paths: [{ path: '/api/boss/orders', label: '订单' }] };
+  assert.equal(parseExecutionQueryByIntent('随便说点什么', intent), null);
 });

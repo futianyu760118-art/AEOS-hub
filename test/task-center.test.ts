@@ -301,3 +301,17 @@ test('blocks every non-human identity format from human task execution and verif
     );
   }
 });
+
+test('deleteTask 删除任务及其历史记录', (t) => {
+  const store = fixture(t);
+  const task = createTask(store);
+  assert.deepEqual(store.deleteTask({ taskId: task.taskId }), { deleted: true });
+  const snapshot = store.load();
+  assert.equal(snapshot.tasks.some((candidate) => candidate.taskId === task.taskId), false);
+  assert.equal(snapshot.history.some((entry) => entry.taskId === task.taskId), false);
+});
+
+test('deleteTask 删除不存在的任务返回 deleted:false', (t) => {
+  const store = fixture(t);
+  assert.deepEqual(store.deleteTask({ taskId: 'task-none' }), { deleted: false });
+});

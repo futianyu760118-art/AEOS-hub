@@ -605,6 +605,17 @@ export class TaskCenterStore {
     });
   }
 
+  deleteTask(input: Record<string, unknown>): { deleted: boolean } {
+    const taskId = requiredString(input, 'taskId', 'taskId', 160);
+    return this.mutate((snapshot) => {
+      const index = snapshot.tasks.findIndex((candidate) => candidate.taskId === taskId);
+      if (index < 0) return { deleted: false };
+      snapshot.tasks.splice(index, 1);
+      snapshot.history = snapshot.history.filter((entry) => entry.taskId !== taskId);
+      return { deleted: true };
+    });
+  }
+
   recordPendingResult(input: Record<string, unknown>): TaskRecord {
     const taskId = requiredString(input, 'taskId', 'taskId', 160);
     const resultId = requiredString(input, 'resultId', 'resultId', 160);

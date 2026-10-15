@@ -40,6 +40,7 @@ export const COMPANY_CONTROL_QUERY_INTENT = {
         { name: 'promised_date_end', label: '交期止' },
       ],
       output: { title: ['order_no'], fields: ['customer', 'customer_code', 'product_name', 'product_code', 'status', 'promised_date', 'order_amount', 'risk_level'] },
+      sources: [{ source: 'order', param: 'keyword' }],
     },
     {
       path: '/external/material-kitting/results',
@@ -54,6 +55,7 @@ export const COMPANY_CONTROL_QUERY_INTENT = {
         { name: 'required_date_end', label: '需求日期止' },
       ],
       output: { title: ['demand_no'], fields: ['demand_line_no', 'kit_status', 'kit_rate_by_item', 'kit_rate_by_qty', 'shortage_item_count', 'shortage_amount', 'required_date', 'risk_level'] },
+      sources: [{ source: 'kitting', param: 'demand_no', lineParam: 'demand_line_no', split: ':' }],
     },
     {
       path: '/external/material-kitting/shortages',

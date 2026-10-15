@@ -1,7 +1,9 @@
 // 执行面能力注册表：把「G1 任务 → 执行面派单(capability + input)」的映射做成可插拔能力。
 // 接入新智能体 = 在这里 register 一个新能力解析器，无需改动适配器 / task-api / server。
+import { type QueryIntent } from './execution-intent-types.ts';
+
 export type ExecutionCapabilityInput = Record<string, unknown>;
-export type ExecutionCapabilityResolver = (task: { businessObjectRef: string; title: string }) => ExecutionCapabilityInput;
+export type ExecutionCapabilityResolver = (task: { businessObjectRef: string; title: string }, intent?: QueryIntent) => ExecutionCapabilityInput;
 export interface ExecutionDispatch {
   capability: string;
   input: ExecutionCapabilityInput;
@@ -18,10 +20,10 @@ export function hasExecutionCapability(capability: string): boolean {
   return resolvers.has(capability);
 }
 
-export function resolveExecutionDispatch(task: { businessObjectRef: string; title: string }, capability: string): ExecutionDispatch {
+export function resolveExecutionDispatch(task: { businessObjectRef: string; title: string }, capability: string, intent?: QueryIntent): ExecutionDispatch {
   const resolver = resolvers.get(capability);
   if (!resolver) throw new Error(`未注册执行面能力: ${capability}`);
-  return { capability, input: resolver(task) };
+  return { capability, input: resolver(task, intent) };
 }
 
 // ---------- businessObjectRef 解析 ----------
@@ -59,8 +61,28 @@ export const CONTROL_PLATFORM_READONLY_PATHS = [
   '/external/production/capacity/list',
 ] as const;
 
-export function deriveExecutionQuery(businessObjectRef: string): { path: string; params: Record<string, string> } {
+export function deriveExecutionQuery(businessObjectRef: string, intent?: QueryIntent): { path: string; params: Record<string, string> } {
   const { source, entityId } = parseBusinessObjectRef(businessObjectRef);
+  // 通用：按 Agent 声明的 intent.sources 推导（新系统在此声明自己的业务对象映射）。
+  const rule = intent?.paths
+    ?.flatMap((p) => (p.sources || []).map((s) => ({ ...s, path: p.path })))
+    .find((s) => s.source === source);
+  if (rule) {
+    const params: Record<string, string> = {};
+    if (rule.split) {
+      const idx = entityId.indexOf(rule.split);
+      if (idx >= 0) {
+        params[rule.param] = entityId.slice(0, idx);
+        if (rule.lineParam) params[rule.lineParam] = entityId.slice(idx + rule.split.length);
+      } else {
+        params[rule.param] = entityId;
+      }
+    } else {
+      params[rule.param] = entityId;
+    }
+    return { path: rule.path, params };
+  }
+  // 旧的中台硬编码兜底（无 intent 时向后兼容）。
   if (source === 'kitting') {
     const colon = entityId.indexOf(':');
     const params: Record<string, string> = { demand_no: colon >= 0 ? entityId.slice(0, colon) : entityId };
@@ -124,5 +146,5 @@ export function validateReasoningInput(input: Record<string, unknown>): string |
   return null;
 }
 
-registerExecutionCapability('query_control_platform', (task) => deriveExecutionQuery(task.businessObjectRef));
+registerExecutionCapability('query_control_platform', (task, intent) => deriveExecutionQuery(task.businessObjectRef, intent));
 registerExecutionCapability('reason_control_platform', (task) => deriveExecutionReasoning(task));

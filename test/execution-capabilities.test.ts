@@ -43,6 +43,16 @@ test('未知 source 抛错', () => {
   assert.throws(() => deriveExecutionQuery('business://quality/xxx'), /暂不支持/);
 });
 
+test('deriveExecutionQuery 按 intent.sources 派生非中台查询', () => {
+  const intent = { paths: [{ path: '/api/boss/orders', label: '订单', sources: [{ source: 'boss_order', param: 'order_no' }] }] };
+  assert.deepEqual(deriveExecutionQuery('business://boss_order/BO-1001', intent), { path: '/api/boss/orders', params: { order_no: 'BO-1001' } });
+});
+
+test('deriveExecutionQuery 按 intent.sources 的 split 拆分实体 ID', () => {
+  const intent = { paths: [{ path: '/api/boss/kitting', label: '齐套', sources: [{ source: 'boss_kitting', param: 'demand_no', lineParam: 'line_no', split: ':' }] }] };
+  assert.deepEqual(deriveExecutionQuery('business://boss_kitting/ABC-1:18', intent), { path: '/api/boss/kitting', params: { demand_no: 'ABC-1', line_no: '18' } });
+});
+
 test('注册新能力后可解析派单（接新智能体 = 新增一条注册）', () => {
   registerExecutionCapability('analyze_order_risk', (task) => ({ orderNo: task.businessObjectRef.split('/').pop() }));
   assert.equal(hasExecutionCapability('analyze_order_risk'), true);

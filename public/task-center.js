@@ -98,6 +98,7 @@ export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g
     canSubmitPendingResult: operator && policy.canSubmitPendingResult,
     canVerify: verifier && policy.canVerify,
     canReject: verifier && policy.canVerify,
+    canDelete: gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'owner')),
     isReadOnly: !gate.allowed || (!manager && !operator && !verifier),
     mutationGate: gate.code,
   };

@@ -902,7 +902,7 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .task-project-link-form { display: flex; align-items: end; flex-wrap: wrap; gap: 7px; margin-top: 10px; border-top: 1px solid var(--line-subtle); padding-top: 10px; }
 .task-project-link-form label { display: flex; min-width: 220px; flex: 1 1 280px; flex-direction: column; gap: 4px; color: var(--text-3); font-size: 10px; font-weight: 600; }
 .task-project-link-form select { height: 32px; border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 0 8px; color: var(--text-2); font-size: 11px; }
-.task-list { display: flex; flex-direction: column; gap: 7px; padding: 8px; }
+.task-list { display: flex; flex-direction: column; gap: 7px; padding: 8px; max-height: 55vh; overflow-y: auto; }
 .task-card { border: 1px solid var(--line-subtle); border-radius: 7px; background: #fff; padding: 11px; transition: border-color 120ms ease, background-color 120ms ease; }
 .task-card:hover { border-color: rgba(77, 117, 217, .38); background: #fbfcff; }
 .task-card.needs-attention { border-left: 3px solid var(--warning); padding-left: 9px; }

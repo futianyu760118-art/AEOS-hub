@@ -3,6 +3,7 @@ import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './ag
 import { recommendTaskAssignees, validateAgentAssignment } from './task-dispatch.ts';
 import { startAgentTaskRun, type AgentTaskRunDeps } from './agent-task-runner.ts';
 import { hasExecutionCapability, resolveExecutionDispatch } from './execution-capabilities.ts';
+import { type QueryIntent } from './execution-intent-types.ts';
 import { loadHarbor, type HarborSnapshot } from './harbor-store.ts';
 import { OperatingCenterStore, type OperatingCase, type OperatingResult } from './operating-center.ts';
 import { TaskCenterStore, type ProjectRecord, type TaskCenterSnapshot, type TaskRecord } from './task-center.ts';
@@ -32,6 +33,7 @@ type TaskApiDependencies = {
   loadHarbor?: () => HarborSnapshot;
   resolveRuntime?: (runtimeId: string) => (AgentTaskRunDeps['runtime'] & { runtimeKind?: string }) | undefined;
   findExecutionRun?: (runId: string) => ExecutionRunRecord | undefined;
+  findExecutionIntent?: (agentId: string, capability: string) => QueryIntent | undefined;
   now?: () => Date;
 };
 
@@ -202,6 +204,15 @@ export class TaskApi {
     }
 
     const detailMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (detailMatch && method === 'DELETE') {
+      const task = this.requireMutationTask(decoded(detailMatch[1] ?? ''), actor, 'delete');
+      const ownerActorId = this.requireG1Scope(actor);
+      if (!ownerActorId) return this.denied(actor, 'delete', 'G0_SCOPE_REQUIRED', task);
+      if (!actor.roles.includes('manager') && !actor.roles.includes('owner')) return this.denied(actor, 'delete', 'OWNER_ROLE_REQUIRED', task);
+      const result = this.dependencies.taskCenter.deleteTask({ taskId: task.taskId });
+      const auditStatus = this.audit(task, actor, 'task_deleted');
+      return { status: 200, body: { deleted: result.deleted, committed: result.deleted, auditStatus } };
+    }
     if (detailMatch) {
       this.method(method, 'GET');
       const task = this.requireTask(decoded(detailMatch[1] ?? ''), actor);
@@ -401,8 +412,11 @@ export class TaskApi {
     const executionCapability = runtime.runtimeKind === 'remote-execution-agent'
       ? agent.registration.allowedRuntimeCapabilities.find((capability) => hasExecutionCapability(capability))
       : undefined;
+    const executionIntent = executionCapability
+      ? this.dependencies.findExecutionIntent?.(runtimeId, executionCapability)
+      : undefined;
     const runtimeInput = executionCapability
-      ? JSON.stringify(resolveExecutionDispatch({ businessObjectRef: task.businessObjectRef, title: task.title }, executionCapability))
+      ? JSON.stringify(resolveExecutionDispatch({ businessObjectRef: task.businessObjectRef, title: task.title }, executionCapability, executionIntent))
       : undefined;
 
     const run = await startAgentTaskRun(
