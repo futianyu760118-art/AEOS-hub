@@ -31,7 +31,7 @@
 
 | type | 字段 | 说明 |
 |---|---|---|
-| `register` | `agentId, name, version, protocolVersion, sourceSystem, capabilities:[{name,description,version?,inputSchemaVersion?,outputSchemaVersion?}]` | 连接建立后立即发送；`sourceSystem` 为来源业务系统名称，`capabilities` 非空；`protocolVersion` 当前支持 `1.0` |
+| `register` | `agentId, name, version, protocolVersion, sourceSystem, capabilities:[{name,description,version?,inputSchema?,outputSchema?,constraints?}]` | 连接建立后立即发送；`sourceSystem` 为来源业务系统名称，`capabilities` 非空；`protocolVersion` 当前支持 `1.0` |
 | `heartbeat` | `status(idle/working/error), currentRunId?` | 周期心跳 |
 | `run_update` | `runId, state:'running'` | 开始执行时的进度上报（可选） |
 | `run_complete` | `runId, result` | 查询成功，`result` 为结构化结果 |
@@ -40,6 +40,8 @@
 `sourceSystem` 是每个新接入智能体的必填身份信息（最长 160 字符），例如“公司中控平台”或“供应链系统”。
 “本机 / 远程”不由执行面上报：管理面根据控制通道的回环地址自动判定并展示，防止客户端伪造身份。
 `protocolVersion` 当前仅支持 `1.0`；执行面上报不兼容版本时，管理面会拒绝注册并返回明确错误（`PROTOCOL_VERSION_UNSUPPORTED`），不会静默失败。
+
+`capabilities` 中的每条能力为自描述对象：`name`/`description` 之外，可带 `inputSchema`、`outputSchema`、`constraints`（详见 §4）。管理面据此在派单前校验输入、在结果回传时校验输出，不再内置任何具体业务校验。
 
 ### 3.2 管理面 → 执行面
 
@@ -52,21 +54,28 @@
 
 ## 4. 能力注册表（扩展点）
 
-管理面通过 `register.capabilities` 与 `dispatch.capability` 识别能力。每条能力契约包含：
+管理面通过 `register.capabilities` 与 `dispatch.capability` 识别能力。每条能力是**自描述**的，包含：
 
 | 字段 | 说明 |
 |---|---|
 | `name` | 能力标识（如 `query_control_platform`） |
-| `input` | `dispatch.input` 结构，由管理面从 G1 任务自动推导 |
-| `output` | `run_complete.result` 结构，由执行面回传 |
+| `description` | 能力说明（可选） |
+| `version` | 能力版本（可选） |
+| `inputSchema` | `dispatch.input` 的结构 schema（可选；有则管理面在派单前校验） |
+| `outputSchema` | `run_complete.result` 的结构 schema（可选；有则管理面在结果回传时校验） |
+| `constraints` | 约束：`readOnly`（只读声明）、`requireEvidence`（结果要求证据） |
 
-**接新智能体 = 新增一条能力定义**（执行面在 `register.capabilities` 声明新能力 + 管理面注册一个新解析器），
-通用传输协议（§1–§3、§5–§7）不动。下面 §4.1–§4.5 是当前唯一内置能力 `query_control_platform` 的完整契约。
+`schema` 用 JSON Schema 的一个极小子集：`type`(object/array/string/number/boolean)、`properties`、`items`、`required`、`enum`、`maxLength`、`minItems`。
 
-- 能力名：`query_control_platform`（中台只读查询）。
-- `input` 结构：`{ path: string, params: object }`，其中 `path` 必须是下表白名单之一。
-- `output`：中台统一信封的 `data` 字段（结构化查询结果）。
-- 执行面据此调用**目标系统（公司中控）只读上游接口**并回传结果。
+### 管理面通用校验规则（不针对任何具体能力）
+
+1. **只读 fail-closed**：能力未声明 `constraints.readOnly: true` 时，管理面拒绝派单（错误码 `WRITE_FORBIDDEN`）。
+2. **输入校验**：能力声明了 `inputSchema` 时，管理面在派单前按 schema 校验 `dispatch.input`，不通过则拒绝（`INVALID_ARGUMENT`）。
+3. **结果校验（软失败）**：能力声明了 `outputSchema` 或 `constraints.requireEvidence` 时，管理面校验 `run_complete.result`；不通过不丢弃结果，而是标记 `data_confidence: "low"` 并附 `validation_note`。
+
+**接新智能体 = 声明新能力 schema + 写一个新 adapter**（查询类可直接复用通用 HTTP 适配器 `createHttpQueryAdapter`，鉴权/端点/响应映射均可配），管理面与通用传输协议（§1–§3、§5–§7）**一律不改**。
+
+下面 §4.1–§4.6 是当前已接入能力「公司中控平台」的完整契约，作为自描述能力的**示例**；接入其他系统时按同样格式声明自己的 schema 即可。
 
 ### 4.1 签名（HMAC-SHA256）
 

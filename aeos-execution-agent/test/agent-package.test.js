@@ -2,15 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerCapability, capabilityHandlers, capabilityDefinitions } from '../src/capabilities.js';
 import { loadConfig } from '../src/config.js';
-import { createQueryAdapter } from '../src/adapters/query-adapter.js';
+import { createHttpQueryAdapter } from '../src/adapters/query-adapter.js';
+import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS } from '../src/adapters/company-control-query.js';
 import { createReasoningAdapter } from '../src/adapters/reasoning-adapter.js';
 
-test('能力插件化注册并返回处理器与定义', () => {
-  registerCapability({ name: 'query_x', description: '查询 X', handler: async () => ({}) });
+test('能力插件化注册并返回处理器与自描述定义', () => {
+  registerCapability({ name: 'query_x', description: '查询 X', inputSchema: { type: 'object' }, constraints: { readOnly: true }, handler: async () => ({}) });
   const handlers = capabilityHandlers();
   assert.equal(typeof handlers.query_x, 'function');
   const definitions = capabilityDefinitions();
-  assert.ok(definitions.some((c) => c.name === 'query_x' && c.description === '查询 X'));
+  assert.ok(definitions.some((c) => c.name === 'query_x' && c.description === '查询 X' && c.inputSchema?.type === 'object' && c.constraints?.readOnly === true));
 });
 
 test('能力注册缺 handler 抛错', () => {
@@ -32,10 +33,19 @@ test('配置从环境变量读取，缺少必填项抛错', () => {
   assert.equal(config.protocolVersion, '1.0');
 });
 
-test('查询适配器拒绝白名单外 path 与缺 path', async () => {
-  const query = createQueryAdapter({ baseUrl: 'https://x/api/v1', appKey: 'k', appSecret: 's' });
+test('中台查询适配器拒绝白名单外 path 与缺 path', async () => {
+  const query = createCompanyControlQueryAdapter({ baseUrl: 'https://x/api/v1', appKey: 'k', appSecret: 's' });
   await assert.rejects(() => query({ path: '', params: {} }, undefined), /缺少 path/);
   await assert.rejects(() => query({ path: '/external/orders/delete', params: {} }, undefined), /白名单/);
+});
+
+test('通用查询适配器按配置的端点白名单拒绝（可插拔）', async () => {
+  const query = createHttpQueryAdapter({ baseUrl: 'https://x', endpoints: { '/allowed': true }, auth: { type: 'bearer', token: 't' } });
+  await assert.rejects(() => query({ path: '/not-allowed', params: {} }, undefined), /白名单/);
+});
+
+test('中台端点表包含 18 个只读端点', () => {
+  assert.equal(COMPANY_CONTROL_PATHS.length, 18);
 });
 
 test('推理适配器返回结构正确且明确未接通（不伪造）', async () => {

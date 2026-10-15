@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { validateExecutionInput, validateReasoningResult } from './execution-capabilities.ts';
+import { validateAgainstSchema, type Schema } from './schema-validation.ts';
 
 export type ExecutionAgentRuntimeStatus = 'idle' | 'working' | 'error';
 export type ExecutionAgentConnectionStatus = 'online' | 'offline';
@@ -16,6 +16,9 @@ export interface ExecutionAgentCapability {
   version?: string;
   inputSchemaVersion?: string;
   outputSchemaVersion?: string;
+  inputSchema?: Schema;
+  outputSchema?: Schema;
+  constraints?: { readOnly?: boolean; requireEvidence?: boolean };
 }
 
 export interface ExecutionAgentRecord {
@@ -82,6 +85,42 @@ function requireString(value: unknown, field: string, maxLen = 200): string {
   return trimmed;
 }
 
+const SCHEMA_TYPES = new Set(['object', 'array', 'string', 'number', 'boolean']);
+const MAX_SCHEMA_BYTES = 8192;
+
+function parseSchema(value: unknown, field: string): Schema | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new ExecutionPlaneError('INVALID_ARGUMENT', `${field} 必须是对象`);
+  }
+  if (JSON.stringify(value).length > MAX_SCHEMA_BYTES) {
+    throw new ExecutionPlaneError('INVALID_ARGUMENT', `${field} 过大（最多 ${MAX_SCHEMA_BYTES} 字节）`);
+  }
+  const type = (value as Record<string, unknown>).type;
+  if (typeof type !== 'string' || !SCHEMA_TYPES.has(type)) {
+    throw new ExecutionPlaneError('INVALID_ARGUMENT', `${field}.type 必须是 object/array/string/number/boolean`);
+  }
+  return value as Schema;
+}
+
+function parseConstraints(value: unknown): { readOnly?: boolean; requireEvidence?: boolean } | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints 必须是对象');
+  }
+  const record = value as Record<string, unknown>;
+  const constraints: { readOnly?: boolean; requireEvidence?: boolean } = {};
+  if (record.readOnly !== undefined) {
+    if (typeof record.readOnly !== 'boolean') throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints.readOnly 必须是布尔值');
+    constraints.readOnly = record.readOnly;
+  }
+  if (record.requireEvidence !== undefined) {
+    if (typeof record.requireEvidence !== 'boolean') throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints.requireEvidence 必须是布尔值');
+    constraints.requireEvidence = record.requireEvidence;
+  }
+  return Object.keys(constraints).length ? constraints : undefined;
+}
+
 function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
   if (!Array.isArray(value)) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capabilities 必须是数组');
   if (value.length === 0) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capabilities 不能为空');
@@ -91,12 +130,18 @@ function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
     const name = requireString(record.name, 'capability.name', 100);
     const description = typeof record.description === 'string' ? record.description.slice(0, 500) : '';
     const optional = (field: string) => (typeof record[field] === 'string' ? record[field].slice(0, 40) : undefined);
+    const inputSchema = parseSchema(record.inputSchema, 'capability.inputSchema');
+    const outputSchema = parseSchema(record.outputSchema, 'capability.outputSchema');
+    const constraints = parseConstraints(record.constraints);
     return {
       name,
       description,
       ...(optional('version') ? { version: optional('version') } : {}),
       ...(optional('inputSchemaVersion') ? { inputSchemaVersion: optional('inputSchemaVersion') } : {}),
       ...(optional('outputSchemaVersion') ? { outputSchemaVersion: optional('outputSchemaVersion') } : {}),
+      ...(inputSchema ? { inputSchema } : {}),
+      ...(outputSchema ? { outputSchema } : {}),
+      ...(constraints ? { constraints } : {}),
     };
   });
 }
@@ -247,24 +292,20 @@ export class ExecutionPlaneRegistry {
   onRunComplete(agentId: string, input: { runId?: unknown; result?: unknown }): void {
     const runId = requireString(input.runId, 'runId', 160);
     const run = this.requireRun(runId, agentId);
+    const entry = this.requireAgent(agentId);
     run.state = 'completed';
-    if (run.capability === 'reason_control_platform') {
-      const issue = validateReasoningResult(input.result);
-      if (issue) {
-        // 无 evidence_refs 的推理结论：不静默丢弃，标记低置信度并附带校验说明。
-        run.result = {
-          ...(input.result && typeof input.result === 'object' ? (input.result as Record<string, unknown>) : {}),
-          data_confidence: 'low',
-          validation_note: issue,
-        };
-      } else {
-        run.result = input.result ?? null;
-      }
+    const cap = entry.record.capabilities.find((item) => item.name === run.capability);
+    const result = input.result ?? null;
+    if (cap?.outputSchema || cap?.constraints?.requireEvidence) {
+      const issue = cap.outputSchema ? validateAgainstSchema(result, cap.outputSchema) : null;
+      // 未通过结果 schema（如缺 evidence_refs）的结论：不静默丢弃，标记低置信度并附带校验说明。
+      run.result = issue
+        ? { ...(result && typeof result === 'object' ? (result as Record<string, unknown>) : {}), data_confidence: 'low', validation_note: issue }
+        : result;
     } else {
-      run.result = input.result ?? null;
+      run.result = result;
     }
     run.endedAt = this.nowIso();
-    const entry = this.requireAgent(agentId);
     entry.record.currentRunId = null;
     entry.record.runtimeStatus = 'idle';
     this.persist();
@@ -292,12 +333,18 @@ export class ExecutionPlaneRegistry {
     if (entry.record.connectionStatus !== 'online') {
       throw new ExecutionPlaneError('AGENT_OFFLINE', `执行面 ${agentId} 不在线，无法派单`);
     }
-    if (!entry.record.capabilities.some((cap) => cap.name === capability)) {
+    const cap = entry.record.capabilities.find((item) => item.name === capability);
+    if (!cap) {
       throw new ExecutionPlaneError('CAPABILITY_UNSUPPORTED', `执行面 ${agentId} 不支持能力 ${capability}`);
     }
+    if (cap.constraints?.readOnly !== true) {
+      throw new ExecutionPlaneError('WRITE_FORBIDDEN', `能力 ${capability} 未声明只读，试点仅允许只读能力`);
+    }
     const inputRecord = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
-    const validationError = validateExecutionInput(capability, inputRecord);
-    if (validationError) throw new ExecutionPlaneError('INVALID_ARGUMENT', validationError);
+    if (cap.inputSchema) {
+      const validationError = validateAgainstSchema(inputRecord, cap.inputSchema);
+      if (validationError) throw new ExecutionPlaneError('INVALID_ARGUMENT', validationError);
+    }
     const runId = `exec-run-${this.idFactory()}`;
     const run: ExecutionRunRecord = {
       runId,

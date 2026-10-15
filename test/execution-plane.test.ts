@@ -5,6 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from '../src/execution-plane.ts';
 
+const QUERY_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', enum: ['/external/orders/list', '/external/material-kitting/shortages'] },
+    params: { type: 'object' },
+  },
+  required: ['path'],
+};
+
 interface Harness {
   registry: ExecutionPlaneRegistry;
   file: string;
@@ -30,7 +39,13 @@ function makeHarness(t: { after: (fn: () => void) => void }): Harness {
   });
   const agentId = 'agent-query-1';
   registry.onRegister(
-    { agentId, name: '查询智能体', version: '1.0.0', sourceSystem: '公司中控平台', capabilities: [{ name: 'query_control_platform', description: '中台只读查询' }] },
+    {
+      agentId,
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
     (msg) => sent.push(msg),
   );
   return {
@@ -248,11 +263,36 @@ test('派单拒绝白名单外的查询 path', (t) => {
   );
 });
 
+test('派单未声明只读的能力抛 WRITE_FORBIDDEN', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  h.registry.onRegister(
+    { agentId: 'write-agent', name: '写操作智能体', version: '1', sourceSystem: 's', capabilities: [{ name: 'write_capability', description: '未声明只读' }] },
+    () => {},
+  );
+  assert.throws(
+    () => h.registry.dispatch('write-agent', 'write_capability', {}),
+    (err: unknown) => err instanceof ExecutionPlaneError && err.code === 'WRITE_FORBIDDEN',
+  );
+});
+
 test('推理结果缺少 evidence_refs 标记低置信度', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
   h.registry.onRegister(
-    { agentId: 'reason-agent', name: '推理智能体', version: '1', sourceSystem: 's', capabilities: [{ name: 'reason_control_platform', description: '' }] },
+    {
+      agentId: 'reason-agent',
+      name: '推理智能体',
+      version: '1',
+      sourceSystem: 's',
+      capabilities: [{
+        name: 'reason_control_platform',
+        description: '中台推理',
+        inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, task_type: { type: 'string' } }, required: ['prompt', 'task_type'] },
+        outputSchema: { type: 'object', properties: { conclusions: { type: 'array', items: { type: 'object', properties: { evidence_refs: { type: 'array', minItems: 1 } }, required: ['evidence_refs'] } } } },
+        constraints: { readOnly: true, requireEvidence: true },
+      }],
+    },
     () => {},
   );
   const { runId } = h.registry.dispatch('reason-agent', 'reason_control_platform', { prompt: '分析订单', task_type: 'order_delivery_analysis', constraints: { read_only: true, require_evidence: true } });

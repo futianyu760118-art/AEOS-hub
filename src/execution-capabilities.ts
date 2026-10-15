@@ -98,7 +98,7 @@ export function deriveExecutionReasoning(task: { businessObjectRef: string; titl
   };
 }
 
-// ---------- 输入/结果校验（返回 null 表示通过，否则返回错误信息） ----------
+// ---------- 输入校验（中台专用，供意图解析层使用；返回 null 表示通过） ----------
 export function validateQueryInput(input: Record<string, unknown>): string | null {
   const path = typeof input.path === 'string' ? input.path : '';
   if (!path) return '查询输入缺少 path';
@@ -122,27 +122,6 @@ export function validateReasoningInput(input: Record<string, unknown>): string |
     return '推理能力不允许写操作（constraints.read_only 必须为 true）';
   }
   return null;
-}
-
-/** 校验推理结果：每条结论必须携带非空 evidence_refs。 */
-export function validateReasoningResult(result: unknown): string | null {
-  if (!result || typeof result !== 'object') return '推理结果必须是对象';
-  const conclusions = (result as Record<string, unknown>).conclusions;
-  if (!Array.isArray(conclusions) || conclusions.length === 0) return '推理结果缺少 conclusions 数组';
-  for (const conclusion of conclusions) {
-    if (!conclusion || typeof conclusion !== 'object') return '推理结论必须是对象';
-    const refs = (conclusion as Record<string, unknown>).evidence_refs;
-    if (!Array.isArray(refs) || refs.length === 0 || !refs.every((ref) => typeof ref === 'string' && ref.trim())) {
-      return '推理结论必须包含非空 evidence_refs';
-    }
-  }
-  return null;
-}
-
-export function validateExecutionInput(capability: string, input: Record<string, unknown>): string | null {
-  if (capability === 'query_control_platform') return validateQueryInput(input);
-  if (capability === 'reason_control_platform') return validateReasoningInput(input);
-  return null; // 未知能力交由 dispatch 的白名单校验拒绝。
 }
 
 registerExecutionCapability('query_control_platform', (task) => deriveExecutionQuery(task.businessObjectRef));

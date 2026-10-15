@@ -29,9 +29,57 @@ if (!existsSync(pythonExe)) {
   process.exit(1);
 }
 
+const QUERY_PATHS = [
+  '/common/ping',
+  '/external/orders/list',
+  '/external/order-details/list',
+  '/external/boms/tree',
+  '/external/materials/list',
+  '/external/suppliers/list',
+  '/external/material-kitting/results',
+  '/external/material-kitting/shortages',
+  '/external/material-kitting/demands',
+  '/external/inventory/availability',
+  '/external/material-supplies/list',
+  '/external/quality-issues/list',
+  '/external/quality-trace/list',
+  '/external/production/work-orders/list',
+  '/external/production/operations/list',
+  '/external/production/order-links/list',
+  '/external/production/reports/list',
+  '/external/production/capacity/list',
+];
+
 const capabilities = [
-  { name: 'query_control_platform', description: '精确查询中台只读业务数据' },
-  { name: 'reason_control_platform', description: '调用中台自有大模型或推理智能体完成只读分析' },
+  {
+    name: 'query_control_platform',
+    description: '精确查询中台只读业务数据',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string', enum: QUERY_PATHS }, params: { type: 'object' } },
+      required: ['path'],
+    },
+    constraints: { readOnly: true },
+  },
+  {
+    name: 'reason_control_platform',
+    description: '调用中台自有大模型或推理智能体完成只读分析',
+    inputSchema: {
+      type: 'object',
+      properties: { prompt: { type: 'string', maxLength: 2000 }, task_type: { type: 'string' } },
+      required: ['prompt', 'task_type'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        conclusions: {
+          type: 'array',
+          items: { type: 'object', properties: { evidence_refs: { type: 'array', minItems: 1 } }, required: ['evidence_refs'] },
+        },
+      },
+    },
+    constraints: { readOnly: true, requireEvidence: true },
+  },
 ];
 
 let ws = null;
