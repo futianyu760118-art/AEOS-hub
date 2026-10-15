@@ -62,6 +62,7 @@ export function isPublicLoginResource(pathname: string, method: string | undefin
     || pathname === '/style.css' || pathname === '/app.js'
     || pathname === '/ui-localization.js'
     || pathname === '/daily-questions.js' || pathname === '/agent-registration.js' || pathname === '/task-center.js' || pathname === '/task-agent-eligibility.js' || pathname === '/personnel-admin.js'
+    || pathname === '/execution-query-intent.js' || pathname === '/execution-query-summary.js' || pathname === '/execution-query-validation.js'
     || pathname === '/vendor/lucide.min.js' || pathname.startsWith('/brand/');
 }
 

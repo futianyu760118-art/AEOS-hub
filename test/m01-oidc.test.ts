@@ -280,16 +280,17 @@ test('M01 configuration accepts complete valid M01 settings', () => {
   });
 });
 
-test('M01 configuration accepts only unset and local-dev non-M01 modes', () => {
-  assert.deepEqual(readM01Config({}), { authMode: 'local-dev' });
-  assert.deepEqual(readM01Config({ AEOS_AUTH_MODE: 'local-dev' }), { authMode: 'local-dev' });
+test('M01 configuration fails closed when auth mode is not m01', () => {
+  for (const env of [{}, { AEOS_AUTH_MODE: 'local-dev' }, { AEOS_AUTH_MODE: '' }]) {
+    assert.throws(() => readM01Config(env), /AEOS_AUTH_MODE must be m01/);
+  }
 });
 
 test('M01 configuration rejects unsupported auth modes without echoing their values', () => {
   for (const mode of ['M01', ' m01', 'm01 ', 'staging']) {
     assert.throws(
       () => readM01Config({ AEOS_AUTH_MODE: mode }),
-      (error: Error) => error.message === 'AEOS_AUTH_MODE must be unset, local-dev, or m01',
+      /AEOS_AUTH_MODE must be m01/,
     );
   }
 });

@@ -36,12 +36,12 @@ function assertNoUrlCredentialsQueryOrHash(url: URL, value: string, name: string
   }
 }
 
-function readAuthMode(environment: NodeJS.ProcessEnv): 'local-dev' | 'm01' {
+function readAuthMode(environment: NodeJS.ProcessEnv): 'm01' {
   const authMode = environment.AEOS_AUTH_MODE;
-  if (authMode === undefined || authMode === 'local-dev' || authMode === 'm01') {
-    return authMode === 'm01' ? 'm01' : 'local-dev';
+  if (authMode !== 'm01') {
+    throw new Error('AEOS_AUTH_MODE must be m01（Hub 只保留 M01 登录方式，不再支持 local-dev）');
   }
-  throw new Error('AEOS_AUTH_MODE must be unset, local-dev, or m01');
+  return 'm01';
 }
 
 function validateIssuer(issuer: string): void {
