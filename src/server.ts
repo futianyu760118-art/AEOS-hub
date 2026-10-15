@@ -80,6 +80,7 @@ import { AccessControlApi } from './access-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
+import { parseIntentWithLLM } from './execution-intent-llm.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -1746,7 +1747,21 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
-  // ---------- 执行面接入 HTTP API（仪表盘读取 + 派单/召回） ----------
+  // ---------- 执行面接入 HTTP API（仪表盘读取 + 派单/召回 + LLM 意图解析） ----------
+  const executionParseIntentMatch = url.pathname.match(/^\/api\/execution\/parse-intent$/);
+  if (executionParseIntentMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const input = await readJsonBody(req, 8 * 1024);
+      const text = typeof input.text === 'string' ? input.text.trim() : '';
+      if (!text || text.length > 2000) { sendJson(res, 400, { error: 'text 必填且不超过 2000 字符' }); return; }
+      // LLM 优先路径；解析失败返回 { error }，由前端回退到本地正则。
+      sendJson(res, 200, await parseIntentWithLLM(text));
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
   const executionAgentsMatch = url.pathname.match(/^\/api\/execution\/agents$/);
   if (executionAgentsMatch) {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }

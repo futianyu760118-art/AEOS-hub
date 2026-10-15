@@ -823,6 +823,41 @@ function appendExecutionMessage(role, text, data) {
   return { inner, textEl };
 }
 
+async function dispatchExecution(agentId, capability, input, pendingText) {
+  const pending = appendExecutionMessage('agent', pendingText, null);
+  try {
+    const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/dispatch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ capability, input }),
+    });
+    const body = await response.json();
+    if (!response.ok || body.error) {
+      if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`;
+      return;
+    }
+    pollExecutionRun(body.runId, pending);
+  } catch (error) {
+    if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
+  }
+}
+
+// 远端 LLM 意图解析（优先路径）。成功返回 { kind:'query'|'reasoning', ... }，否则返回 null。
+async function tryParseIntentRemote(text) {
+  try {
+    const response = await fetch('/api/execution/parse-intent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    return body && (body.kind === 'query' || body.kind === 'reasoning') ? body : null;
+  } catch {
+    return null;
+  }
+}
+
 async function sendExecutionQuery() {
   const input = $('#execution-chat-input');
   const text = input?.value?.trim() ?? '';
@@ -834,21 +869,21 @@ async function sendExecutionQuery() {
   if (input) input.value = '';
   appendExecutionMessage('user', text, null);
 
+  // LLM 优先：远端意图解析；失败/不可用则回退到本地正则（原逻辑）。
+  const remote = await tryParseIntentRemote(text);
+  if (remote?.kind === 'reasoning') {
+    await dispatchExecution(selectedExecutionAgent, 'reason_control_platform', remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
+    return;
+  }
+  if (remote?.kind === 'query') {
+    const query = { path: remote.path, params: remote.params };
+    await dispatchExecution(selectedExecutionAgent, 'query_control_platform', query, `正在查询：${describeExecutionQuery(query)}…`);
+    return;
+  }
+
   const reasoning = parseExecutionReasoning(text);
   if (reasoning && !reasoning.error) {
-    const pending = appendExecutionMessage('agent', `正在推理：${describeExecutionReasoning(reasoning)}…`, null);
-    try {
-      const response = await fetch(`/api/execution/agents/${encodeURIComponent(selectedExecutionAgent)}/dispatch`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ capability: 'reason_control_platform', input: reasoning }),
-      });
-      const body = await response.json();
-      if (!response.ok || body.error) { if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`; return; }
-      pollExecutionRun(body.runId, pending);
-    } catch (error) {
-      if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
-    }
+    await dispatchExecution(selectedExecutionAgent, 'reason_control_platform', reasoning, `正在推理：${describeExecutionReasoning(reasoning)}…`);
     return;
   }
 
@@ -857,22 +892,7 @@ async function sendExecutionQuery() {
     appendExecutionMessage('agent', parsed.error, null);
     return;
   }
-  const pending = appendExecutionMessage('agent', `正在查询：${describeExecutionQuery(parsed)}…`, null);
-  try {
-    const response = await fetch(`/api/execution/agents/${encodeURIComponent(selectedExecutionAgent)}/dispatch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ capability: 'query_control_platform', input: { path: parsed.path, params: parsed.params } }),
-    });
-    const body = await response.json();
-    if (!response.ok || body.error) {
-      if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`;
-      return;
-    }
-    pollExecutionRun(body.runId, pending);
-  } catch (error) {
-    if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
-  }
+  await dispatchExecution(selectedExecutionAgent, 'query_control_platform', { path: parsed.path, params: parsed.params }, `正在查询：${describeExecutionQuery(parsed)}…`);
 }
 
 function pollExecutionRun(runId, pending) {

@@ -66,6 +66,24 @@ if ($personnelEnabled -and -not [string]::IsNullOrWhiteSpace($personnelSecret) -
   $env:M01_PERSONNEL_ADMIN_ENABLED = '0'
 }
 
+# 模型密钥：从仓库根 .env 读取 DEEPSEEK_API_KEY 注入进程，供 Codex 运行时与执行面 LLM 意图解析使用。
+# 缺失时保持未设置（Codex 可回退 auth.json，执行面意图解析回退本地正则），不阻断启动。
+$deepSeekKey = ''
+$rootEnvFile = Join-Path $repositoryRoot '.env'
+if (Test-Path -LiteralPath $rootEnvFile -PathType Leaf) {
+  foreach ($line in [System.IO.File]::ReadAllLines($rootEnvFile)) {
+    if ($line -match '^\s*(?:#|$)') { continue }
+    $separator = $line.IndexOf('=')
+    if ($separator -lt 1) { continue }
+    $name = $line.Substring(0, $separator).Trim()
+    if ($name -eq 'DEEPSEEK_API_KEY') {
+      $deepSeekKey = $line.Substring($separator + 1).Trim()
+      break
+    }
+  }
+}
+if ($deepSeekKey) { $env:DEEPSEEK_API_KEY = $deepSeekKey }
+
 Set-Location -LiteralPath $repositoryRoot
 & npm.cmd run web
 exit $LASTEXITCODE
