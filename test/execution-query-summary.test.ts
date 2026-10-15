@@ -74,3 +74,20 @@ test('shows a data-validation warning when the upstream pagination contract is c
   }, { page: 1, page_size: 5 });
   assert.match(ignoredLimit, /中台返回每页 20 条与请求每页 5 条不一致/);
 });
+
+test('renders generic message for non-paginated result structure', () => {
+  const summary = summarizeExecutionResult('/api/boss/orders', { data: { total_sales: 100 } });
+  assert.match(summary, /查询完成/);
+  assert.match(summary, /原始数据/);
+});
+
+test('uses intent.output title and fields for a non-中台 path', () => {
+  const intent = { paths: [{ path: '/api/boss/orders', label: '老板订单', output: { title: ['order_no'], fields: ['amount', 'customer'] } }] };
+  const summary = summarizeExecutionResult('/api/boss/orders', {
+    total: 1,
+    items: [{ order_no: 'B-1', amount: 500, customer: '王总' }],
+  }, {}, intent);
+  assert.match(summary, /B-1/);
+  assert.match(summary, /金额：500/);
+  assert.match(summary, /客户：王总/);
+});

@@ -2,7 +2,7 @@ import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
 import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery, parseExecutionReasoning } from './execution-query-intent.js?v=execution-query-intent-v4-20261014';
-import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v4-20261014';
+import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
@@ -718,6 +718,7 @@ function syncExecutionRefresh() {
 
 let executionControlsWired = false;
 let selectedExecutionAgent = null;
+let executionAgents = [];
 
 function wireExecutionControls() {
   if (executionControlsWired) return;
@@ -758,7 +759,8 @@ async function loadExecution() {
     if (!response.ok) return;
     data = await response.json();
   } catch { return; }
-  renderExecutionAgentList(Array.isArray(data?.agents) ? data.agents : []);
+  executionAgents = Array.isArray(data?.agents) ? data.agents : [];
+  renderExecutionAgentList(executionAgents);
 }
 
 function renderExecutionAgentList(agents) {
@@ -791,6 +793,11 @@ function selectExecutionAgent(agentId) {
   const subtitle = $('#execution-chat-subtitle');
   if (title) title.textContent = `与「${agentId}」对话`;
   if (subtitle) subtitle.textContent = '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
+}
+
+function selectedAgentHasIntent() {
+  const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+  return Boolean(agent && Array.isArray(agent.capabilities) && agent.capabilities.some((cap) => cap.intent));
 }
 
 function executionMessageBubble(role, text) {
@@ -842,13 +849,13 @@ async function dispatchExecution(agentId, capability, input, pendingText) {
   }
 }
 
-// 远端 LLM 意图解析（优先路径）。成功返回 { kind:'query'|'reasoning', ... }，否则返回 null。
-async function tryParseIntentRemote(text) {
+// 远端 LLM 意图解析（按 Agent 注册的 intent 动态解析）。成功返回 { kind:'query'|'reasoning', ... }，否则返回 null。
+async function tryParseIntentRemote(text, agentId) {
   try {
     const response = await fetch('/api/execution/parse-intent', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, agentId }),
     });
     if (!response.ok) return null;
     const body = await response.json();
@@ -869,15 +876,19 @@ async function sendExecutionQuery() {
   if (input) input.value = '';
   appendExecutionMessage('user', text, null);
 
-  // LLM 优先：远端意图解析；失败/不可用则回退到本地正则（原逻辑）。
-  const remote = await tryParseIntentRemote(text);
-  if (remote?.kind === 'reasoning') {
-    await dispatchExecution(selectedExecutionAgent, 'reason_control_platform', remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
-    return;
-  }
-  if (remote?.kind === 'query') {
-    const query = { path: remote.path, params: remote.params };
-    await dispatchExecution(selectedExecutionAgent, 'query_control_platform', query, `正在查询：${describeExecutionQuery(query)}…`);
+  // Agent 带查询语义（intent）→ 只用 LLM 解析；旧 Agent 无 intent → 回退本地正则（向后兼容）。
+  if (selectedAgentHasIntent()) {
+    const remote = await tryParseIntentRemote(text, selectedExecutionAgent);
+    if (remote?.kind === 'reasoning') {
+      await dispatchExecution(selectedExecutionAgent, 'reason_control_platform', remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
+      return;
+    }
+    if (remote?.kind === 'query') {
+      const query = { path: remote.path, params: remote.params };
+      await dispatchExecution(selectedExecutionAgent, 'query_control_platform', query, `正在查询：${describeExecutionQuery(query)}…`);
+      return;
+    }
+    appendExecutionMessage('agent', '意图识别失败，请换一种说法重试', null);
     return;
   }
 
@@ -907,9 +918,11 @@ function pollExecutionRun(runId, pending) {
     if (run && ['completed', 'failed', 'recalled'].includes(run.state)) {
       if (pending) {
         if (run.state === 'completed') {
+          const agent = executionAgents.find((item) => item.agentId === run.agentId);
+          const intent = agent?.capabilities?.find((cap) => cap.intent)?.intent;
           const summary = run.capability === 'reason_control_platform'
             ? summarizeReasoningResult(run.result)
-            : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {});
+            : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {}, intent);
           pending.textEl.textContent = '';
           streamTextInto(pending.textEl, summary);
           if (run.result !== undefined && run.result !== null) {

@@ -64,8 +64,31 @@
 | `inputSchema` | `dispatch.input` 的结构 schema（可选；有则管理面在派单前校验） |
 | `outputSchema` | `run_complete.result` 的结构 schema（可选；有则管理面在结果回传时校验） |
 | `constraints` | 约束：`readOnly`（只读声明）、`requireEvidence`（结果要求证据） |
+| `intent` | 查询语义（可选）：`{ paths:[...] }`，让管理面用自然语言理解并渲染该能力的查询 |
 
 `schema` 用 JSON Schema 的一个极小子集：`type`(object/array/string/number/boolean)、`properties`、`items`、`required`、`enum`、`maxLength`、`minItems`。
+
+`intent` 是查询能力的**语义元数据**（管理面据此做自然语言意图解析与结果渲染），结构：
+
+```jsonc
+{
+  "paths": [
+    {
+      "path": "/external/orders/list",
+      "label": "订单",
+      "keywords": ["订单", "order"],
+      "params": [
+        { "name": "keyword", "label": "关键字/订单号" },
+        { "name": "status", "label": "状态", "enum": [{ "value": "pending_review", "label": "待评审" }] }
+      ],
+      "output": { "title": ["order_no"], "fields": ["customer", "status", "order_amount"] }
+    }
+  ]
+}
+```
+
+- `path`/`label` 必填；`keywords` 帮助自然语言识别；`params[].enum` 提供枚举中英映射；`output`（可选）提供结果渲染的标题/字段顺序。
+- 管理面据此动态生成 LLM 意图提示与结果摘要，不再内置任何具体系统的路径/字段。
 
 ### 管理面通用校验规则（不针对任何具体能力）
 

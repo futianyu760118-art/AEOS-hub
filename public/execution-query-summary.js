@@ -1,5 +1,6 @@
 import { validateExecutionQueryResponse } from './execution-query-validation.js?v=execution-query-validation-v1-20261014';
 
+// 已知字段的中文标签（中台等系统的兜底）；未收录的字段键原样展示。
 const FIELD_LABELS = {
   demand_no: '需求单号', demand_line_no: '需求行号', material_code: '物料编码', material_name: '物料名称',
   required_qty: '需求量', available_qty: '可用量', future_supply_qty: '未来供给量', shortage_qty: '缺料量',
@@ -17,51 +18,36 @@ const FIELD_LABELS = {
   supplier_code: '供应商编码', supplier_name: '供应商', supplier_short: '供应商简称',
 };
 
-const RESULT_FORMATS = [
-  { path: '/material-kitting/results', title: ['demand_no'], fields: ['demand_line_no', 'kit_status', 'kit_rate_by_item', 'kit_rate_by_qty', 'shortage_item_count', 'shortage_amount', 'required_date', 'risk_level'] },
-  { path: '/inventory/availability', title: ['material_name', 'material_code'], fields: ['material_code', 'on_hand_qty', 'locked_qty', 'available_qty', 'qty_in_transit', 'wh_code'] },
-  { path: '/orders/list', title: ['order_no'], fields: ['customer', 'customer_code', 'product_name', 'product_code', 'status', 'promised_date', 'order_amount', 'risk_level'] },
-  { path: '/material-supplies/list', title: ['supply_no', 'material_name', 'material_code'], fields: ['supply_line_no', 'material_code', 'supply_type', 'supply_qty', 'available_qty', 'expected_available_date', 'confirmed_available_date', 'supplier_name', 'supply_status'] },
-  { path: '/quality-issues/list', title: ['issue_no'], fields: ['order_no', 'product_code', 'status', 'defect_type', 'submit_dept', 'occurred_at', 'occurred_date'] },
-  { path: '/production/work-orders/list', title: ['work_order_no'], fields: ['order_no', 'product_code', 'status', 'workshop', 'workshop_code', 'planned_end_date', 'planned_end', 'task_qty', 'actual_qty'] },
-  { path: '/suppliers/list', title: ['supplier_name', 'supplier_code'], fields: ['supplier_code', 'supplier_short', 'supplier_name'] },
-];
-
-function shortageReasonLabel(reason) {
-  return ({ NO_SUPPLY: '无供给', SUPPLY_LATE: '供给延后', CAPACITY_SHORT: '产能不足', QUALITY_HOLD: '质量冻结' })[reason] || reason || '';
-}
-
 function present(value) { return value !== undefined && value !== null && value !== ''; }
 function rowTitle(item, candidates, fallback) { return candidates.map((key) => item[key]).find(present) || fallback; }
 function rowDetails(item, fields) {
   return fields.filter((key) => present(item[key])).map((key) => `${FIELD_LABELS[key] || key}：${item[key]}`).join('，');
 }
 
-/** Renders the business fields that belong to the endpoint instead of a generic row title. */
-export function summarizeExecutionResult(path, data, requestParams = {}) {
+/** 把查询结果转成可读中文摘要；标题/字段由 Agent 注册的 intent.output 提供，缺省则泛化渲染。 */
+export function summarizeExecutionResult(path, data, requestParams = {}, intent) {
+  // 泛化：结果不是 {items:[...]} 分页结构时，直接通用提示（原始数据由调用方 <details> 兜底展示）。
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.items)) {
+    return '查询完成，返回结果见下方原始数据。';
+  }
+
   const response = validateExecutionQueryResponse(path, requestParams, data);
   const { items, total, page, pageSize, returned, issues } = response;
   const paginationFact = `本页返回 ${returned} 条（第 ${page} 页，每页 ${pageSize} 条）；符合当前条件共 ${total} 条`;
   const validationNotice = issues.length ? `\n数据校验提示：${issues.map((issue) => issue.message).join('；')}` : '';
   if (!items.length) return `${paginationFact}。\n没有查到相关记录。${validationNotice}`;
+
   const cap = items.slice(0, 12);
   const hiddenOnPage = items.length - cap.length;
   const remainingAfterPage = Math.max(0, total - ((page - 1) * pageSize + returned));
   const remainder = `${hiddenOnPage ? `\n本页还有 ${hiddenOnPage} 条未展开。` : ''}${remainingAfterPage ? `\n另有 ${remainingAfterPage} 条匹配记录，可查询第 ${page + 1} 页。` : ''}`;
-  if (typeof path === 'string' && path.includes('/material-kitting/shortages')) {
-    const totalQty = items.reduce((sum, item) => sum + (Number(item.shortage_qty) || 0), 0);
-    const lines = cap.map((item, index) => {
-      const title = rowTitle(item, ['material_name', 'material_code'], `记录 ${index + 1}`);
-      const details = rowDetails(item, ['material_code', 'shortage_qty', 'available_qty', 'future_supply_qty', 'required_date', 'estimated_available_date', 'shortage_reason', 'owner_department']);
-      const normalized = details.replace(`缺料原因：${item.shortage_reason}`, `缺料原因：${shortageReasonLabel(item.shortage_reason)}`);
-      return `${index + 1}. ${title}${normalized ? `（${normalized}）` : ''}`;
-    });
-    return `${paginationFact}；当前页合计缺料 ${totalQty} 件：\n${lines.join('\n')}${remainder}${validationNotice}`;
-  }
-  const format = RESULT_FORMATS.find((candidate) => typeof path === 'string' && path.includes(candidate.path));
+
+  const output = intent?.paths?.find((candidate) => typeof path === 'string' && path.includes(candidate.path))?.output;
+  const titleKeys = output?.title?.length ? output.title : ['name', 'material_name', 'order_no', 'demand_no'];
+  const fieldKeys = output?.fields?.length ? output.fields : Object.keys(items[0] || {}).slice(0, 8);
   const lines = cap.map((item, index) => {
-    const title = rowTitle(item, format?.title || ['name', 'material_name', 'order_no', 'demand_no'], `记录 ${index + 1}`);
-    const details = rowDetails(item, format?.fields || Object.keys(item).slice(0, 8));
+    const title = rowTitle(item, titleKeys, `记录 ${index + 1}`);
+    const details = rowDetails(item, fieldKeys);
     return `${index + 1}. ${title}${details ? `（${details}）` : ''}`;
   });
   return `${paginationFact}：\n${lines.join('\n')}${remainder}${validationNotice}`;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { registerCapability, capabilityHandlers, capabilityDefinitions } from '../src/capabilities.js';
 import { loadConfig } from '../src/config.js';
 import { createHttpQueryAdapter } from '../src/adapters/query-adapter.js';
-import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS } from '../src/adapters/company-control-query.js';
+import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS, COMPANY_CONTROL_QUERY_INTENT } from '../src/adapters/company-control-query.js';
 import { createReasoningAdapter } from '../src/adapters/reasoning-adapter.js';
 
 test('能力插件化注册并返回处理器与自描述定义', () => {
@@ -46,6 +46,11 @@ test('通用查询适配器按配置的端点白名单拒绝（可插拔）', as
 
 test('中台端点表包含 18 个只读端点', () => {
   assert.equal(COMPANY_CONTROL_PATHS.length, 18);
+});
+
+test('中台查询语义 intent 覆盖 8 类自然语言查询', () => {
+  assert.equal(COMPANY_CONTROL_QUERY_INTENT.paths.length, 8);
+  assert.ok(COMPANY_CONTROL_QUERY_INTENT.paths.every((p) => typeof p.path === 'string' && typeof p.label === 'string'));
 });
 
 test('推理适配器返回结构正确且明确未接通（不伪造）', async () => {

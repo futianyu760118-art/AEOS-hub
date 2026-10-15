@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { validateAgainstSchema, type Schema } from './schema-validation.ts';
+import { type QueryIntent } from './execution-intent-types.ts';
 
 export type ExecutionAgentRuntimeStatus = 'idle' | 'working' | 'error';
 export type ExecutionAgentConnectionStatus = 'online' | 'offline';
@@ -19,6 +20,7 @@ export interface ExecutionAgentCapability {
   inputSchema?: Schema;
   outputSchema?: Schema;
   constraints?: { readOnly?: boolean; requireEvidence?: boolean };
+  intent?: QueryIntent;
 }
 
 export interface ExecutionAgentRecord {
@@ -121,6 +123,19 @@ function parseConstraints(value: unknown): { readOnly?: boolean; requireEvidence
   return Object.keys(constraints).length ? constraints : undefined;
 }
 
+function parseQueryIntent(value: unknown): QueryIntent | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new ExecutionPlaneError('INVALID_ARGUMENT', 'intent 必须是对象');
+  }
+  if (JSON.stringify(value).length > MAX_SCHEMA_BYTES) {
+    throw new ExecutionPlaneError('INVALID_ARGUMENT', `intent 过大（最多 ${MAX_SCHEMA_BYTES} 字节）`);
+  }
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.paths)) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'intent.paths 必须是数组');
+  return value as QueryIntent;
+}
+
 function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
   if (!Array.isArray(value)) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capabilities 必须是数组');
   if (value.length === 0) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capabilities 不能为空');
@@ -133,6 +148,7 @@ function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
     const inputSchema = parseSchema(record.inputSchema, 'capability.inputSchema');
     const outputSchema = parseSchema(record.outputSchema, 'capability.outputSchema');
     const constraints = parseConstraints(record.constraints);
+    const intent = parseQueryIntent(record.intent);
     return {
       name,
       description,
@@ -142,6 +158,7 @@ function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
       ...(inputSchema ? { inputSchema } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(constraints ? { constraints } : {}),
+      ...(intent ? { intent } : {}),
     };
   });
 }

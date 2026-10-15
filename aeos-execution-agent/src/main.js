@@ -2,7 +2,7 @@
 import { ExecutionAgentCore } from './agent-core.js';
 import { loadConfig } from './config.js';
 import { registerCapability, capabilityHandlers, capabilityDefinitions } from './capabilities.js';
-import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS } from './adapters/company-control-query.js';
+import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS, COMPANY_CONTROL_QUERY_INTENT } from './adapters/company-control-query.js';
 import { createReasoningAdapter } from './adapters/reasoning-adapter.js';
 
 const log = (...args) => console.log(...args);
@@ -24,6 +24,7 @@ function main() {
       required: ['path'],
     },
     constraints: { readOnly: true },
+    intent: COMPANY_CONTROL_QUERY_INTENT,
     handler: createCompanyControlQueryAdapter({ baseUrl: config.targetQueryBaseUrl, appKey: config.targetQueryAppKey, appSecret: config.targetQueryAppSecret }),
   });
 

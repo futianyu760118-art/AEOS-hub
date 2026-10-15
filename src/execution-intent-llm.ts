@@ -1,12 +1,10 @@
 // 执行面「LLM 优先」意图解析器：把一句自然语言映射为受控的查询/推理派单请求。
-// 设计原则：LLM 只做意图分类 + 槽位抽取，输出仍强制通过 execution-capabilities 的
-// 只读白名单校验（validateQueryInput / validateReasoningInput），绝不绕过安全边界。
-// 本模块是前端本地正则（public/execution-query-intent.js）的「优先」路径；解析失败时
-// 前端自动回退到正则，因此任何网络/密钥/模型问题都只会降级、不会阻断查询。
+// 查询语义由 Agent 注册的 intent（src/execution-intent-types.ts）自描述驱动，本模块不再内置任何具体系统的路径/字段。
+// 设计原则：LLM 只做意图分类 + 槽位抽取，输出仍按 intent.paths 校验 path，绝不越过 Agent 声明的能力范围。
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { hubRoot, readConfig } from './hub-config.ts';
-import { validateQueryInput, validateReasoningInput } from './execution-capabilities.ts';
+import { type QueryIntent } from './execution-intent-types.ts';
 
 export type IntentDecision =
   | { kind: 'query'; path: string; params: Record<string, string | number> }
@@ -18,57 +16,9 @@ export interface IntentParseDeps {
   baseUrl?: string;
   model?: string;
   timeoutMs?: number;
+  /** Agent 注册的查询语义（query_control_platform 能力的 intent.paths），本模块据此动态生成提示。 */
+  intent?: QueryIntent;
 }
-
-// 与 public/execution-query-intent.js 的 INTENTS 及 execution-capabilities 的白名单保持一致。
-const QUERY_SCHEMA: Array<{ path: string; label: string; params: string[] }> = [
-  { path: '/external/orders/list', label: '订单', params: ['keyword', 'status', 'risk_level', 'customer_code', 'promised_date_start', 'promised_date_end', 'page', 'page_size'] },
-  { path: '/external/material-kitting/results', label: '齐套', params: ['demand_no', 'demand_line_no', 'kit_status', 'risk_level', 'required_date_start', 'required_date_end', 'page', 'page_size'] },
-  { path: '/external/material-kitting/shortages', label: '缺料', params: ['demand_no', 'material_code', 'is_key_material', 'page', 'page_size'] },
-  { path: '/external/inventory/availability', label: '库存', params: ['material_code', 'keyword', 'wh_code', 'page', 'page_size'] },
-  { path: '/external/material-supplies/list', label: '供给', params: ['material_code', 'supply_no', 'supply_type', 'expected_date_start', 'expected_date_end', 'page', 'page_size'] },
-  { path: '/external/quality-issues/list', label: '质量异常', params: ['issue_no', 'order_no', 'product_code', 'status', 'defect_type', 'submit_dept', 'occurred_start', 'occurred_end', 'page', 'page_size'] },
-  { path: '/external/production/work-orders/list', label: '生产工单', params: ['work_order_no', 'order_no', 'product_code', 'status', 'workshop', 'planned_end_start', 'planned_end_end', 'page', 'page_size'] },
-  { path: '/external/suppliers/list', label: '供应商', params: ['keyword', 'page', 'page_size'] },
-];
-
-const SYSTEM_PROMPT = [
-  '你是 AEOS Hub 执行面的意图解析器。根据用户的自然语言输入，输出且只输出一个 JSON 对象，必须是以下两种之一：',
-  '',
-  '1. 只读数据查询（kind="query"）：',
-  '   {"kind":"query","path":"<接口路径>","params":{<字段>:<值>}}',
-  '2. 只读分析推理（kind="reasoning"）：',
-  '   {"kind":"reasoning","task_type":"<任务类型>","prompt":"<原样分析问题>"}',
-  '',
-  '判断规则：',
-  '- 意图是"查询/列出/统计/查某类业务数据"→ query；',
-  '- 意图是"分析/评估/判断/风险/建议/预测/影响/是否/为什么/怎么办/能否/会不会"→ reasoning。',
-  '',
-  'query 的 path 只能是下列之一，params 只能用该行列出的字段：',
-  ...QUERY_SCHEMA.map((s) => `- ${s.path}（${s.label}）：${s.params.join(',')}`),
-  '',
-  'reasoning 的 task_type 只能是下列之一：',
-  '- order_delivery_analysis（订单交付）',
-  '- material_kitting_analysis（齐套/缺料）',
-  '- supply_analysis（供给）',
-  '- inventory_analysis（库存）',
-  '- quality_analysis（质量）',
-  '- production_analysis（生产）',
-  '- supplier_analysis（供应商）',
-  '- operating_case_analysis（其他经营事项）',
-  '',
-  '常用枚举：',
-  '- status（订单）：pending_review(待评审), in_progress(进行中), partially_closed(部分关闭), completed(已完成), cancelled(已取消)',
-  '- kit_status（齐套）：BLOCKED(阻塞), PARTIAL(部分齐套), SHORTAGE(缺料), FULL(完全齐套), PENDING(待计算)',
-  '- risk_level：red(高), yellow(中), green(低)',
-  '- supply_type：PURCHASE(采购), OUTSOURCE(委外), PRODUCTION(自制), TRANSFER(调拨)',
-  '- is_key_material：true/false',
-  '',
-  '规则：',
-  '- 日期参数（*_start/*_end）用 YYYY-MM-DD。',
-  '- 枚举不确定时不要填；无法确定 path 或 task_type 时输出 {"error":"..."}。',
-  '- 只输出 JSON，不要输出解释、注释或 Markdown 代码块。',
-].join('\n');
 
 function readDeepSeekApiKey(): string {
   const fromEnv = process.env.DEEPSEEK_API_KEY?.trim();
@@ -92,6 +42,41 @@ function deepSeekConfig(deps: IntentParseDeps): { baseUrl: string; model: string
     model: deps.model ?? (cfg.model || 'deepseek-chat'),
     apiKey: deps.apiKey ?? readDeepSeekApiKey(),
   };
+}
+
+/** 从 Agent 自描述的查询语义动态生成系统提示。 */
+function buildQueryIntentPrompt(intent: QueryIntent): string {
+  const lines = [
+    '你是 AEOS Hub 执行面的意图解析器。根据用户的自然语言输入，输出且只输出一个 JSON 对象，必须是以下两种之一：',
+    '',
+    '1. 只读数据查询（kind="query"）：',
+    '   {"kind":"query","path":"<接口路径>","params":{<字段>:<值>}}',
+    '2. 只读分析推理（kind="reasoning"）：',
+    '   {"kind":"reasoning","task_type":"operating_case_analysis","prompt":"<原样分析问题>"}',
+    '',
+    '判断规则：',
+    '- 意图是"查询/列出/统计/查某类业务数据"→ query；',
+    '- 意图是"分析/评估/判断/风险/建议/预测/影响/是否/为什么/怎么办/能否/会不会"→ reasoning。',
+    '',
+    'query 的 path 只能是下列之一，params 只能用该行 path 后列出的字段：',
+  ];
+  for (const p of intent.paths) {
+    const keywordHint = p.keywords?.length ? `；关键词：${p.keywords.join('/')}` : '';
+    const paramHint = (p.params || []).map((param) => {
+      const labelHint = param.label ? `（${param.label}）` : '';
+      const enumHint = param.enum?.length ? `可选值：${param.enum.map((e) => `${e.label}→${e.value}`).join('、')}` : '';
+      return `${param.name}${labelHint}${enumHint ? `[${enumHint}]` : ''}`;
+    }).join('，');
+    lines.push(`- ${p.path}（${p.label}${keywordHint}）；参数：${paramHint || '无'}`);
+  }
+  lines.push(
+    '',
+    '规则：',
+    '- 日期参数（*_start/*_end）用 YYYY-MM-DD。',
+    '- 枚举不确定时不要填；无法确定 path 时输出 {"error":"..."}。',
+    '- 只输出 JSON，不要输出解释、注释或 Markdown 代码块。',
+  );
+  return lines.join('\n');
 }
 
 function normalizeParams(params: unknown): Record<string, string | number> {
@@ -123,37 +108,43 @@ function extractJson(content: string): unknown {
   }
 }
 
-function toDecision(raw: unknown): IntentDecision | { error: string } {
+function toDecision(raw: unknown, intent: QueryIntent): IntentDecision | { error: string } {
   if (!raw || typeof raw !== 'object') return { error: '意图解析结果格式无效' };
   const obj = raw as Record<string, unknown>;
   if (obj.error) return { error: String(obj.error) };
   if (obj.kind === 'query') {
     const path = typeof obj.path === 'string' ? obj.path.trim() : '';
     const params = clampPagination(normalizeParams(obj.params));
-    const invalid = validateQueryInput({ path, params });
-    if (invalid) return { error: `查询意图校验失败：${invalid}` };
+    if (!intent.paths.some((p) => p.path === path)) {
+      return { error: `查询 path 不在能力声明范围内：${path || '(空)'}` };
+    }
     return { kind: 'query', path, params };
   }
   if (obj.kind === 'reasoning') {
     const prompt = typeof obj.prompt === 'string' ? obj.prompt.trim() : '';
     const taskType = typeof obj.task_type === 'string' ? obj.task_type.trim() : '';
-    const request = {
-      prompt,
-      task_type: taskType || 'operating_case_analysis',
-      context: {},
-      constraints: { read_only: true, require_evidence: true },
+    if (!prompt) return { error: '推理输入缺少 prompt' };
+    if (prompt.length > 2000) return { error: '推理 prompt 过长（最多 2000 字符）' };
+    return {
+      kind: 'reasoning',
+      request: {
+        prompt,
+        task_type: taskType || 'operating_case_analysis',
+        context: {},
+        constraints: { read_only: true, require_evidence: true },
+      },
     };
-    const invalid = validateReasoningInput(request);
-    if (invalid) return { error: `推理意图校验失败：${invalid}` };
-    return { kind: 'reasoning', request };
   }
   return { error: '意图类型必须为 query 或 reasoning' };
 }
 
-/** 用大模型把一句自然语言解析为受控派单请求；失败/不可用返回 { error }，由前端回退正则。 */
+/** 用大模型把一句自然语言解析为受控派单请求；失败/未提供 intent 返回 { error }，由调用方决定回退。 */
 export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {}): Promise<IntentDecision | { error: string }> {
   const query = String(text || '').trim();
   if (!query) return { error: '输入为空' };
+  if (!deps.intent || !Array.isArray(deps.intent.paths) || deps.intent.paths.length === 0) {
+    return { error: '未提供查询语义（intent），无法解析' };
+  }
   const { baseUrl, model, apiKey } = deepSeekConfig(deps);
   if (!apiKey) return { error: '未配置 DeepSeek 模型密钥，已回退本地规则解析' };
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -167,7 +158,7 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: buildQueryIntentPrompt(deps.intent) },
           { role: 'user', content: query },
         ],
         temperature: 0,
@@ -178,7 +169,7 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || !content.trim()) return { error: '模型未返回有效内容' };
-    return toDecision(extractJson(content));
+    return toDecision(extractJson(content), deps.intent);
   } catch (error) {
     if ((error as Error).name === 'AbortError') return { error: '意图解析超时' };
     return { error: `意图解析失败：${(error as Error).message}` };

@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { COMPANY_CONTROL_QUERY_INTENT } from '../aeos-execution-agent/src/adapters/company-control-query.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
@@ -60,6 +61,7 @@ const capabilities = [
       required: ['path'],
     },
     constraints: { readOnly: true },
+    intent: COMPANY_CONTROL_QUERY_INTENT,
   },
   {
     name: 'reason_control_platform',

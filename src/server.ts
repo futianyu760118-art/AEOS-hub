@@ -1755,8 +1755,11 @@ const server = createServer(async (req, res) => {
       const input = await readJsonBody(req, 8 * 1024);
       const text = typeof input.text === 'string' ? input.text.trim() : '';
       if (!text || text.length > 2000) { sendJson(res, 400, { error: 'text 必填且不超过 2000 字符' }); return; }
-      // LLM 优先路径；解析失败返回 { error }，由前端回退到本地正则。
-      sendJson(res, 200, await parseIntentWithLLM(text));
+      const agentId = typeof input.agentId === 'string' ? input.agentId.trim() : '';
+      const agent = agentId ? executionPlane.list().agents.find((item) => item.agentId === agentId) : undefined;
+      const intent = agent?.capabilities.find((cap) => cap.intent)?.intent;
+      // LLM 优先路径，按 Agent 注册的查询语义（intent）动态解析；失败返回 { error }，由前端回退。
+      sendJson(res, 200, await parseIntentWithLLM(text, { intent }));
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
