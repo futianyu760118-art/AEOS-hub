@@ -157,7 +157,7 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
   const { baseUrl, model, apiKey } = deepSeekConfig(deps);
   if (!apiKey) return { error: '未配置 DeepSeek 模型密钥，已回退本地规则解析' };
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const timeoutMs = deps.timeoutMs ?? 15_000;
+  const timeoutMs = deps.timeoutMs ?? 30_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
