@@ -148,7 +148,13 @@ const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appe
     return new ExecutionPlaneRuntimeAdapter(executionPlane, runtimeId);
   }
   return undefined;
-}, findExecutionRun: (runId) => executionPlane.list().runs.find((run) => run.runId === runId), findExecutionIntent: (agentId, capability) => executionPlane.list().agents.find((agent) => agent.agentId === agentId)?.capabilities.find((cap) => cap.name === capability)?.intent });
+}, findExecutionRun: (runId) => executionPlane.list().runs.find((run) => run.runId === runId), findExecutionIntent: (agentId, capability) => executionPlane.list().agents.find((agent) => agent.agentId === agentId)?.capabilities.find((cap) => cap.name === capability)?.intent, findExecutionCapability: (agentId, kind) => {
+  const agent = executionPlane.list().agents.find((item) => item.agentId === agentId);
+  const capabilities = agent?.capabilities ?? [];
+  if (kind === 'query') return capabilities.find((cap) => cap.intent)?.name ?? capabilities.find((cap) => cap.name.startsWith('query'))?.name;
+  if (kind === 'reasoning') return capabilities.find((cap) => cap.name.startsWith('reason'))?.name;
+  return undefined;
+} });
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)

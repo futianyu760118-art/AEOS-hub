@@ -22,8 +22,11 @@ export function hasExecutionCapability(capability: string): boolean {
 
 export function resolveExecutionDispatch(task: { businessObjectRef: string; title: string }, capability: string, intent?: QueryIntent): ExecutionDispatch {
   const resolver = resolvers.get(capability);
-  if (!resolver) throw new Error(`未注册执行面能力: ${capability}`);
-  return { capability, input: resolver(task, intent) };
+  if (resolver) return { capability, input: resolver(task, intent) };
+  // 通用回退：查询能力（带 intent）→ 派生查询；推理能力（reason*）→ 派生推理。
+  if (intent) return { capability, input: deriveExecutionQuery(task.businessObjectRef, intent) };
+  if (capability.startsWith('reason')) return { capability, input: deriveExecutionReasoning(task) };
+  throw new Error(`未注册执行面能力: ${capability}`);
 }
 
 // ---------- businessObjectRef 解析 ----------

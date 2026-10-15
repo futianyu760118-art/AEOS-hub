@@ -34,6 +34,7 @@ type TaskApiDependencies = {
   resolveRuntime?: (runtimeId: string) => (AgentTaskRunDeps['runtime'] & { runtimeKind?: string }) | undefined;
   findExecutionRun?: (runId: string) => ExecutionRunRecord | undefined;
   findExecutionIntent?: (agentId: string, capability: string) => QueryIntent | undefined;
+  findExecutionCapability?: (agentId: string, kind: 'query' | 'reasoning') => string | undefined;
   now?: () => Date;
 };
 
@@ -410,7 +411,7 @@ export class TaskApi {
     if (!eligibility.eligible) return this.denied(actor, 'agent_run', 'AGENT_INELIGIBLE', task);
 
     const executionCapability = runtime.runtimeKind === 'remote-execution-agent'
-      ? agent.registration.allowedRuntimeCapabilities.find((capability) => hasExecutionCapability(capability))
+      ? (this.dependencies.findExecutionCapability?.(runtimeId, 'query') ?? agent.registration.allowedRuntimeCapabilities.find((capability) => hasExecutionCapability(capability)))
       : undefined;
     const executionIntent = executionCapability
       ? this.dependencies.findExecutionIntent?.(runtimeId, executionCapability)

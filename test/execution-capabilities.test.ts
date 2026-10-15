@@ -88,6 +88,18 @@ test('resolveExecutionDispatch 能解析推理能力', () => {
   assert.equal((d.input as { task_type: string }).task_type, 'order_delivery_analysis');
 });
 
+test('resolveExecutionDispatch 通用回退：带 intent 的非中台查询能力按 intent 派生', () => {
+  const intent = { paths: [{ path: '/api/plm/project', label: '研发项目', sources: [{ source: 'plm_project', param: 'project_no' }] }] };
+  const d = resolveExecutionDispatch({ businessObjectRef: 'business://plm_project/PJ-1', title: 'x' }, 'query_plm', intent);
+  assert.deepEqual(d, { capability: 'query_plm', input: { path: '/api/plm/project', params: { project_no: 'PJ-1' } } });
+});
+
+test('resolveExecutionDispatch 通用回退：reason* 能力按推理派生', () => {
+  const d = resolveExecutionDispatch({ businessObjectRef: 'business://plm_project/PJ-1', title: '分析' }, 'reason_plm');
+  assert.equal(d.capability, 'reason_plm');
+  assert.equal((d.input as { task_type: string }).task_type, 'operating_case_analysis');
+});
+
 test('validateQueryInput 拒绝白名单外 path', () => {
   assert.equal(validateQueryInput({ path: '/external/orders/delete', params: {} }), '不在只读白名单内的查询 path: /external/orders/delete');
   assert.equal(validateQueryInput({ path: '/external/orders/list', params: {} }), null);

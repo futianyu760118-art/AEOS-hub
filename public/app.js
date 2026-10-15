@@ -804,6 +804,21 @@ function selectedAgentHasIntent() {
   return Boolean(selectedAgentIntent());
 }
 
+function selectedAgentCapability(kind) {
+  const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+  const capabilities = Array.isArray(agent?.capabilities) ? agent.capabilities : [];
+  if (kind === 'query') {
+    return capabilities.find((cap) => cap.intent)?.name
+      || capabilities.find((cap) => typeof cap.name === 'string' && cap.name.startsWith('query'))?.name
+      || 'query_control_platform';
+  }
+  if (kind === 'reasoning') {
+    return capabilities.find((cap) => typeof cap.name === 'string' && cap.name.startsWith('reason'))?.name
+      || 'reason_control_platform';
+  }
+  return undefined;
+}
+
 function executionMessageBubble(role, text) {
   const bubble = document.createElement('div');
   bubble.className = `execution-message ${role}`;
@@ -880,22 +895,25 @@ async function sendExecutionQuery() {
   if (input) input.value = '';
   appendExecutionMessage('user', text, null);
 
+  const queryCap = selectedAgentCapability('query');
+  const reasonCap = selectedAgentCapability('reasoning');
+
   // Agent 带查询语义（intent）→ 只用 LLM 解析；旧 Agent 无 intent → 回退本地正则（向后兼容）。
   if (selectedAgentHasIntent()) {
     const remote = await tryParseIntentRemote(text, selectedExecutionAgent);
     if (remote?.kind === 'reasoning') {
-      await dispatchExecution(selectedExecutionAgent, 'reason_control_platform', remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
+      await dispatchExecution(selectedExecutionAgent, reasonCap, remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
       return;
     }
     if (remote?.kind === 'query') {
       const query = { path: remote.path, params: remote.params };
-      await dispatchExecution(selectedExecutionAgent, 'query_control_platform', query, `正在查询：${describeExecutionQuery(query)}…`);
+      await dispatchExecution(selectedExecutionAgent, queryCap, query, `正在查询：${describeExecutionQuery(query)}…`);
       return;
     }
     // LLM 失败/不可用 → 按 Agent 注册的 intent 做关键词回退（确定性，不依赖模型）。
     const fallback = parseExecutionQueryByIntent(text, selectedAgentIntent());
     if (fallback) {
-      await dispatchExecution(selectedExecutionAgent, 'query_control_platform', { path: fallback.path, params: fallback.params }, `正在查询：${describeExecutionQuery(fallback)}…`);
+      await dispatchExecution(selectedExecutionAgent, queryCap, { path: fallback.path, params: fallback.params }, `正在查询：${describeExecutionQuery(fallback)}…`);
       return;
     }
     appendExecutionMessage('agent', '意图识别失败，请换一种说法重试', null);
@@ -904,7 +922,7 @@ async function sendExecutionQuery() {
 
   const reasoning = parseExecutionReasoning(text);
   if (reasoning && !reasoning.error) {
-    await dispatchExecution(selectedExecutionAgent, 'reason_control_platform', reasoning, `正在推理：${describeExecutionReasoning(reasoning)}…`);
+    await dispatchExecution(selectedExecutionAgent, reasonCap, reasoning, `正在推理：${describeExecutionReasoning(reasoning)}…`);
     return;
   }
 
@@ -913,7 +931,7 @@ async function sendExecutionQuery() {
     appendExecutionMessage('agent', parsed.error, null);
     return;
   }
-  await dispatchExecution(selectedExecutionAgent, 'query_control_platform', { path: parsed.path, params: parsed.params }, `正在查询：${describeExecutionQuery(parsed)}…`);
+  await dispatchExecution(selectedExecutionAgent, queryCap, { path: parsed.path, params: parsed.params }, `正在查询：${describeExecutionQuery(parsed)}…`);
 }
 
 function pollExecutionRun(runId, pending) {
@@ -930,7 +948,7 @@ function pollExecutionRun(runId, pending) {
         if (run.state === 'completed') {
           const agent = executionAgents.find((item) => item.agentId === run.agentId);
           const intent = agent?.capabilities?.find((cap) => cap.intent)?.intent;
-          const summary = run.capability === 'reason_control_platform'
+          const summary = (typeof run.capability === 'string' && run.capability.startsWith('reason'))
             ? summarizeReasoningResult(run.result)
             : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {}, intent);
           pending.textEl.textContent = '';
