@@ -90,6 +90,7 @@ export class ExecutionAgentCore {
     this.log(`[agent] 收到派单 ${msg.runId}: ${capability}`);
     Promise.resolve()
       .then(() => handler(msg.input ?? {}, ctx))
+      .then((result) => ctx.sendComplete(result))
       .catch((error) => ctx.sendFailed('EXECUTION_FAILED', error?.message || String(error)));
   }
 

@@ -67,6 +67,16 @@ function Test-M01HubProcess {
   }
 }
 
+function Get-HubAuthMode {
+  param([string]$SessionUri)
+  try {
+    $session = Invoke-RestMethod -Uri $SessionUri -UseBasicParsing -TimeoutSec 10
+    return [string]$session.authMode
+  } catch {
+    return $null
+  }
+}
+
 $settings = Get-M01Settings -Path $environmentFile
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   throw 'Docker Desktop is not available. Start Docker Desktop and try again.'
@@ -80,12 +90,20 @@ if ($dryRun) {
 }
 
 $listener = Get-ListenerProcess
+$hubAlreadyRunning = $false
 if ($listener) {
   if (Test-M01HubProcess -Process $listener) {
-    Write-Output "M01 Hub is already running; use https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT'])."
-    return
+    $localAuthMode = Get-HubAuthMode -SessionUri 'http://127.0.0.1:8790/api/auth/session'
+    if ([string]::IsNullOrWhiteSpace($localAuthMode)) {
+      throw 'Port 8790 is occupied by an AEOS Hub whose authentication mode could not be verified. Stop it before starting M01.'
+    }
+    if ($localAuthMode -ne 'm01') {
+      throw "Port 8790 is occupied by an AEOS Hub running in '$localAuthMode' mode. Stop it before starting M01."
+    }
+    $hubAlreadyRunning = $true
+  } else {
+    throw 'Port 8790 is occupied by an unknown process. Nothing was changed.'
   }
-  throw 'Port 8790 is occupied by an unknown process. Nothing was changed.'
 }
 
 Push-Location -LiteralPath $repositoryRoot
@@ -109,6 +127,32 @@ do {
 } while ((Get-Date) -lt $deadline)
 if (-not $ready) { throw 'M01 identity service was not ready within two minutes. No Hub process was started.' }
 
-$arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$hubRunner`""
-Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repositoryRoot -WindowStyle Hidden
-Write-Output "M01 Hub is starting. Open https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT']) after a few seconds."
+$hubProcess = $null
+if (-not $hubAlreadyRunning) {
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$hubRunner`""
+  $hubProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repositoryRoot -WindowStyle Hidden -PassThru
+}
+
+$hubBaseUri = "https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($settings['M01_HUB_HTTPS_PORT'])"
+$hubSessionUri = "$hubBaseUri/api/auth/session"
+$deadline = (Get-Date).AddSeconds(120)
+$ready = $false
+do {
+  if ($null -ne $hubProcess) {
+    $hubProcess.Refresh()
+    if ($hubProcess.HasExited) {
+      throw "M01 Hub process exited before becoming ready (exit code $($hubProcess.ExitCode)). Run scripts/run-m01-hub.ps1 in the foreground to inspect the startup error."
+    }
+  }
+  if ((Get-HubAuthMode -SessionUri $hubSessionUri) -eq 'm01') {
+    $ready = $true
+    break
+  }
+  Start-Sleep -Seconds 2
+} while ((Get-Date) -lt $deadline)
+
+if (-not $ready) {
+  throw "M01 Hub did not become ready at $hubSessionUri within two minutes. Check Caddy and Hub logs before retrying."
+}
+
+Write-Output "M01 Hub is ready in M01 authentication mode. Open $hubBaseUri."

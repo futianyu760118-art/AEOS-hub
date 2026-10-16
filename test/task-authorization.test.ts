@@ -24,8 +24,9 @@ test('maps each G1 action to the required human role', () => {
     assert.equal(authorizeTaskAction({ action, actor: actor('m01:user:operator-demo', ['operator']), task: assignedTask }).allowed, true);
   }
   for (const action of ['verify', 'reject'] as const) {
-    assert.equal(authorizeTaskAction({ action, actor: actor('m01:user:supervisor-demo', ['supervisor']), task: assignedTask, registeredOwnerActorId: 'm01:user:supervisor-demo' }).allowed, true);
-    assert.equal(authorizeTaskAction({ action, actor: actor('m01:user:supervisor-other', ['supervisor']), task: assignedTask, registeredOwnerActorId: 'm01:user:supervisor-demo' }).code, 'REGISTERED_OWNER_MISMATCH');
+    assert.equal(authorizeTaskAction({ action, actor: actor('m01:user:manager-demo', ['manager']), task: assignedTask }).allowed, true);
+    assert.equal(authorizeTaskAction({ action, actor: actor('m01:user:supervisor-other', ['supervisor']), task: assignedTask }).allowed, true);
+    assert.equal(authorizeTaskAction({ action, actor: actor('m01:user:operator-demo', ['operator']), task: assignedTask }).code, 'MANAGER_ROLE_REQUIRED');
   }
 });
 

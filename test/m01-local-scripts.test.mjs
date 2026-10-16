@@ -22,6 +22,17 @@ test('M01 startup scripts use the ignored runtime file and preserve secrets', as
   assert.doesNotMatch(combined, /Write-(?:Host|Output).*M01_CLIENT_SECRET/);
 });
 
+test('M01 startup waits for the public session endpoint to confirm M01 auth mode', async () => {
+  const script = await source('start-m01-demo.ps1');
+  assert.match(script, /\/api\/auth\/session/);
+  assert.match(script, /localAuthMode\s+-ne\s+'m01'/);
+  assert.match(script, /Get-HubAuthMode[^\n]*-eq\s+'m01'/);
+  assert.equal(script.match(/AddSeconds\(120\)/g)?.length, 2);
+  assert.match(script, /Start-Process[^\n]*-PassThru/);
+  assert.match(script, /M01 Hub is ready/);
+  assert.doesNotMatch(script, /M01 Hub is starting/);
+});
+
 test('M01 status script uses braced interpolation before port-label colons', async () => {
   const script = await source('test-m01-demo.ps1');
   assert.match(script, /\$\{identityPort\}:/);

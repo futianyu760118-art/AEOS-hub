@@ -61,15 +61,18 @@ test('projects operator actions only onto the assigned human actor', () => {
   assert.equal(other.canStart, false);
 });
 
-test('projects verification only onto the registered supervisor/manager actor', () => {
+test('projects verification onto any in-scope manager or supervisor actor', () => {
   const awaiting = { ...baseTask, status: 'AWAITING_VERIFY', resultId: 'result-01' };
-  const verifier = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:supervisor-demo', roles: ['supervisor'] }, 'm01:user:supervisor-demo', g0Ready);
-  const wrongVerifier = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:other-supervisor', roles: ['supervisor'] }, 'm01:user:supervisor-demo', g0Ready);
+  const supervisor = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:supervisor-demo', roles: ['supervisor'] }, 'm01:user:supervisor-demo', g0Ready);
+  const otherSupervisor = taskUiCapabilities(awaiting, { ...operatorSession, actorId: 'm01:user:other-supervisor', roles: ['supervisor'] }, 'm01:user:supervisor-demo', g0Ready);
+  const plainOperator = taskUiCapabilities(awaiting, operatorSession, 'm01:user:supervisor-demo', g0Ready);
 
-  assert.equal(verifier.canVerify, true);
-  assert.equal(verifier.canReject, true);
-  assert.equal(wrongVerifier.canVerify, false);
-  assert.equal(wrongVerifier.canReject, false);
+  assert.equal(supervisor.canVerify, true);
+  assert.equal(supervisor.canReject, true);
+  assert.equal(otherSupervisor.canVerify, true);
+  assert.equal(otherSupervisor.canReject, true);
+  assert.equal(plainOperator.canVerify, false);
+  assert.equal(plainOperator.canReject, false);
 });
 
 test('keeps agent and system sessions read-only and only lets manager create an order task', () => {

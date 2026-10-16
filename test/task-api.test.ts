@@ -124,27 +124,26 @@ test('allows only the assigned human operator to accept, start, supplement evide
   assert.equal((result?.body as { task: { status: string } }).task.status, 'AWAITING_VERIFY');
 });
 
-test('permits only the G0-registered human supervisor to verify or reject', (t) => {
+test('permits human manager or supervisor in scope to verify, and rejects operator and non-human identities', (t) => {
   const { api, evidence, operatingCase } = fixture(t);
   const created = post(api, `/api/operating-cases/${operatingCase.id}/tasks`, manager, { priority: 'high', reason: '建立闭环' });
   const taskId = (created?.body as { task: { taskId: string } }).task.taskId;
   post(api, `/api/tasks/${taskId}/assignments`, manager, { assigneeRole: '订单交付经办人', assigneeActorId: operator.actorId, reason: '分派' });
   post(api, `/api/tasks/${taskId}/transitions`, operator, { toStatus: 'ACCEPTED', reason: '接受' });
   post(api, `/api/tasks/${taskId}/transitions`, operator, { toStatus: 'IN_PROGRESS', reason: '开始' });
-  const pending = post(api, `/api/tasks/${taskId}/results`, operator, { resultType: 'risk_analysis', summary: '待 Owner 核验' });
+  const pending = post(api, `/api/tasks/${taskId}/results`, operator, { resultType: 'risk_analysis', summary: '待核验' });
   const resultId = (pending?.body as { result: { result_id: string } }).result.result_id;
 
-  assert.equal(post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, manager, { outcome: 'VERIFIED', reason: '管理者不是 Owner' })?.status, 403);
-  assert.equal(post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, otherOwner, { outcome: 'VERIFIED', reason: '不是登记 Owner' })?.status, 403);
+  assert.equal(post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, operator, { outcome: 'VERIFIED', reason: '普通用户不得核验' })?.status, 403);
+  assert.equal((evidence.at(-1)?.payload as { policyCode?: string }).policyCode, 'MANAGER_ROLE_REQUIRED');
   assert.equal(post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, system, { outcome: 'VERIFIED', reason: '系统不得核验' })?.status, 403);
   assert.equal((evidence.at(-1)?.payload as { policyCode?: string }).policyCode, 'HUMAN_ACTOR_REQUIRED');
-  assert.equal(post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, service, { outcome: 'VERIFIED', reason: '服务不得核验' })?.status, 403);
   assert.equal(post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, service, { outcome: 'REJECTED', reason: '服务不得驳回' })?.status, 403);
 
-  const verified = post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, owner, { outcome: 'VERIFIED', reason: '业务 Owner 核验通过', actorId: otherOwner.actorId, roles: ['manager'], tenantId: 'tenant-z' });
+  const verified = post(api, `/api/tasks/${taskId}/results/${resultId}/verify`, otherOwner, { outcome: 'VERIFIED', reason: '主管核验通过', actorId: operator.actorId, roles: ['operator'], tenantId: 'tenant-z' });
   assert.equal(verified?.status, 200);
   assert.equal((verified?.body as { task: { status: string } }).task.status, 'COMPLETED');
-  assert.equal((verified?.body as { result: { status: string; verified_by: string } }).result.verified_by, owner.actorId);
+  assert.equal((verified?.body as { result: { status: string; verified_by: string } }).result.verified_by, otherOwner.actorId);
 });
 
 test('keeps task reads tenant-scoped without leaking another tenant task', (t) => {

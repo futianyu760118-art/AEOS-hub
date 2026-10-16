@@ -971,11 +971,11 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .collaboration-form input, .collaboration-form select, .collaboration-form textarea { width: 100%; min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 0 9px; color: var(--text-2); font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
 .collaboration-form textarea { height: 62px; padding-top: 8px; resize: vertical; }
 .collaboration-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.collaboration-board { display: grid; grid-template-columns: repeat(5, minmax(205px, 1fr)); gap: 10px; overflow-x: auto; padding: 10px; background: #f7f8fa; }
-.collaboration-column { min-width: 205px; min-height: 340px; border: 1px solid var(--line-subtle); border-radius: 9px; background: #fdfdfd; }
+.collaboration-board { display: grid; grid-template-columns: repeat(5, minmax(205px, 1fr)); gap: 10px; padding: 10px; background: #f7f8fa; }
+.collaboration-column { min-width: 205px; min-height: 340px; max-height: 560px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-subtle); border-radius: 9px; background: #fdfdfd; }
 .collaboration-column > header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-subtle); padding: 10px; color: var(--text-2); font-size: 11px; font-weight: 700; }
 .collaboration-column > header b { display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 999px; background: var(--line-subtle); color: var(--text-3); font-size: 10px; }
-.collaboration-column-body { display: flex; flex-direction: column; gap: 8px; min-height: 280px; padding: 8px; }
+.collaboration-column-body { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; padding: 8px; scrollbar-width: thin; }
 .collaboration-column.is-drop-target .collaboration-column-body { border-radius: 6px; outline: 2px dashed rgba(47,111,190,.35); outline-offset: -3px; background: rgba(47,111,190,.04); }
 .empty-column { margin: 28px 0; color: var(--text-3); text-align: center; font-size: 10px; }
 .collaboration-card { border: 1px solid var(--line-subtle); border-radius: 8px; background: #fff; padding: 10px; box-shadow: 0 1px 2px rgba(15,23,42,.025); }
@@ -995,6 +995,8 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .collaboration-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 9px; }
 .task-progress-action { margin-top: 0; padding: 0; color: var(--info); font-size: 10px; }
 .task-progress-action svg { width: 12px; height: 12px; }
+.collaboration-card .collaboration-assignment-form { grid-template-columns: 1fr 1fr; gap: 8px; }
+.collaboration-card .collaboration-assignment-form label { grid-column: 1 / -1; }
 .collaboration-table-wrap { overflow: auto; }
 .collaboration-table { width: 100%; min-width: 760px; border-collapse: collapse; }
 .collaboration-table th, .collaboration-table td { border-bottom: 1px solid var(--line-subtle); padding: 10px 12px; color: var(--text-2); text-align: left; vertical-align: middle; font-size: 11px; }

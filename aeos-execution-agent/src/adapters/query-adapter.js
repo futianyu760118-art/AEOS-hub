@@ -36,7 +36,7 @@ export function createHttpQueryAdapter(config) {
     return {};
   }
 
-  return async function query(request, abortSignal) {
+  return async function query(request, _ctx) {
     const path = typeof request.path === 'string' ? request.path : '';
     const params = request.params && typeof request.params === 'object' ? request.params : {};
     if (!path) throw errorWithCode('INVALID_ARGUMENT', '查询输入缺少 path');
@@ -50,7 +50,7 @@ export function createHttpQueryAdapter(config) {
         .map(([key, value]) => [key, String(value)]),
     ).toString();
     const url = `${baseUrl}${path}${queryString ? `?${queryString}` : ''}`;
-    const response = await fetch(url, { headers: authHeaders(path, endpointCode, queryString), signal: abortSignal });
+    const response = await fetch(url, { headers: authHeaders(path, endpointCode, queryString) });
     if (response.status === 200) {
       return unwrap(await response.json());
     }
