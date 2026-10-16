@@ -204,6 +204,9 @@ kbd {
 .login-card-title h2 { font-size: 20px; line-height: 1.2; font-weight: 650; }
 .login-card-title p { margin-top: 6px; color: #77787e; }
 .login-field { margin-top: 16px; animation: row-in 180ms cubic-bezier(0.25, 0.1, 0.25, 1) both; animation-delay: calc(80ms + (var(--login-order, 0) * 35ms)); }
+.login-field.login-order-0 { --login-order: 0; }
+.login-field.login-order-1 { --login-order: 1; }
+.login-field.login-order-2 { --login-order: 2; }
 .login-field:first-child { margin-top: 0; }
 .login-field label { display: block; margin-bottom: 6px; color: #55565c; font-size: 12px; font-weight: 600; }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -746,6 +749,7 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .msg .bubble .h1 { font-size: 15px; }
 .msg .bubble .h2 { font-size: 14px; }
 .msg .bubble .h3 { font-size: 13px; }
+.msg .bubble hr.md-hr { border: 0; border-top: 1px solid var(--line); margin: 7px 0; }
 .msg .tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .msg.runtime-events { width: min(92%, 840px); align-self: flex-start; gap: 6px; }
 .msg.runtime-events .tools { border-left: 2px solid rgba(161, 92, 0, 0.18); padding-left: 9px; }

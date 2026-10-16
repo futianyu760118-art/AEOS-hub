@@ -37,14 +37,14 @@
           </div>
           <form id="login-form" novalidate>
             <div id="local-login-fields">
-              <div class="login-field" style="--login-order:0">
+              <div class="login-field login-order-0">
                 <label for="login-account">账号</label>
                 <div class="input-with-icon">
                   <i data-lucide="user-round" aria-hidden="true"></i>
                   <input id="login-account" name="account" autocomplete="username" placeholder="输入账号或用户编号" autofocus />
                 </div>
               </div>
-              <div class="login-field" style="--login-order:1">
+              <div class="login-field login-order-1">
                 <div class="label-row">
                   <label for="login-password">密码</label>
                   <span>使用工作区账号继续</span>
@@ -55,7 +55,7 @@
                   <button id="toggle-password" class="icon-btn input-action" type="button" title="显示密码" aria-label="显示密码"><i data-lucide="eye" aria-hidden="true"></i></button>
                 </div>
               </div>
-              <div class="login-field" style="--login-order:2">
+              <div class="login-field login-order-2">
                 <button id="login-submit" class="btn primary login-submit" type="submit"><i data-lucide="arrow-right" aria-hidden="true"></i><span>继续进入工作区</span></button>
               </div>
             </div>
@@ -750,6 +750,6 @@
   <datalist id="model-registry-options"></datalist>
   <datalist id="model-provider-options"></datalist>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=capability-dynamic-20261015"></script>
+  <script type="module" src="/app.js?v=csp-inline-style-fix-20261016"></script>
 </body>
 </html>

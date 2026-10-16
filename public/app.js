@@ -304,8 +304,20 @@ const SPLIT = '::';
 
 function refreshIcons(root = document) {
   localizeDynamicCopy(root);
+  applyDataStyles(root);
   if (!window.lucide?.createIcons) return;
   window.lucide.createIcons({ root, attrs: { 'aria-hidden': 'true' } });
+}
+
+// CSP 禁止内联 style 属性：模板渲染改带 data-*，渲染后经 CSSOM 写入（不受 style-src 限制）。
+function applyDataStyles(root = document) {
+  for (const bar of root.querySelectorAll('[data-progress]')) {
+    const value = Math.max(0, Math.min(100, Math.round(Number(bar.dataset.progress) || 0)));
+    bar.style.width = `${value}%`;
+  }
+  for (const indent of root.querySelectorAll('[data-depth]')) {
+    indent.style.setProperty('--depth', String(Math.max(0, Math.round(Number(indent.dataset.depth) || 0))));
+  }
 }
 
 function esc(value) {
@@ -1320,7 +1332,7 @@ function md(text) {
     if (/^##\s+/.test(out)) return `<b class="h2">${out.slice(3)}</b>`;
     if (/^#\s+/.test(out)) return `<b class="h1">${out.slice(2)}</b>`;
     if (/^[-*]\s+/.test(out)) return `&nbsp;&nbsp;• ${out.slice(2)}`;
-    if (/^\s*---+\s*$/.test(out)) return '<hr style="border:0;border-top:1px solid var(--line);margin:7px 0" />';
+    if (/^\s*---+\s*$/.test(out)) return '<hr class="md-hr" />';
     return out;
   }).join('\n');
 }
@@ -3554,7 +3566,8 @@ async function openRolePermissionModal(roleCode, roleName) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(personnelFailureReason(data, response.status));
     const grants = new Map((data.grants || []).map((grant) => [grant.resourceCode, grant.operations || []]));
-    els.rolePermissionGrid.innerHTML = flatAccessResources(accessResources).map((resource) => `<div class="access-grant-row" data-grant-resource="${esc(resource.code)}"><div class="access-grant-resource"><span class="access-indent" style="--depth:${resource.depth}"></span><b>${esc(resource.name)}</b> <code>${esc(resource.code)}</code></div>${['create', 'read', 'update', 'delete'].map((operation) => `<label><input type="checkbox" value="${operation}" ${resource.operations.includes(operation) ? '' : 'disabled'} ${grants.get(resource.code)?.includes(operation) ? 'checked' : ''} />${OPERATION_LABELS[operation] || operation}</label>`).join('')}</div>`).join('');
+    els.rolePermissionGrid.innerHTML = flatAccessResources(accessResources).map((resource) => `<div class="access-grant-row" data-grant-resource="${esc(resource.code)}"><div class="access-grant-resource"><span class="access-indent" data-depth="${resource.depth}"></span><b>${esc(resource.name)}</b> <code>${esc(resource.code)}</code></div>${['create', 'read', 'update', 'delete'].map((operation) => `<label><input type="checkbox" value="${operation}" ${resource.operations.includes(operation) ? '' : 'disabled'} ${grants.get(resource.code)?.includes(operation) ? 'checked' : ''} />${OPERATION_LABELS[operation] || operation}</label>`).join('')}</div>`).join('');
+    applyDataStyles(els.rolePermissionGrid);
     els.rolePermissionStatus.textContent = '';
   } catch (error) { els.rolePermissionStatus.textContent = `读取失败：${error.message}`; }
 }
@@ -3584,7 +3597,7 @@ async function loadPermissionAdminView(options = {}) {
     const resources = visibleAccessResources(accessResources);
     els.permissionSummary.textContent = `共 ${allResources.length} 个权限节点 · 启用 ${allResources.filter((item) => item.enabled).length} · 停用 ${allResources.filter((item) => !item.enabled).length}`;
     els.permissionList.innerHTML = `<table class="access-table"><thead><tr><th>名称</th><th>编码</th><th>路由</th><th>操作集</th><th>排序</th><th>启用</th><th>操作</th></tr></thead><tbody>${resources.map((resource) => `<tr>
-      <td><span class="access-indent" style="--depth:${resource.depth}"></span>${resource.children?.length ? `<button class="icon-btn access-expand" type="button" data-permission-expand="${esc(resource.code)}" aria-label="展开或收起">${collapsedAccessResources.has(resource.code) ? '+' : '−'}</button>` : '<span class="access-expand-placeholder"></span>'}<b>${esc(resource.name)}</b></td><td><code class="access-code">${esc(resource.code)}</code></td><td>${resource.route ? `<code>${esc(resource.route)}</code>` : '—'}</td><td>${resource.operations.map((operation) => `<span class="access-op">${OPERATION_LABELS[operation] || operation}</span>`).join('')}</td><td>${esc(resource.sort)}</td><td><button class="btn secondary compact" type="button" data-permission-toggle="${esc(resource.code)}">${resource.enabled ? '启用' : '停用'}</button></td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-permission-child="${esc(resource.code)}">子级</button><button class="btn secondary compact" type="button" data-permission-edit="${esc(resource.code)}">编辑</button><button class="btn danger compact" type="button" data-permission-delete="${esc(resource.code)}">删除</button></div></td>
+      <td><span class="access-indent" data-depth="${resource.depth}"></span>${resource.children?.length ? `<button class="icon-btn access-expand" type="button" data-permission-expand="${esc(resource.code)}" aria-label="展开或收起">${collapsedAccessResources.has(resource.code) ? '+' : '−'}</button>` : '<span class="access-expand-placeholder"></span>'}<b>${esc(resource.name)}</b></td><td><code class="access-code">${esc(resource.code)}</code></td><td>${resource.route ? `<code>${esc(resource.route)}</code>` : '—'}</td><td>${resource.operations.map((operation) => `<span class="access-op">${OPERATION_LABELS[operation] || operation}</span>`).join('')}</td><td>${esc(resource.sort)}</td><td><button class="btn secondary compact" type="button" data-permission-toggle="${esc(resource.code)}">${resource.enabled ? '启用' : '停用'}</button></td><td><div class="access-table-actions"><button class="btn secondary compact" type="button" data-permission-child="${esc(resource.code)}">子级</button><button class="btn secondary compact" type="button" data-permission-edit="${esc(resource.code)}">编辑</button><button class="btn danger compact" type="button" data-permission-delete="${esc(resource.code)}">删除</button></div></td>
     </tr>`).join('')}</tbody></table>`;
     els.permissionStatus.textContent = '删除父权限前须先删除其子级；删除权限会同步清理角色中的对应授权。';
     refreshIcons($('#view-permission-admin'));
@@ -3942,7 +3955,7 @@ function renderProjectList() {
   const projects = (projectCenterState.projects || []).filter((project) => (!query || [project.name, project.description, project.ownerActorId].some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(query))) && (status === 'all' || project.status === status));
   els.projectList.innerHTML = projects.length ? `<table class="collaboration-table"><thead><tr><th>项目名称</th><th>状态</th><th>优先级</th><th>进度</th><th>负责人</th><th>创建时间</th></tr></thead><tbody>${projects.map((project) => {
     const display = projectDisplayState(project, taskCenterState.tasks || []);
-    return `<tr class="project-row" data-project-open="${esc(project.projectId)}"><td><b><i data-lucide="folder"></i>${esc(project.name)}</b><small>${esc(project.description || '未填写项目描述')}</small></td><td><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></td><td>${esc(display.priorityLabel)}</td><td><div class="progress-cell"><span><i style="width:${display.progress.percent}%"></i></span><b>${display.progress.completed}/${display.progress.total}</b></div></td><td>${esc(display.ownerLabel)}</td><td>${esc(formatHarborTime(project.createdAt))}</td></tr>`;
+    return `<tr class="project-row" data-project-open="${esc(project.projectId)}"><td><b><i data-lucide="folder"></i>${esc(project.name)}</b><small>${esc(project.description || '未填写项目描述')}</small></td><td><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></td><td>${esc(display.priorityLabel)}</td><td><div class="progress-cell"><span><i data-progress="${display.progress.percent}"></i></span><b>${display.progress.completed}/${display.progress.total}</b></div></td><td>${esc(display.ownerLabel)}</td><td>${esc(formatHarborTime(project.createdAt))}</td></tr>`;
   }).join('')}</tbody></table>` : '<div class="dashboard-loading">尚无项目。请新建第一个项目开始协同。</div>';
   renderProjectWorkspace();
   refreshIcons(els.projectList);
@@ -3960,7 +3973,7 @@ function renderProjectWorkspace() {
     ? collaborationBoardGroups(tasks).map((column) => `<section class="collaboration-column"><header><span>${esc(column.label)}</span><b>${column.tasks.length}</b></header><div class="collaboration-column-body">${column.tasks.map((task) => renderCollaborationCard(task, true)).join('') || '<p class="empty-column">暂无任务</p>'}</div></section>`).join('')
     : `<div class="project-empty-state"><p>此项目还没有关联任务。</p>${collaborationManager() ? `<button class="btn primary compact" data-project-new-task="${esc(project.projectId)}" type="button"><i data-lucide="plus"></i>在此项目新建任务</button>` : `<p class="empty-column">仅 manager 角色可新建协同任务。</p>`}</div>`;
   els.projectWorkspace.classList.remove('hidden');
-  els.projectWorkspace.innerHTML = `<section class="surface project-workspace-board"><div class="surface-head"><div><h2><i data-lucide="folder-open"></i>${esc(project.name)}</h2><p>${esc(project.description || '未填写项目描述')}</p></div><button class="btn ghost compact" data-project-close type="button">返回项目列表</button></div><div class="project-workspace-layout"><div class="project-task-board">${boardBody}</div><aside class="project-detail-panel"><h3>项目属性</h3><dl><div><dt>状态</dt><dd><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></dd></div><div><dt>优先级</dt><dd>${esc(display.priorityLabel)}</dd></div><div><dt>负责人</dt><dd>${esc(project.ownerActorId)}</dd></div><div><dt>成员</dt><dd>${esc((project.memberActorIds || []).join('、'))}</dd></div><div><dt>开始日期</dt><dd>${esc(project.startDate || '—')}</dd></div><div><dt>截止日期</dt><dd>${esc(project.dueDate || '—')}</dd></div></dl><div class="project-progress"><span>进度 ${display.progress.percent}%</span><i><b style="width:${display.progress.percent}%"></b></i><small>${display.progress.completed}/${display.progress.total} 项任务已完成</small></div>${collaborationManager() ? `<div class="project-detail-actions"><button class="btn secondary compact" data-project-edit="${esc(project.projectId)}" type="button">编辑属性</button><button class="btn secondary compact" data-project-status="IN_PROGRESS" data-project-id="${esc(project.projectId)}" type="button">设为进行中</button><button class="btn ghost compact" data-project-status="COMPLETED" data-project-id="${esc(project.projectId)}" type="button">标记完成</button>${project.status !== 'CANCELLED' ? `<button class="btn ghost compact" data-project-status="CANCELLED" data-project-id="${esc(project.projectId)}" type="button">取消项目</button>` : ''}</div>` : ''}</aside></div></section>`;
+  els.projectWorkspace.innerHTML = `<section class="surface project-workspace-board"><div class="surface-head"><div><h2><i data-lucide="folder-open"></i>${esc(project.name)}</h2><p>${esc(project.description || '未填写项目描述')}</p></div><button class="btn ghost compact" data-project-close type="button">返回项目列表</button></div><div class="project-workspace-layout"><div class="project-task-board">${boardBody}</div><aside class="project-detail-panel"><h3>项目属性</h3><dl><div><dt>状态</dt><dd><span class="status-pill ${esc(display.tone)}">${esc(display.label)}</span></dd></div><div><dt>优先级</dt><dd>${esc(display.priorityLabel)}</dd></div><div><dt>负责人</dt><dd>${esc(project.ownerActorId)}</dd></div><div><dt>成员</dt><dd>${esc((project.memberActorIds || []).join('、'))}</dd></div><div><dt>开始日期</dt><dd>${esc(project.startDate || '—')}</dd></div><div><dt>截止日期</dt><dd>${esc(project.dueDate || '—')}</dd></div></dl><div class="project-progress"><span>进度 ${display.progress.percent}%</span><i><b data-progress="${display.progress.percent}"></b></i><small>${display.progress.completed}/${display.progress.total} 项任务已完成</small></div>${collaborationManager() ? `<div class="project-detail-actions"><button class="btn secondary compact" data-project-edit="${esc(project.projectId)}" type="button">编辑属性</button><button class="btn secondary compact" data-project-status="IN_PROGRESS" data-project-id="${esc(project.projectId)}" type="button">设为进行中</button><button class="btn ghost compact" data-project-status="COMPLETED" data-project-id="${esc(project.projectId)}" type="button">标记完成</button>${project.status !== 'CANCELLED' ? `<button class="btn ghost compact" data-project-status="CANCELLED" data-project-id="${esc(project.projectId)}" type="button">取消项目</button>` : ''}</div>` : ''}</aside></div></section>`;
   refreshIcons(els.projectWorkspace);
 }
 
@@ -4973,7 +4986,7 @@ function renderHarbor() {
       <span><b class="status-pill ${priorityTone}">${priorityLabel}</b></span>
       <span class="harbor-cell"><strong>${esc(lead)}</strong><small>${project.leadType === 'agent' ? 'Agent Lead' : 'Human Owner'}</small></span>
       <span>${teamNames.length ? `${teamNames.length} 个智能体` : '仅人工团队'}</span>
-      <span class="harbor-progress"><span><i style="width:${progress}%"></i></span><code>${progress}%</code></span>
+      <span class="harbor-progress"><span><i data-progress="${progress}"></i></span><code>${progress}%</code></span>
       <span>${statusPill('project', project.status)}</span>
     </div>`;
   }).join('') : harborEmpty('folder-plus', '暂无协作项目', '以目标、Owner 和验收证据组织人机协作');
