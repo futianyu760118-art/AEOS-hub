@@ -77,6 +77,7 @@ import { KeycloakPersonnelAdmin, readPersonnelAdminConfig } from './keycloak-per
 import { PersonnelApi } from './personnel-api.ts';
 import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
+import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
@@ -193,6 +194,7 @@ const executionPlane = new ExecutionPlaneRegistry({
   onChange: () => syncExecutionHealth(),
   onUsageEvent: (event) => recordUsageEvent(event),
 });
+const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
 setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
 
 // 执行面心跳 → Harbor runtime 健康（节流：状态变化立即写，否则每 agent 最多 30s 写一次）。
@@ -1343,6 +1345,33 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/auth/session') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     sendJson(res, 200, authGateway.session(req.headers.cookie));
+    return;
+  }
+  // ---------- 系统自助增删本系统 Agent 控制面（token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/agents')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method !== 'GET' && req.method !== 'DELETE') {
+        try { body = await readJsonBody(req); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = await agentControlApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: headerValue('x-aeos-system-id'),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+      });
+      if (!outcome) { sendJson(res, 404, { error: 'agent-control endpoint not found' }); }
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
     return;
   }
   const publicAsset = isPublicLoginResource(url.pathname, req.method);

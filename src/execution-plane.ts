@@ -38,6 +38,8 @@ export interface ExecutionAgentRecord {
   local: boolean;
   /** 执行智能体所属的业务系统，由注册方声明。 */
   sourceSystem: string;
+  /** 软删除时间戳：系统自助注销后保留画像/用量台账，仅强制离线、不再派单。 */
+  deregisteredAt?: string | null;
 }
 
 export interface ExecutionRunRecord {
@@ -301,6 +303,7 @@ export class ExecutionPlaneRegistry {
       registeredAt: existing?.record.registeredAt ?? now,
       local,
       sourceSystem,
+      deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send });
     this.persist();
@@ -457,6 +460,63 @@ export class ExecutionPlaneRegistry {
     }
     if (count > 0) this.persist();
     return count;
+  }
+
+  // ---------- 控制面：系统自助声明/注销本系统 Agent（token 鉴权后调用） ----------
+  /** 声明本系统 Agent 画像（upsert）。不改动运行时连接状态：已有在线连接则保留，仅更新 name/version/capabilities。 */
+  declareAgent(
+    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown },
+    sourceSystem: string,
+  ): ExecutionAgentRecord {
+    const agentId = requireString(input.agentId, 'agentId', 160);
+    const name = requireString(input.name, 'name', 160);
+    const version = typeof input.version === 'string' ? input.version.slice(0, 40) : 'unknown';
+    const capabilities = parseCapabilities(input.capabilities);
+    const ownedSourceSystem = requireString(sourceSystem, 'sourceSystem', 160);
+
+    const existing = this.agents.get(agentId);
+    if (existing && existing.record.sourceSystem !== ownedSourceSystem) {
+      throw new ExecutionPlaneError('AGENT_OWNED_BY_OTHER', `执行面 ${agentId} 属于其他系统，无权操作`);
+    }
+    const now = this.nowIso();
+    const record: ExecutionAgentRecord = {
+      agentId,
+      name,
+      version,
+      capabilities,
+      connectionStatus: existing?.record.connectionStatus ?? 'offline',
+      runtimeStatus: existing?.record.runtimeStatus ?? 'idle',
+      lastSeenAt: existing?.record.lastSeenAt ?? now,
+      currentRunId: existing?.record.currentRunId ?? null,
+      registeredAt: existing?.record.registeredAt ?? now,
+      local: existing?.record.local ?? false,
+      sourceSystem: ownedSourceSystem,
+      deregisteredAt: null,
+    };
+    this.agents.set(agentId, { record, send: existing?.send ?? (() => {}) });
+    this.persist();
+    return record;
+  }
+
+  /** 软注销本系统 Agent：保留画像与用量台账，仅强制离线、清空运行、停止派单。 */
+  deregister(agentId: string, sourceSystem: string): ExecutionAgentRecord {
+    const entry = this.requireAgent(agentId);
+    const ownedSourceSystem = requireString(sourceSystem, 'sourceSystem', 160);
+    if (entry.record.sourceSystem !== ownedSourceSystem) {
+      throw new ExecutionPlaneError('AGENT_OWNED_BY_OTHER', `执行面 ${agentId} 属于其他系统，无权操作`);
+    }
+    entry.record.deregisteredAt = this.nowIso();
+    entry.record.connectionStatus = 'offline';
+    entry.record.runtimeStatus = 'idle';
+    entry.record.currentRunId = null;
+    entry.send = () => {};
+    this.persist();
+    return entry.record;
+  }
+
+  /** 列出本系统的全部 Agent（含已软注销的，供系统自检/追溯）。 */
+  listForSystem(sourceSystem: string): ExecutionAgentRecord[] {
+    return [...this.agents.values()].map((entry) => entry.record).filter((record) => record.sourceSystem === sourceSystem);
   }
 
   list(): ExecutionPlaneSnapshot {
