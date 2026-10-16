@@ -92,6 +92,11 @@ const els = {
   harborRunCount: $('#harbor-run-count'), harborRunActive: $('#harbor-run-active'),
   harborRuntimeBoundaryStatus: $('#harbor-runtime-boundary-status'), harborUpdated: $('#harbor-updated'),
   harborAgentList: $('#harbor-agent-list'), harborRuntimeList: $('#harbor-runtime-list'), harborProjectList: $('#harbor-project-list'),
+  harborModelList: $('#harbor-model-list'), harborModelCount: $('#harbor-model-count'), harborModelActiveCount: $('#harbor-model-active-count'),
+  harborCostMonth: $('#harbor-cost-month'), harborCostMonthNote: $('#harbor-cost-month-note'),
+  harborUsageMetrics: $('#harbor-usage-metrics'), harborUsageAgentList: $('#harbor-usage-agent-list'),
+  harborUsageModelList: $('#harbor-usage-model-list'), harborUsageRecent: $('#harbor-usage-recent'),
+  harborUsageMonth: $('#harbor-usage-month'), harborUsageAgentFilter: $('#harbor-usage-agent-filter'), harborUsageRefresh: $('#harbor-usage-refresh'),
   harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentSquadFilter: $('#harbor-agent-squad-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'),
   btnAddAgent: $('#btn-add-agent'), btnAddRuntime: $('#btn-add-runtime'),
   harborModal: $('#harbor-modal'), harborModalKicker: $('#harbor-modal-kicker'), harborModalTitle: $('#harbor-modal-title'),
@@ -126,6 +131,10 @@ let welcomeState = { step: 0, name: '管理者', role: '决策责任人', defaul
 let harbor = { version: 1, agents: [], runtimes: [], projects: [], runs: [] };
 let harborAgentFilter = { query: '', level: 'all', status: 'all', squad: 'all' };
 let harborModalType = null;
+let harborModalEditId = null;
+let modelRegistry = { version: 1, revision: 0, models: [] };
+let usageSummary = null;
+let usageMonth = localMonthKey();
 let squad = { version: 1, lead: null, subSquads: [], squadMemories: [], squadActivities: [], members: [], memories: [], activities: [], messages: [] };
 let selectedSquadMemberId = null;
 let selectedBusinessSquadId = 'business-squad-orders';
@@ -241,6 +250,24 @@ function localDateKey(date = new Date()) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function localMonthKey(date = new Date()) {
+  return localDateKey(date).slice(0, 7);
+}
+
+function formatTokenCount(value) {
+  const n = Number(value) || 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString('zh-CN');
+}
+
+function formatCostAmounts(cost) {
+  const entries = Object.entries(cost || {}).filter(([, amount]) => amount > 0);
+  if (!entries.length) return null;
+  const symbols = { CNY: '¥', USD: '$' };
+  return entries.map(([currency, amount]) => `${symbols[currency] || currency}${amount < 0.01 && amount > 0 ? amount.toFixed(4) : amount.toFixed(2)}`).join(' + ');
 }
 
 function toast(message, isError = false) {
@@ -2959,6 +2986,9 @@ function harborStatus(kind, value) {
       planned: ['规划中', 'neutral'], in_progress: ['进行中', 'ok'], paused: ['已暂停', 'warn'],
       completed: ['已完成', 'info'], cancelled: ['已取消', 'neutral'],
     },
+    model: {
+      active: ['可用', 'ok'], inactive: ['已停用', 'neutral'],
+    },
   };
   return maps[kind]?.[value] || [String(value || '未知'), 'neutral'];
 }
@@ -3149,15 +3179,21 @@ function renderHarbor() {
 
 async function loadHarbor(options = {}) {
   try {
-    const [response, squadResponse] = await Promise.all([
+    const [response, squadResponse, modelsResponse] = await Promise.all([
       fetch('/api/harbor', { headers: { accept: 'application/json' } }),
       fetch('/api/agent-squad', { headers: { accept: 'application/json' } }),
+      fetch('/api/models', { headers: { accept: 'application/json' } }),
     ]);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     harbor = data;
     if (squadResponse.ok) squad = await squadResponse.json();
+    if (modelsResponse.ok) modelRegistry = await modelsResponse.json();
     renderHarbor();
+    renderModels();
+    renderModelDatalists();
+    refreshUsageAgentFilter();
+    void loadUsage({ silent: true });
     if (!$('#view-squad').classList.contains('hidden')) renderSquad();
   } catch (error) {
     if (!options.silent) toast(`加载 AI 港湾失败：${error.message}`, true);
@@ -3166,6 +3202,180 @@ async function loadHarbor(options = {}) {
       refreshIcons(node);
     });
   }
+}
+
+// ---------- 模型中心 ----------
+
+function modelPricingLabel(model) {
+  if (!model.pricing) return '<span class="subtle">未配置（只计用量）</span>';
+  const symbol = model.pricing.currency === 'USD' ? '$' : '¥';
+  return `<div class="harbor-cell"><code>输入 ${symbol}${model.pricing.inputPerMTok} / 缓存 ${symbol}${model.pricing.cachedInputPerMTok} / 输出 ${symbol}${model.pricing.outputPerMTok}</code><small>每百万 token · ${model.pricing.currency}</small></div>`;
+}
+
+function renderModels() {
+  const models = Array.isArray(modelRegistry.models) ? modelRegistry.models : [];
+  if (els.harborModelCount) els.harborModelCount.textContent = String(models.length);
+  if (els.harborModelActiveCount) els.harborModelActiveCount.textContent = `${models.filter((item) => item.status === 'active').length} 个可用`;
+  if (!els.harborModelList) return;
+  els.harborModelList.innerHTML = models.length ? models.map((model) => `<div class="harbor-row">
+    <div class="harbor-identity"><span class="harbor-avatar runtime"><i data-lucide="cpu"></i></span><span class="harbor-primary"><strong>${esc(model.name)}</strong><small><code>${esc(model.provider)} / ${esc(model.model)}</code></small></span></div>
+    <span>${harborTags(model.capabilities, '未标注能力')}</span>
+    <span class="harbor-cell"><strong>${model.contextWindow ? esc(formatTokenCount(model.contextWindow)) : '—'}</strong><small>上下文 token</small></span>
+    <span>${modelPricingLabel(model)}</span>
+    <span>${statusPill('model', model.status)}</span>
+    <span class="harbor-model-actions">
+      <button class="btn secondary compact" type="button" data-model-edit-id="${esc(model.id)}"><i data-lucide="pencil"></i>编辑</button>
+      <button class="icon-btn" type="button" title="删除 ${esc(model.name)}" aria-label="删除 ${esc(model.name)}" data-model-delete-id="${esc(model.id)}"><i data-lucide="trash-2"></i></button>
+    </span>
+  </div>`).join('') : harborEmpty('cpu', '暂无登记模型', '登记模型能力与单价后，智能体选型和费用估算将使用这里的口径');
+  refreshIcons(els.harborModelList);
+}
+
+function renderModelDatalists() {
+  const models = Array.isArray(modelRegistry.models) ? modelRegistry.models : [];
+  const modelOptions = $('#model-registry-options');
+  const providerOptions = $('#model-provider-options');
+  if (modelOptions) {
+    modelOptions.innerHTML = models.map((model) => `<option value="${esc(model.model)}">${esc(model.provider)} · ${esc(model.name)}</option>`).join('');
+  }
+  if (providerOptions) {
+    const providers = [...new Set(models.map((model) => model.provider))];
+    providerOptions.innerHTML = providers.map((provider) => `<option value="${esc(provider)}"></option>`).join('');
+  }
+}
+
+async function loadModels(options = {}) {
+  try {
+    const response = await fetch('/api/models', { headers: { accept: 'application/json' } });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    modelRegistry = data;
+    renderModels();
+    renderModelDatalists();
+  } catch (error) {
+    if (!options.silent) toast(`加载模型中心失败：${error.message}`, true);
+  }
+}
+
+async function deleteModelEntry(modelId) {
+  const model = (modelRegistry.models || []).find((item) => item.id === modelId);
+  if (!model) return;
+  if (!window.confirm(`删除模型“${model.name}”吗？\n\n删除后新的用量不再计费；历史费用记录保持不变。`)) return;
+  const response = await fetch(`/api/models/${encodeURIComponent(modelId)}`, { method: 'DELETE', headers: { accept: 'application/json' } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  await loadModels({ silent: true });
+  toast(`已删除模型“${model.name}”`);
+}
+
+// ---------- 费用用量 ----------
+
+function usageMonthRange(month) {
+  const [year, mon] = String(month || localMonthKey()).split('-').map(Number);
+  const from = `${String(year).padStart(4, '0')}-${String(mon).padStart(2, '0')}-01`;
+  const lastDay = new Date(year, mon, 0).getDate();
+  const today = localDateKey();
+  const to = `${from.slice(0, 8)}${String(lastDay).padStart(2, '0')}` > today || month === localMonthKey() ? today : `${from.slice(0, 8)}${String(lastDay).padStart(2, '0')}`;
+  return { from, to };
+}
+
+function refreshUsageAgentFilter() {
+  if (!els.harborUsageAgentFilter) return;
+  const agents = [...(harbor.agents || [])];
+  const previous = els.harborUsageAgentFilter.value;
+  const known = new Set(agents.map((agent) => agent.id));
+  const extra = [...new Set((usageSummary?.byAgent || []).map((row) => row.agentId).filter((id) => !known.has(id)))];
+  els.harborUsageAgentFilter.innerHTML = `<option value="">全部智能体</option>${agents.map((agent) => `<option value="${esc(agent.id)}">${esc(agent.name)}</option>`).join('')}${extra.map((id) => {
+    const row = (usageSummary?.byAgent || []).find((item) => item.agentId === id);
+    return `<option value="${esc(id)}">${esc(row?.agentName || id)}（未登记）</option>`;
+  }).join('')}`;
+  els.harborUsageAgentFilter.value = [...els.harborUsageAgentFilter.options].some((option) => option.value === previous) ? previous : '';
+}
+
+async function loadUsage(options = {}) {
+  try {
+    const { from, to } = usageMonthRange(usageMonth);
+    const agentId = els.harborUsageAgentFilter?.value || '';
+    const params = new URLSearchParams({ from, to });
+    if (agentId) params.set('agentId', agentId);
+    const response = await fetch(`/api/usage/summary?${params.toString()}`, { headers: { accept: 'application/json' } });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    usageSummary = data;
+    renderUsage();
+    refreshUsageAgentFilter();
+    void loadMonthCostCard();
+  } catch (error) {
+    if (!options.silent) toast(`加载费用用量失败：${error.message}`, true);
+  }
+}
+
+async function loadMonthCostCard() {
+  if (!els.harborCostMonth) return;
+  try {
+    const month = localMonthKey();
+    const { from, to } = usageMonthRange(month);
+    const response = await fetch(`/api/usage/summary?${new URLSearchParams({ from, to })}`, { headers: { accept: 'application/json' } });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    const cost = formatCostAmounts(data.totals?.cost);
+    els.harborCostMonth.textContent = cost || '¥0.00';
+    els.harborCostMonthNote.textContent = data.totals?.records
+      ? `${data.totals.records} 次记账 · ${formatTokenCount(data.totals.totalTokens)} tokens`
+      : '暂无记账';
+  } catch {
+    els.harborCostMonth.textContent = '--';
+    els.harborCostMonthNote.textContent = '费用数据暂不可用';
+  }
+}
+
+function usageCostCell(bucket) {
+  const cost = formatCostAmounts(bucket.cost);
+  if (cost) return `<strong>${esc(cost)}</strong>${bucket.unpricedRecords ? `<small>${bucket.unpricedRecords} 次未计费</small>` : ''}`;
+  return `<span class="subtle">${bucket.records ? '未配置单价' : '—'}</span>`;
+}
+
+function renderUsage() {
+  if (!els.harborUsageMetrics) return;
+  const summary = usageSummary;
+  if (!summary) {
+    els.harborUsageMetrics.innerHTML = '';
+    els.harborUsageAgentList.innerHTML = harborEmpty('coins', '暂无费用数据', '发起对话后，Runtime 上报的 token 用量会自动记账');
+    els.harborUsageModelList.innerHTML = '';
+    els.harborUsageRecent.innerHTML = '';
+    refreshIcons($('#harbor-panel-usage'));
+    return;
+  }
+  const cost = formatCostAmounts(summary.totals.cost);
+  els.harborUsageMetrics.innerHTML = `
+    <div><span>估算费用</span><strong>${esc(cost || '¥0.00')}</strong><small>依据模型中心参考单价</small></div>
+    <div><span>记账次数</span><strong>${summary.totals.records}</strong><small>token 用量增量</small></div>
+    <div><span>Tokens 总量</span><strong>${esc(formatTokenCount(summary.totals.totalTokens))}</strong><small>入 ${esc(formatTokenCount(summary.totals.inputTokens))} · 出 ${esc(formatTokenCount(summary.totals.outputTokens))}</small></div>
+    <div><span>未计费次数</span><strong>${summary.totals.unpricedRecords}</strong><small>模型未配置单价</small></div>`;
+
+  els.harborUsageAgentList.innerHTML = summary.byAgent.length ? summary.byAgent.map((row) => `<div class="harbor-row">
+    <div class="harbor-identity"><span class="harbor-avatar"><i data-lucide="bot"></i></span><span class="harbor-primary"><strong>${esc(row.agentName)}</strong><small>${esc(row.agentId)}</small></span></div>
+    <span>${row.records}</span>
+    <span class="harbor-cell"><strong>${esc(formatTokenCount(row.totalTokens))}</strong><small>入 ${esc(formatTokenCount(row.inputTokens))} · 出 ${esc(formatTokenCount(row.outputTokens))}</small></span>
+    <span>${usageCostCell(row)}</span>
+  </div>`).join('') : harborEmpty('coin-off', '该区间暂无智能体用量', '发起对话或调整月份后查看');
+
+  els.harborUsageModelList.innerHTML = summary.byModel.length ? summary.byModel.map((row) => `<div class="harbor-row">
+    <div class="harbor-primary"><strong>${esc(row.model)}</strong><small>${esc(row.provider)}</small></div>
+    <span>${row.records}</span>
+    <span class="harbor-cell"><strong>${esc(formatTokenCount(row.totalTokens))}</strong><small>入 ${esc(formatTokenCount(row.inputTokens))} · 出 ${esc(formatTokenCount(row.outputTokens))}</small></span>
+    <span>${usageCostCell(row)}</span>
+  </div>`).join('') : '<div class="harbor-row"><span class="subtle">暂无模型用量</span></div>';
+
+  els.harborUsageRecent.innerHTML = summary.recent.length ? summary.recent.map((row) => `<div class="harbor-row">
+    <span class="harbor-cell"><strong>${esc(formatHarborTime(row.occurredAt))}</strong><small>${row.runId ? esc(row.runId.slice(0, 12)) : '—'}</small></span>
+    <span class="harbor-cell"><strong>${esc(row.agentName)}</strong><small>${row.scope === 'agent' ? '专业会话' : '中枢会话'}</small></span>
+    <span class="harbor-cell"><strong>${esc(row.model)}</strong><small>${esc(row.provider)}</small></span>
+    <span>${esc(formatTokenCount(row.totalTokens))}</span>
+    <span>${row.priced && row.cost !== null ? esc(`${row.currency === 'USD' ? '$' : '¥'}${row.cost < 0.01 ? row.cost.toFixed(4) : row.cost.toFixed(2)}`) : '<span class="subtle">未计费</span>'}</span>
+  </div>`).join('') : '<div class="harbor-row"><span class="subtle">暂无运行记录</span></div>';
+
+  refreshIcons($('#harbor-panel-usage'));
 }
 
 function squadAgentById(agentId) {
@@ -3549,13 +3759,14 @@ async function verifyHarborRuntime(runtimeId, button) {
 }
 
 function showHarborTab(tab) {
-  const selected = ['agents', 'runtimes', 'projects'].includes(tab) ? tab : 'agents';
+  const selected = ['agents', 'models', 'usage', 'runtimes', 'projects'].includes(tab) ? tab : 'agents';
   $$('[data-harbor-tab]').forEach((button) => {
     const active = button.dataset.harborTab === selected;
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
-  ['agents', 'runtimes', 'projects'].forEach((name) => $(`#harbor-panel-${name}`).classList.toggle('hidden', name !== selected));
+  ['agents', 'models', 'usage', 'runtimes', 'projects'].forEach((name) => $(`#harbor-panel-${name}`).classList.toggle('hidden', name !== selected));
+  if (selected === 'usage') void loadUsage({ silent: true });
 }
 
 function runtimeOptions(selected = '') {
@@ -3574,8 +3785,9 @@ function agentOptions(selected = '') {
   return options.join('');
 }
 
-function openHarborModal(type) {
+function openHarborModal(type, editItem = null) {
   harborModalType = type;
+  harborModalEditId = type === 'model' && editItem ? editItem.id : null;
   els.harborFormStatus.textContent = '';
   els.harborForm.reset();
   const definitions = {
@@ -3583,8 +3795,8 @@ function openHarborModal(type) {
       title: '新增智能体', desc: '登记持久身份、模型策略、自治等级和可执行环境。', submit: '创建智能体',
       fields: `<label><span>智能体名称</span><input name="name" maxlength="80" required placeholder="例如：交付风险 Agent" /></label>
         <label><span>组织角色</span><input name="role" maxlength="120" required placeholder="例如：订单交付风险分析" /></label>
-        <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" /></label>
-        <label><span>模型</span><input name="model" maxlength="120" value="account-default" /></label>
+        <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" list="model-provider-options" /><small class="field-note">建议从模型中心的提供商中选择，便于费用估算。</small></label>
+        <label><span>模型</span><input name="model" maxlength="120" value="account-default" list="model-registry-options" /><small class="field-note">选择模型中心已登记的模型可自动估算费用。</small></label>
         <label><span>执行 Runtime</span><select name="runtimeId">${runtimeOptions()}</select></label>
         <label><span>组织层级</span><select name="hierarchyLevel"><option value="L0">L0 · 中枢编排</option><option value="L1">L1 · 业务编队</option><option value="L2" selected>L2 · 专项执行</option><option value="L3">L3 · 任务执行</option></select><small class="field-note">层级用于组织与路由；自治等级仍由 Guard 与 Capability 控制。</small></label>
         <label><span>上级 Agent（可选）</span><select name="parentAgentId"><option value="">不指定上级</option>${(harbor.agents || []).map((agent) => `<option value="${esc(agent.id)}">${esc(agent.hierarchyLevel || 'L2')} · ${esc(agent.name)}</option>`).join('')}</select><small class="field-note">仅显示层级与名称，避免长文本干扰选择。</small></label>
@@ -3616,6 +3828,25 @@ function openHarborModal(type) {
         <fieldset class="wide"><legend>智能体编队</legend><div class="agent-checks">${(harbor.agents || []).length ? harbor.agents.map((agent) => `<label><input name="agentIds" type="checkbox" value="${esc(agent.id)}" /><span>${esc(agent.name)} · ${esc(agent.autonomyLevel)}</span></label>`).join('') : '<small class="field-note">当前没有可选智能体，可先创建项目，后续再组建编队。</small>'}</div></fieldset>
         <label class="wide"><span>资源引用</span><input name="resourceRefs" placeholder="逗号分隔，例如：objective://V7.2, capability://delivery-risk" /></label>`,
     },
+    model: (() => {
+      const edit = editItem || null;
+      const pricing = edit?.pricing;
+      return {
+        title: edit ? `编辑模型 · ${edit.name}` : '登记模型', desc: '登记大模型的能力与参考单价；智能体选型和费用估算以模型中心为唯一口径。',
+        submit: edit ? '保存修改' : '登记模型',
+        fields: `<label><span>模型名称</span><input name="name" maxlength="120" required value="${esc(edit?.name || '')}" placeholder="例如：DeepSeek Chat（通用）" /></label>
+        <label><span>模型提供商</span><input name="provider" maxlength="80" required value="${esc(edit?.provider || '')}" list="model-provider-options" placeholder="例如：deepseek" /></label>
+        <label><span>模型标识</span><input name="model" maxlength="160" required value="${esc(edit?.model || '')}" list="model-registry-options" placeholder="调用时使用的模型 id，例如：deepseek-chat" /></label>
+        <label><span>上下文窗口（token）</span><input name="contextWindow" type="number" min="0" step="1000" value="${edit?.contextWindow ?? ''}" placeholder="例如：128000，留空表示未知" /></label>
+        <label><span>计价币种</span><select name="pricingCurrency"><option value="none"${!pricing ? ' selected' : ''}>不计价（只统计用量）</option><option value="CNY"${pricing?.currency === 'CNY' ? ' selected' : ''}>人民币 CNY</option><option value="USD"${pricing?.currency === 'USD' ? ' selected' : ''}>美元 USD</option></select></label>
+        <label><span>输入单价 / 百万 token</span><input name="inputPerMTok" type="number" min="0" step="0.01" value="${pricing?.inputPerMTok ?? ''}" placeholder="例如：2" /></label>
+        <label><span>缓存命中单价 / 百万 token</span><input name="cachedInputPerMTok" type="number" min="0" step="0.01" value="${pricing?.cachedInputPerMTok ?? ''}" placeholder="例如：0.5" /></label>
+        <label><span>输出单价 / 百万 token</span><input name="outputPerMTok" type="number" min="0" step="0.01" value="${pricing?.outputPerMTok ?? ''}" placeholder="例如：8" /></label>
+        <label><span>状态</span><select name="status"><option value="active"${(edit?.status || 'active') === 'active' ? ' selected' : ''}>可用</option><option value="inactive"${edit?.status === 'inactive' ? ' selected' : ''}>停用</option></select></label>
+        <label><span>能力标签</span><input name="capabilities" value="${esc((edit?.capabilities || []).join(', '))}" placeholder="逗号分隔，例如：深度推理, 工具调用, 代码" /></label>
+        <label class="wide"><span>备注</span><textarea name="notes" maxlength="500" placeholder="定价来源、适用场景或限制说明">${esc(edit?.notes || '')}</textarea></label>`,
+      };
+    })(),
   };
   const definition = definitions[type];
   if (!definition) return;
@@ -3630,6 +3861,7 @@ function openHarborModal(type) {
 
 function closeHarborModal() {
   harborModalType = null;
+  harborModalEditId = null;
   els.harborModal.classList.add('hidden');
   els.harborFormFields.innerHTML = '';
   els.harborFormStatus.textContent = '';
@@ -3642,20 +3874,37 @@ async function submitHarborForm(event) {
   const formData = new FormData(els.harborForm);
   const payload = Object.fromEntries(formData.entries());
   if (harborModalType === 'project') payload.agentIds = formData.getAll('agentIds');
-  const endpoints = { agent: '/api/harbor/agents', runtime: '/api/harbor/runtimes', project: '/api/harbor/projects' };
-  const labels = { agent: '智能体已创建', runtime: 'Runtime 已登记，等待真实连接与心跳', project: '协作项目已创建' };
+  const endpoints = { agent: '/api/harbor/agents', runtime: '/api/harbor/runtimes', project: '/api/harbor/projects', model: '/api/models' };
+  const labels = { agent: '智能体已创建', runtime: 'Runtime 已登记，等待真实连接与心跳', project: '协作项目已创建', model: harborModalEditId ? '模型已更新' : '模型已登记' };
   els.harborFormSubmit.disabled = true;
   els.harborFormStatus.textContent = '保存中...';
   try {
-    const response = await fetch(endpoints[harborModalType], {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload),
+    if (harborModalType === 'model') {
+      const currency = String(payload.pricingCurrency || 'none');
+      delete payload.pricingCurrency;
+      if (currency === 'none') {
+        payload.pricing = null;
+      } else {
+        const asPrice = (value) => (String(value ?? '').trim() === '' ? 0 : Number(value));
+        const prices = { inputPerMTok: asPrice(payload.inputPerMTok), cachedInputPerMTok: asPrice(payload.cachedInputPerMTok), outputPerMTok: asPrice(payload.outputPerMTok) };
+        delete payload.inputPerMTok;
+        delete payload.cachedInputPerMTok;
+        delete payload.outputPerMTok;
+        if (Object.values(prices).some((value) => !Number.isFinite(value) || value < 0)) throw new Error('单价必须是不小于 0 的数字');
+        payload.pricing = { currency, ...prices };
+      }
+      if (String(payload.contextWindow ?? '').trim() === '') delete payload.contextWindow;
+    }
+    const editing = harborModalType === 'model' && harborModalEditId;
+    const response = await fetch(editing ? `${endpoints[harborModalType]}/${encodeURIComponent(harborModalEditId)}` : endpoints[harborModalType], {
+      method: editing ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     const completedType = harborModalType;
     closeHarborModal();
     await loadHarbor({ silent: true });
-    showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects' }[completedType]);
+    showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects', model: 'models' }[completedType]);
     toast(labels[completedType]);
   } catch (error) {
     els.harborFormStatus.textContent = error.message;
@@ -4120,6 +4369,26 @@ els.harborAgentFilterClear?.addEventListener('click', () => {
   if (els.harborAgentStatusFilter) els.harborAgentStatusFilter.value = 'all';
   renderHarbor();
 });
+els.harborModelList?.addEventListener('click', async (event) => {
+  const editButton = event.target.closest('[data-model-edit-id]');
+  if (editButton) {
+    const model = (modelRegistry.models || []).find((item) => item.id === editButton.dataset.modelEditId);
+    if (model) openHarborModal('model', model);
+    return;
+  }
+  const deleteButton = event.target.closest('[data-model-delete-id]');
+  if (deleteButton) {
+    try { await deleteModelEntry(deleteButton.dataset.modelDeleteId); }
+    catch (error) { toast(`删除模型失败：${error.message}`, true); }
+  }
+});
+els.harborUsageRefresh?.addEventListener('click', () => void loadUsage());
+els.harborUsageMonth?.addEventListener('change', () => {
+  usageMonth = els.harborUsageMonth.value || localMonthKey();
+  void loadUsage();
+});
+els.harborUsageAgentFilter?.addEventListener('change', () => void loadUsage({ silent: true }));
+if (els.harborUsageMonth && !els.harborUsageMonth.value) els.harborUsageMonth.value = usageMonth;
 els.harborModalClose.addEventListener('click', closeHarborModal);
 els.harborFormCancel.addEventListener('click', closeHarborModal);
 els.harborForm.addEventListener('submit', submitHarborForm);

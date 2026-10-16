@@ -963,7 +963,7 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .harbor-boundary strong { font-size: 11px; }
 .harbor-boundary small { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: 9px; }
 .harbor-boundary .status-pill { font-size: 9px; }
-.harbor-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+.harbor-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
 .harbor-metrics > div { min-width: 0; min-height: 76px; display: flex; flex-direction: column; justify-content: center; border: 1px solid var(--line-subtle); border-radius: 7px; background: #fff; padding: 10px 14px; }
 .harbor-metrics span { color: var(--text-3); font-size: 10px; }
 .harbor-metrics strong { margin-top: 3px; font: 650 21px/1.15 ui-monospace, Consolas, monospace; }
@@ -990,6 +990,23 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .harbor-agent-table .harbor-row { min-width: 1080px; grid-template-columns: minmax(215px, 1.2fr) 80px minmax(155px, .9fr) minmax(145px, .9fr) 82px minmax(190px, 1fr) 90px; }
 .harbor-runtime-table .harbor-row { min-width: 980px; grid-template-columns: minmax(205px, 1.1fr) 150px minmax(210px, 1.15fr) minmax(190px, 1fr) 118px 126px; }
 .harbor-project-table .harbor-row { grid-template-columns: minmax(260px, 1.35fr) 76px 145px 100px 150px 96px; }
+.harbor-model-table .harbor-row { min-width: 940px; grid-template-columns: minmax(200px, 1.15fr) minmax(170px, 1fr) 110px minmax(230px, 1.2fr) 84px 118px; }
+.harbor-usage-table .harbor-row, .harbor-usage-model .harbor-row { min-width: 560px; grid-template-columns: minmax(150px, 1.2fr) 84px minmax(150px, 1fr) minmax(110px, .9fr); }
+.harbor-usage-recent .harbor-row { min-width: 640px; grid-template-columns: 108px minmax(130px, 1fr) minmax(150px, 1.1fr) 100px 92px; }
+.harbor-usage-table, .harbor-usage-model, .harbor-usage-recent { height: auto; max-height: 300px; }
+.harbor-usage-recent .harbor-row { min-height: 44px; }
+.harbor-usage-toolbar { display: flex; align-items: center; gap: 8px; }
+.harbor-usage-toolbar input, .harbor-usage-toolbar select { height: 30px; border: 1px solid var(--line); border-radius: 5px; background: #fff; padding: 0 8px; color: var(--text-2); font-size: 11px; outline: none; }
+.harbor-usage-toolbar input:focus, .harbor-usage-toolbar select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.harbor-usage-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.harbor-usage-metrics > div { min-height: 64px; display: flex; flex-direction: column; justify-content: center; border: 1px solid var(--line-subtle); border-radius: 7px; background: #fff; padding: 9px 13px; }
+.harbor-usage-metrics span { color: var(--text-3); font-size: 10px; }
+.harbor-usage-metrics strong { margin-top: 3px; font: 650 19px/1.15 ui-monospace, Consolas, monospace; }
+.harbor-usage-metrics small { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: 10px; }
+.harbor-usage-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; }
+.harbor-usage-block > h3 { margin: 2px 0 6px; color: var(--text-2); font-size: 11px; }
+.harbor-usage-block > h3:not(:first-child) { margin-top: 14px; }
+.harbor-model-actions { display: inline-flex; align-items: center; gap: 4px; }
 .harbor-head { position: sticky; top: 0; z-index: 1; min-height: 34px; background: var(--surface); color: var(--text-3); font-size: 10px; font-weight: 600; box-shadow: 0 1px 0 var(--line-subtle); }
 .harbor-row > span, .harbor-row > div { min-width: 0; }
 .harbor-identity { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; }
@@ -1322,6 +1339,8 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
   .harbor-boundary > div:nth-of-type(-n+2) { border-bottom: 1px solid var(--line-subtle); }
   .harbor-boundary > div:nth-of-type(odd) { border-right: 1px solid var(--line-subtle); }
   .harbor-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .harbor-usage-metrics { grid-template-columns: 1fr 1fr; }
+  .harbor-usage-grid { grid-template-columns: 1fr; }
   .squad-metrics { grid-template-columns: 1fr 1fr; }
   .squad-layout { grid-template-columns: 1fr; }
   .case-layout { grid-template-columns: 1fr; }

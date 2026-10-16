@@ -51,6 +51,16 @@ import {
   sendAgentSquadMessage,
   setAgentSquadProject,
 } from './agent-squad-store.ts';
+import {
+  loadModelRegistry,
+  createModel,
+  updateModel,
+  deleteModel,
+  findModelPricing,
+  ModelRegistryNotFoundError,
+  ModelRegistryError,
+} from './model-registry.ts';
+import { UsageStore } from './usage-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
 import { BrowserSessionAuth, LOGIN_USERNAME, passwordFromEnvironment } from './web-auth.ts';
 
@@ -154,6 +164,76 @@ const agentRunCaptures = new Map<string, AgentRunCapture>();
 const agentTranscriptBuffers = new Map<string, string>();
 const MAX_CONVERSATION_MESSAGES = 200;
 const MAX_CONVERSATION_MESSAGE_CHARS = 16_000;
+
+// ---------- 用量与费用台账 ----------
+// 事件中的 tokenUsage 是会话累计值；store 内部按 threadTotals 求增量，避免重复记账。
+const usageStore = new UsageStore({ pricingResolver: findModelPricing });
+
+function usageCountsOf(source: unknown): { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number } | null {
+  if (!isRecord(source)) return null;
+  const pick = (key: string): number => {
+    const value = source[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  };
+  return {
+    inputTokens: pick('inputTokens'),
+    cachedInputTokens: pick('cachedInputTokens'),
+    cacheWriteInputTokens: pick('cacheWriteInputTokens'),
+    outputTokens: pick('outputTokens'),
+    reasoningOutputTokens: pick('reasoningOutputTokens'),
+    totalTokens: pick('totalTokens'),
+  };
+}
+
+/** 把 thread/tokenUsage/updated 归集到智能体用量台账；费用按模型注册中心单价估算。 */
+function recordTokenUsageFromEvent(event: RuntimeEvent): void {
+  try {
+    const data = isRecord(event.data) ? event.data : {};
+    const threadId = typeof data.threadId === 'string' ? data.threadId : event.sessionId;
+    if (!threadId) return;
+    const tokenUsage = isRecord(data.tokenUsage) ? data.tokenUsage.tokenUsage ?? data.tokenUsage : data;
+    // total 是会话累计口径；没有 total 时退回 last（单轮口径）。
+    const counts = usageCountsOf(isRecord(tokenUsage) ? (isRecord(tokenUsage.total) ? tokenUsage.total : tokenUsage) : null);
+    if (!counts || counts.totalTokens <= 0) return;
+
+    const convId = convByThread.get(threadId) ?? null;
+    const conv = convId ? convCache.get(convId) : null;
+    const runId = (typeof data.turnId === 'string' && data.turnId) || activeTurn.get(threadId)?.turnId || null;
+
+    // 智能体归属：agent 会话按小队成员解析到 AI 港湾 Agent；hub 会话归入中枢 Agent。
+    let agentId = 'agent-aeos-hub';
+    let agentName = 'AEOS 中枢 Agent';
+    let scope: 'hub' | 'agent' = 'hub';
+    if (conv?.scope === 'agent' && conv.agentId) {
+      scope = 'agent';
+      const squadSnapshot = loadAgentSquad();
+      const member = squadSnapshot.members.find((item) => item.id === conv.agentId);
+      const resolved = member?.harborAgentId || member?.id || conv.agentId;
+      agentId = resolved;
+      agentName = member?.name || conv.agentId;
+    }
+
+    const choice = conv?.lastChoice ?? null;
+    const config = readConfig();
+    const provider = choice?.provider?.trim() || config.modelProvider?.trim() || 'openai';
+    const model = choice?.model?.trim() || config.model?.trim() || 'account-default';
+
+    usageStore.record({
+      sessionId: threadId,
+      runId,
+      conversationId: convId,
+      agentId,
+      agentName,
+      scope,
+      provider,
+      model,
+      usage: counts,
+    });
+  } catch (error) {
+    // 费用记账是旁路能力，任何失败不允许影响对话主链路。
+    console.warn('[usage] token 用量记账失败:', (error as Error).message);
+  }
+}
 
 // ---------- 会话加载 ----------
 for (const c of loadConversations()) convCache.set(c.id, c);
@@ -480,6 +560,11 @@ async function persistAgentDispatchResult(runId: string, fallbackText = ''): Pro
 
 function handleRuntimeEvent(event: RuntimeEvent): void {
   if (event.kind === 'notification') {
+    // 用量事件走旁路记账，不进入前端通知白名单，也不冲击对话流。
+    if (event.name === 'thread/tokenUsage/updated') {
+      recordTokenUsageFromEvent(event);
+      return;
+    }
     if (!NOTIFY_ALLOW.has(event.name)) return;
     const sessionId = runtimeEventSessionId(event);
     const runId = runtimeEventRunId(event);
@@ -1151,7 +1236,7 @@ const server = createServer(async (req, res) => {
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('referrer-policy', 'no-referrer');
   res.setHeader('x-frame-options', 'DENY');
-  res.setHeader('content-security-policy', "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:");
+  res.setHeader('content-security-policy', "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:");
   if (url.pathname.startsWith('/api/')) res.setHeader('cache-control', 'no-store');
   if (url.pathname === '/healthz' && req.method === 'GET') {
     sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
@@ -1203,6 +1288,64 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       sendJson(res, 200, loadHarbor());
+    } catch (error) {
+      sendJson(res, 500, { error: (error as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/api/models') {
+    if (req.method === 'GET') {
+      try { sendJson(res, 200, loadModelRegistry()); } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
+      return;
+    }
+    if (req.method === 'POST') {
+      try {
+        const item = createModel(await readJsonBody(req));
+        appendEvidence({ kind: 'app_event', summary: 'model registered', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 201, { item });
+      } catch (error) {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+      return;
+    }
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+  const modelMatch = url.pathname.match(/^\/api\/models\/([^/]+)$/);
+  if (modelMatch) {
+    let modelId = '';
+    try { modelId = decodeURIComponent(modelMatch[1] ?? '').trim(); } catch { modelId = ''; }
+    if (!modelId) { sendJson(res, 400, { error: '模型 id 无效' }); return; }
+    try {
+      if (req.method === 'PATCH') {
+        const item = updateModel(modelId, await readJsonBody(req));
+        appendEvidence({ kind: 'app_event', summary: 'model updated', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 200, { item });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        const item = deleteModel(modelId);
+        appendEvidence({ kind: 'app_event', summary: 'model removed', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 200, { item });
+        return;
+      }
+      sendJson(res, 405, { error: 'method not allowed' });
+    } catch (error) {
+      const status = error instanceof ModelRegistryNotFoundError ? 404 : error instanceof ModelRegistryError ? 400 : 500;
+      sendJson(res, status, { error: (error as Error).message, code: errorCode(error) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/usage/summary') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const summary = usageStore.summary({
+        from: url.searchParams.get('from') ?? undefined,
+        to: url.searchParams.get('to') ?? undefined,
+        agentId: url.searchParams.get('agentId') ?? undefined,
+        recentLimit: url.searchParams.get('recentLimit') ? Number(url.searchParams.get('recentLimit')) : undefined,
+      });
+      sendJson(res, 200, summary);
     } catch (error) {
       sendJson(res, 500, { error: (error as Error).message });
     }
@@ -1719,6 +1862,8 @@ wss.on('connection', (ws, request) => {
         const hadThread = conv.threadId;
         convCache.delete(convId);
         if (hadThread) convByThread.delete(hadThread);
+        // 会话删除后清掉用量累计基线，避免同名新线程误记全量增量。
+        if (hadThread) { try { usageStore.forgetThread(hadThread); } catch { /* best-effort */ } }
         saveConversations([...convCache.values()]);
         appendEvidence({ kind: 'app_event', summary: 'conversation deleted', thread_id: hadThread ?? undefined, payload: { conversationId: convId, title: conv.title } });
         // 同步删除 codex 线程（best-effort，失败仅记录）

@@ -38,6 +38,8 @@ AEOS Hub 是 [AEOS（Autonomous Enterprise Operating System）](../../) 的第�
 - **中枢对话**：流式输出 agent 文本、可展开的思考过程、工具调用卡片（✓/✗/✋ + 结果详情）
 - **Guard 人审网关**：Agent 请求调用工具或执行敏感动作时，页面顶部弹出授权条；全部决策落 Evidence；无人值守时自动拒绝，超时 5 分钟自动拒绝
 - **模型可切换**：会话级模型选择（OpenAI 账号默认 / 自定义提供商如 DeepSeek），配置页可编辑提供商、密钥（只写隔离目录）、可切换模型清单
+- **模型中心**：AI 港湾内登记不同能力的大模型（能力标签、上下文窗口、每百万 token 单价），智能体表单从模型库选型；同一提供商下模型标识唯一
+- **智能体费用用量**：自动捕获 Runtime 的 `thread/tokenUsage/updated` 事件，按会话累计值求增量记账，依据模型中心单价估算费用；支持按智能体 / 模型 / 月份汇总与滚动归档
 - **会话管理**：新建 / 切换 / **归档**（可恢复）/ **删除**（同步清理 codex 线程），列表按 Codex 风格排版，悬停浮现操作
 - **Evidence 证据链**：每个 turn 的完整 item 流（消息、推理、工具调用、审批决策、结果）结构化落库，页面内可查看最近条目
 - **AI 港湾**：Agent / Runtime / Project 三类资源的登记与绑定，Runtime 健康验证走真实探针（`POST /api/harbor/runtimes/:id/verify`），不伪装成已连通
@@ -118,7 +120,7 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 | Attention 中心 | 需人关注事项（示例数据），一键生成决策材料 |
 | Evidence 中心 | evidence.jsonl 事件流浏览与刷新 |
 | 系统配置 | 模型提供商 / 模型 / 密钥 / MCP 清单 / 证据速览 |
-| AI 港湾 | Agent、Runtime、Project 登记与绑定；Runtime 真实健康验证 |
+| AI 港湾 | Agent、Runtime、Project 登记与绑定；**模型中心**（能力 + 单价登记）；**费用用量**（按智能体 / 模型 / 月份的 token 与费用报表）；Runtime 真实健康验证 |
 
 **模型切换说明**：新会话在创建线程时按所选模型生效；已有会话的模型版本保持不变（切换时提示新建会话，保证运行记录可追溯）。codex 0.153 起自定义提供商仅支持 `wire_api = "responses"`（DeepSeek 官方已支持 `/v1/responses`）。
 
@@ -137,6 +139,8 @@ hub/
 │   ├── codex-client.ts       # app-server JSON-RPC 客户端（initialize / thread / turn / 事件流 / 审批应答）
 │   ├── runtime/              # Runtime 中立契约 + Codex Adapter + Supervisor + 健康测试
 │   ├── harbor-store.ts       # AI 港湾快照、关联校验、锁、备份、Runtime 验证状态
+│   ├── model-registry.ts     # 模型注册中心：能力标签、上下文、每百万 token 单价（锁 + 备份 + revision）
+│   ├── usage-store.ts        # 智能体费用台账：token 增量记账、单价估算、按月滚动归档汇总
 │   ├── hub-config.ts         # 模型配置读写（config.toml 区段 + .env 密钥）+ 首次运行自动生成
 │   ├── conversations.ts      # 会话元数据（data/threads.json，归档/删除）
 │   ├── evidence.ts           # Evidence 落库（JSONL，后续替换为 EDP）

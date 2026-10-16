@@ -307,12 +307,15 @@
             <div><span>Runtime</span><strong id="harbor-runtime-count">0</strong><small id="harbor-runtime-online">0 个在线</small></div>
             <div><span>协作项目</span><strong id="harbor-project-count">0</strong><small id="harbor-project-active">0 个进行中</small></div>
             <div><span>运行任务</span><strong id="harbor-run-count">0</strong><small id="harbor-run-active">0 个执行中</small></div>
-            <div><span>当前自治上限</span><strong>A3</strong><small>低风险、可逆、授权内</small></div>
+            <div><span>模型</span><strong id="harbor-model-count">0</strong><small id="harbor-model-active-count">0 个可用</small></div>
+            <div><span>本月费用（估）</span><strong id="harbor-cost-month">--</strong><small id="harbor-cost-month-note">暂无记账</small></div>
           </div>
 
           <div class="harbor-toolbar">
             <div class="segmented harbor-tabs" role="tablist" aria-label="AI 港湾视图">
               <button class="active" type="button" role="tab" aria-selected="true" data-harbor-tab="agents"><i data-lucide="bot"></i>智能体目录</button>
+              <button type="button" role="tab" aria-selected="false" data-harbor-tab="models"><i data-lucide="cpu"></i>模型中心</button>
+              <button type="button" role="tab" aria-selected="false" data-harbor-tab="usage"><i data-lucide="coins"></i>费用用量</button>
               <button type="button" role="tab" aria-selected="false" data-harbor-tab="runtimes"><i data-lucide="server"></i>运行节点</button>
               <button type="button" role="tab" aria-selected="false" data-harbor-tab="projects"><i data-lucide="folder-kanban"></i>协作项目</button>
             </div>
@@ -341,6 +344,38 @@
             <div class="harbor-table harbor-project-table">
               <div class="harbor-row harbor-head"><span>项目 / 目标</span><span>优先级</span><span>Accountable Owner</span><span>协作编队</span><span>进度</span><span>状态</span></div>
               <div id="harbor-project-list"></div>
+            </div>
+          </section>
+
+          <section id="harbor-panel-models" class="surface harbor-panel hidden">
+            <div class="surface-head"><div><h2>模型中心</h2><p>登记不同能力的大模型与参考单价；智能体选型和费用估算以这里为唯一口径</p></div><button class="text-action" type="button" data-harbor-create="model">登记模型<i data-lucide="plus"></i></button></div>
+            <div class="harbor-table harbor-model-table">
+              <div class="harbor-row harbor-head"><span>模型 / 提供商</span><span>能力标签</span><span>上下文窗口</span><span>单价（每百万 token）</span><span>状态</span><span>操作</span></div>
+              <div id="harbor-model-list"></div>
+            </div>
+          </section>
+
+          <section id="harbor-panel-usage" class="surface harbor-panel hidden">
+            <div class="surface-head">
+              <div><h2>智能体费用用量</h2><p>依据 Runtime 上报的 token 用量与模型单价自动估算；未配置单价的模型只计用量不计费</p></div>
+              <div class="harbor-usage-toolbar">
+                <input id="harbor-usage-month" type="month" aria-label="选择月份" />
+                <select id="harbor-usage-agent-filter" aria-label="筛选智能体"><option value="">全部智能体</option></select>
+                <button id="harbor-usage-refresh" class="btn secondary compact" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
+              </div>
+            </div>
+            <div class="harbor-usage-metrics" id="harbor-usage-metrics"></div>
+            <div class="harbor-usage-grid">
+              <div class="harbor-usage-block">
+                <h3>按智能体</h3>
+                <div class="harbor-table harbor-usage-table"><div class="harbor-row harbor-head"><span>智能体</span><span>记账次数</span><span>Tokens（入 / 出）</span><span>估算费用</span></div><div id="harbor-usage-agent-list"></div></div>
+              </div>
+              <div class="harbor-usage-block">
+                <h3>按模型</h3>
+                <div class="harbor-table harbor-usage-model"><div class="harbor-row harbor-head"><span>模型</span><span>记账次数</span><span>Tokens</span><span>估算费用</span></div><div id="harbor-usage-model-list"></div></div>
+                <h3>最近运行</h3>
+                <div class="harbor-table harbor-usage-recent"><div class="harbor-row harbor-head"><span>时间</span><span>智能体</span><span>模型</span><span>Tokens</span><span>费用</span></div><div id="harbor-usage-recent"></div></div>
+              </div>
             </div>
           </section>
         </section>
@@ -449,6 +484,8 @@
   </div>
 
   <div id="toasts" aria-live="polite"></div>
+  <datalist id="model-registry-options"></datalist>
+  <datalist id="model-provider-options"></datalist>
   <script src="/vendor/lucide.min.js"></script>
   <script type="module" src="/app.js?v=server-login-20261008"></script>
 </body>
