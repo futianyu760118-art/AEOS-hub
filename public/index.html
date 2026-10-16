@@ -128,6 +128,7 @@
           <span class="nav-label">AI 资源协作</span>
           <button class="nav-item" type="button" data-view="harbor" data-title="AI 港湾"><i data-lucide="waypoints"></i><span>AI 港湾</span></button>
           <button class="nav-item" type="button" data-view="squad" data-title="Agent 小队"><i data-lucide="users-round"></i><span>Agent 小队</span></button>
+          <button class="nav-item" type="button" data-view="usage" data-title="用量台账"><i data-lucide="book-open"></i><span>用量台账</span></button>
         </div>
         <div class="nav-group">
           <span class="nav-label">执行面</span>
@@ -564,6 +565,22 @@
               </div>
             </section>
           </div>
+        </section>
+
+        <section id="view-usage" class="view app-view hidden">
+          <div class="page-head">
+            <div><span class="page-module">AI 资源协作</span><h1>用量台账</h1><p>每次模型调用的 Token 与成本，按 Agent / 系统聚合</p></div>
+            <div class="page-actions"><button id="btn-usage-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
+          </div>
+
+          <div class="harbor-metrics usage-metrics">
+            <div><span>累计成本</span><strong id="usage-total-cost">¥0.00</strong><small>人民币</small></div>
+            <div><span>累计 Token</span><strong id="usage-total-tokens">0</strong><small>输入 + 输出</small></div>
+            <div><span>调用次数</span><strong id="usage-total-events">0</strong><small>条用量事件</small></div>
+            <div><span>覆盖 Agent</span><strong id="usage-agent-count">0</strong><small>有过记账的智能体</small></div>
+          </div>
+
+          <div id="usage-list" class="usage-list"><div class="dashboard-loading">正在读取用量台账…</div></div>
         </section>
 
         <section id="view-config" class="view app-view hidden">

@@ -80,8 +80,16 @@ import { AccessControlApi } from './access-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
-import { ensureModelProfiles } from './model-profile-store.ts';
+import { ensureModelProfiles, getModelProfile } from './model-profile-store.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
+import {
+  ensureUsageLedger,
+  appendUsageEvent,
+  aggregateUsageByAgent,
+  aggregateUsageBySystem,
+  listUsageEvents,
+  type UsageEventAppendInput,
+} from './usage-ledger-store.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -166,6 +174,15 @@ const personnelAdmin = personnelAdminConfig.enabled
 const personnelApi = new PersonnelApi({ admin: personnelAdmin, g0DecisionStore, appendEvidence });
 const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: new AccessControlStore(), g0DecisionStore, appendEvidence });
 
+// ---------- 用量台账记账（中枢自身 LLM + 执行面用量上报，两条数据源共用） ----------
+function recordUsageEvent(event: UsageEventAppendInput): void {
+  try {
+    appendUsageEvent(event);
+  } catch (error) {
+    console.warn('[usage-ledger] 记账失败:', (error as Error).message);
+  }
+}
+
 // ---------- 执行面接入（远程查询智能体：反向连接 + 心跳 + 派单/召回） ----------
 // 服务凭证来自环境变量 EXECUTION_PLANE_TOKEN；未配置则 /ws/agent 拒绝所有连接（fail-closed）。
 const EXECUTION_PLANE_TOKEN = process.env.EXECUTION_PLANE_TOKEN ?? '';
@@ -173,6 +190,7 @@ const executionHealthSyncedAt = new Map<string, { status: 'healthy' | 'unhealthy
 const executionPlane = new ExecutionPlaneRegistry({
   file: join(dataDir, 'execution-plane.json'),
   onChange: () => syncExecutionHealth(),
+  onUsageEvent: (event) => recordUsageEvent(event),
 });
 setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
 
@@ -209,6 +227,13 @@ try {
   ensureModelProfiles();
 } catch (error) {
   console.warn('[model-profile-store] 模型目录初始化失败:', (error as Error).message);
+}
+
+// 幂等初始化用量台账（data/usage-ledger.json）。失败不阻塞启动。
+try {
+  ensureUsageLedger();
+} catch (error) {
+  console.warn('[usage-ledger] 用量台账初始化失败:', (error as Error).message);
 }
 
 // ---------- 状态 ----------
@@ -1773,7 +1798,27 @@ const server = createServer(async (req, res) => {
       const agent = agentId ? executionPlane.list().agents.find((item) => item.agentId === agentId) : undefined;
       const intent = agent?.capabilities.find((cap) => cap.intent)?.intent;
       // LLM 优先路径，按 Agent 注册的查询语义（intent）动态解析；失败返回 { error }，由前端回退。
-      sendJson(res, 200, await parseIntentWithLLM(text, { intent }));
+      // 用量回调：把中枢自身这次 DeepSeek 调用的 Token/成本记账（systemId 对齐中枢注册码 aeos-hub）。
+      sendJson(res, 200, await parseIntentWithLLM(text, {
+        intent,
+        onUsage: (usage) => {
+          const profile = getModelProfile(usage.model);
+          const cost = profile
+            ? (usage.tokensIn / 1_000_000) * profile.inputPrice + (usage.tokensOut / 1_000_000) * profile.outputPrice
+            : 0;
+          recordUsageEvent({
+            agentId: 'agent-aeos-hub',
+            systemId: 'aeos-hub',
+            modelId: usage.model,
+            runId: null,
+            tokensIn: usage.tokensIn,
+            tokensOut: usage.tokensOut,
+            cost,
+            startedAt: usage.startedAt,
+            endedAt: usage.endedAt,
+          });
+        },
+      }));
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
@@ -1811,6 +1856,22 @@ const server = createServer(async (req, res) => {
     } catch (error) {
       const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
       sendJson(res, status, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 用量台账只读 API（按 Agent/系统聚合 + 明细） ----------
+  if (url.pathname === '/api/usage/summary') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    sendJson(res, 200, { byAgent: aggregateUsageByAgent(), bySystem: aggregateUsageBySystem() });
+    return;
+  }
+  if (url.pathname === '/api/usage/events') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const limit = boundedLimit(url.searchParams.get('limit'));
+      sendJson(res, 200, { events: listUsageEvents(limit) });
+    } catch (e) {
+      sendJson(res, 400, { error: (e as Error).message });
     }
     return;
   }
@@ -1913,7 +1974,7 @@ executionWss.on('connection', (ws, request) => {
         if (agentId) executionPlane.onRunUpdate(agentId, { runId: msg.runId, state: msg.state });
       } else if (type === 'run_complete') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result });
+        if (agentId) executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result, usage: msg.usage });
       } else if (type === 'run_failed') {
         const agentId = executionWsAgent.get(ws);
         if (agentId) executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });

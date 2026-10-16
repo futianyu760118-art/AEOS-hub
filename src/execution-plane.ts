@@ -6,6 +6,7 @@ import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { validateAgainstSchema, type Schema } from './schema-validation.ts';
 import { type QueryIntent } from './execution-intent-types.ts';
+import type { UsageEventAppendInput } from './usage-ledger-store.ts';
 
 export type ExecutionAgentRuntimeStatus = 'idle' | 'working' | 'error';
 export type ExecutionAgentConnectionStatus = 'online' | 'offline';
@@ -169,6 +170,23 @@ function parseStatus(value: unknown): ExecutionAgentRuntimeStatus {
   throw new ExecutionPlaneError('INVALID_ARGUMENT', 'status 必须是 idle/working/error');
 }
 
+/** run_complete 可选携带的用量上报：字段容错归一化，未上报记 0 / null。 */
+function normalizeUsage(value: unknown): { modelId: string | null; tokensIn: number; tokensOut: number; cost: number } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { modelId: null, tokensIn: 0, tokensOut: 0, cost: 0 };
+  }
+  const record = value as Record<string, unknown>;
+  const nonNegativeInt = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : 0);
+  const nonNegative = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+  const modelId = typeof record.modelId === 'string' && record.modelId.trim() ? record.modelId.trim().slice(0, 160) : null;
+  return {
+    modelId,
+    tokensIn: nonNegativeInt(record.tokensIn),
+    tokensOut: nonNegativeInt(record.tokensOut),
+    cost: nonNegative(record.cost),
+  };
+}
+
 function atomicWrite(file: string, content: string): void {
   const tmp = `${file}.tmp-${randomUUID()}`;
   writeFileSync(tmp, content, 'utf8');
@@ -183,6 +201,7 @@ export class ExecutionPlaneRegistry {
   private readonly idFactory: () => string;
   private readonly clock: () => Date;
   private readonly onChange?: () => void;
+  private readonly onUsageEvent?: (event: UsageEventAppendInput) => void;
 
   constructor(options: {
     file: string;
@@ -190,12 +209,14 @@ export class ExecutionPlaneRegistry {
     idFactory?: () => string;
     clock?: () => Date;
     onChange?: () => void;
+    onUsageEvent?: (event: UsageEventAppendInput) => void;
   }) {
     this.file = options.file;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
     this.idFactory = options.idFactory ?? randomUUID;
     this.clock = options.clock ?? (() => new Date());
     this.onChange = options.onChange;
+    this.onUsageEvent = options.onUsageEvent;
     this.load();
   }
 
@@ -306,7 +327,7 @@ export class ExecutionPlaneRegistry {
     this.persist();
   }
 
-  onRunComplete(agentId: string, input: { runId?: unknown; result?: unknown }): void {
+  onRunComplete(agentId: string, input: { runId?: unknown; result?: unknown; usage?: unknown }): void {
     const runId = requireString(input.runId, 'runId', 160);
     const run = this.requireRun(runId, agentId);
     const entry = this.requireAgent(agentId);
@@ -326,6 +347,19 @@ export class ExecutionPlaneRegistry {
     entry.record.currentRunId = null;
     entry.record.runtimeStatus = 'idle';
     this.persist();
+    // 每次 run_complete 落一条用量事件（设计稿 §3.2）；未上报用量时记 0 / null，保留 run 关联。
+    const usage = normalizeUsage(input.usage);
+    this.onUsageEvent?.({
+      agentId,
+      systemId: entry.record.sourceSystem.trim() ? entry.record.sourceSystem.trim() : 'unknown',
+      modelId: usage.modelId,
+      runId: run.runId,
+      tokensIn: usage.tokensIn,
+      tokensOut: usage.tokensOut,
+      cost: usage.cost,
+      startedAt: run.startedAt,
+      endedAt: run.endedAt ?? this.nowIso(),
+    });
   }
 
   onRunFailed(agentId: string, input: { runId?: unknown; error?: unknown }): void {

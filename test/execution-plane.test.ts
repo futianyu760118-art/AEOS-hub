@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from '../src/execution-plane.ts';
+import type { UsageEventAppendInput } from '../src/usage-ledger-store.ts';
 
 const QUERY_SCHEMA = {
   type: 'object',
@@ -172,6 +173,45 @@ test('结果回传：run_complete 完成并保存结果', (t) => {
   assert.equal(run?.state, 'completed');
   assert.deepEqual(run?.result, { rows: [{ demand_no: 'HJY1' }] });
   assert.equal(h.registry.list().agents[0].runtimeStatus, 'idle');
+});
+
+test('run_complete 携带 usage 时经 onUsageEvent 记账', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-usage-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const usageEvents: UsageEventAppendInput[] = [];
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => {
+      let n = 0;
+      return () => `id-${++n}`;
+    })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-1',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  const { runId } = registry.dispatch('agent-query-1', 'query_control_platform', { path: '/external/orders/list', params: {} });
+  registry.onRunComplete('agent-query-1', {
+    runId,
+    result: { rows: [] },
+    usage: { modelId: 'deepseek-chat', tokensIn: 120, tokensOut: 30, cost: 0.00018 },
+  });
+  assert.equal(usageEvents.length, 1);
+  assert.equal(usageEvents[0].agentId, 'agent-query-1');
+  assert.equal(usageEvents[0].systemId, '公司中控平台');
+  assert.equal(usageEvents[0].modelId, 'deepseek-chat');
+  assert.equal(usageEvents[0].runId, runId);
+  assert.equal(usageEvents[0].tokensIn, 120);
+  assert.equal(usageEvents[0].tokensOut, 30);
+  assert.equal(usageEvents[0].cost, 0.00018);
 });
 
 test('失败回传：run_failed 记录错误', (t) => {

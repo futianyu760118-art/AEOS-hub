@@ -290,7 +290,7 @@ const commands = [
 // Local experience review: keep the operating-center implementation intact
 // while temporarily removing its routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘' };
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘', 'usage': '用量台账' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -551,7 +551,7 @@ function viewVisibleForRole(view, session) {
     return myGrants.some((grant) => grant.resourceCode === resource && Array.isArray(grant.operations) && grant.operations.includes('read'));
   }
   if (roles.includes('manager') || roles.includes('supervisor')) return true;
-  return ['chat', 'attention', 'tasks', 'projects', 'evidence'].includes(view);
+  return ['chat', 'attention', 'tasks', 'projects', 'evidence', 'usage'].includes(view);
 }
 
 function defaultViewForSession(session) {
@@ -694,6 +694,7 @@ function showView(view, options = {}) {
   if (view === 'attention') loadSquad({ silent: true });
   if (view === 'chat' && curConvId) send({ type: 'view', conversationId: curConvId });
   if (view === 'execution') loadExecution();
+  if (view === 'usage') loadUsage();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
 }
@@ -785,6 +786,64 @@ function renderExecutionAgentList(agents) {
       <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
     </button>`;
   }).join('');
+  refreshIcons(root);
+}
+
+let usageSummary = null;
+let usageControlsWired = false;
+
+function wireUsageControls() {
+  if (usageControlsWired) return;
+  usageControlsWired = true;
+  $('#btn-usage-refresh')?.addEventListener('click', () => loadUsage());
+}
+
+function formatTokenCount(value) {
+  return Number(value ?? 0).toLocaleString('zh-CN');
+}
+
+function formatUsageCost(value) {
+  const amount = Number(value ?? 0);
+  if (amount === 0) return '0.00';
+  if (amount < 0.01) return String(parseFloat(amount.toFixed(6)));
+  return amount.toFixed(2);
+}
+
+function usageTableHtml(rows, key, emptyText) {
+  if (!rows.length) return `<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>${esc(emptyText)}</small></div>`;
+  const head = key === 'agentId' ? 'Agent' : '系统';
+  const body = rows.map((row) => `<div class="harbor-row"><span>${esc(row[key])}</span><span class="num">${formatTokenCount(row.tokensIn)}</span><span class="num">${formatTokenCount(row.tokensOut)}</span><span class="num">¥${formatUsageCost(row.cost)}</span><span class="num">${formatTokenCount(row.events)}</span></div>`).join('');
+  return `<div class="harbor-table usage-table"><div class="harbor-row harbor-head"><span>${head}</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">调用次数</span></div>${body}</div>`;
+}
+
+async function loadUsage() {
+  wireUsageControls();
+  let data;
+  try {
+    const response = await fetch('/api/usage/summary', { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  usageSummary = data;
+  renderUsage();
+}
+
+function renderUsage() {
+  const root = $('#usage-list');
+  if (!root) return;
+  const byAgent = Array.isArray(usageSummary?.byAgent) ? usageSummary.byAgent : [];
+  const bySystem = Array.isArray(usageSummary?.bySystem) ? usageSummary.bySystem : [];
+  const totalCost = byAgent.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
+  const totalTokens = byAgent.reduce((sum, row) => sum + (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0), 0);
+  const totalEvents = byAgent.reduce((sum, row) => sum + (Number(row.events) || 0), 0);
+
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#usage-total-cost', `¥${formatUsageCost(totalCost)}`);
+  setText('#usage-total-tokens', formatTokenCount(totalTokens));
+  setText('#usage-total-events', formatTokenCount(totalEvents));
+  setText('#usage-agent-count', formatTokenCount(byAgent.length));
+
+  root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按 Agent</h2><p>每个智能体消耗的成本与 Token</p></div></div>${usageTableHtml(byAgent, 'agentId', '中枢或执行面还没有产生可记账的模型调用')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本与 Token</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section>`;
   refreshIcons(root);
 }
 
