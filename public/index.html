@@ -129,6 +129,7 @@
           <button class="nav-item" type="button" data-view="harbor" data-title="AI 港湾"><i data-lucide="waypoints"></i><span>AI 港湾</span></button>
           <button class="nav-item" type="button" data-view="squad" data-title="Agent 小队"><i data-lucide="users-round"></i><span>Agent 小队</span></button>
           <button class="nav-item" type="button" data-view="usage" data-title="用量台账"><i data-lucide="book-open"></i><span>用量台账</span></button>
+          <button class="nav-item" type="button" data-view="route" data-title="模型选型"><i data-lucide="route"></i><span>模型选型</span></button>
         </div>
         <div class="nav-group">
           <span class="nav-label">执行面</span>
@@ -581,6 +582,37 @@
           </div>
 
           <div id="usage-list" class="usage-list"><div class="dashboard-loading">正在读取用量台账…</div></div>
+        </section>
+
+        <section id="view-route" class="view app-view hidden">
+          <div class="page-head">
+            <div><span class="page-module">AI 资源协作</span><h1>模型选型</h1><p>按任务难度与约束，为模型调用选定模型档（可解释规则矩阵）</p></div>
+          </div>
+
+          <div class="route-layout">
+            <section class="surface route-form">
+              <div class="surface-head"><div><h2>选型条件</h2><p>难度决定档位；其余为可选硬约束</p></div></div>
+              <form id="route-form" class="route-fields">
+                <label class="field"><span>任务难度</span>
+                  <select name="difficulty">
+                    <option value="light" selected>轻 · 普通查询/报表</option>
+                    <option value="medium">中 · 推理/分析</option>
+                    <option value="heavy">重 · 高风险复杂推理</option>
+                  </select>
+                </label>
+                <label class="field checkbox"><input type="checkbox" name="dataSensitive" /> 数据脱敏（仅本地模型）</label>
+                <label class="field"><span>最大时延（ms，可选）</span><input name="maxLatencyMs" type="number" min="0" step="1" placeholder="如 1000" /></label>
+                <label class="field"><span>最小上下文（tokens，可选）</span><input name="minContextWindow" type="number" min="0" step="1" placeholder="如 64000" /></label>
+                <label class="field"><span>每百万 Token 成本上限（¥，可选）</span><input name="maxCostPerMillion" type="number" min="0" step="0.01" placeholder="如 10" /></label>
+                <div class="route-form-actions"><button type="submit" class="btn primary"><i data-lucide="git-branch"></i>选型</button></div>
+              </form>
+            </section>
+
+            <section class="surface route-result">
+              <div class="surface-head"><div><h2>选型结果</h2><p>选定模型档与规则矩阵轨迹</p></div></div>
+              <div id="route-result"><div class="harbor-empty">设置条件后点击「选型」</div></div>
+            </section>
+          </div>
         </section>
 
         <section id="view-config" class="view app-view hidden">

@@ -81,6 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } 
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
 import { ensureModelProfiles, getModelProfile } from './model-profile-store.ts';
+import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
   ensureUsageLedger,
@@ -1798,9 +1799,13 @@ const server = createServer(async (req, res) => {
       const agent = agentId ? executionPlane.list().agents.find((item) => item.agentId === agentId) : undefined;
       const intent = agent?.capabilities.find((cap) => cap.intent)?.intent;
       // LLM 优先路径，按 Agent 注册的查询语义（intent）动态解析；失败返回 { error }，由前端回退。
+      // 模型选择统一走选型器（意图解析是轻任务 → light 档）；仅当选定档可执行时才覆盖模型名。
+      const route = routeModel({ difficulty: 'light' });
+      const routedModel = route.executable && route.profile ? route.profile.modelName : undefined;
       // 用量回调：把中枢自身这次 DeepSeek 调用的 Token/成本记账（systemId 对齐中枢注册码 aeos-hub）。
       sendJson(res, 200, await parseIntentWithLLM(text, {
         intent,
+        model: routedModel,
         onUsage: (usage) => {
           const profile = getModelProfile(usage.model);
           const cost = profile
@@ -1870,6 +1875,17 @@ const server = createServer(async (req, res) => {
     try {
       const limit = boundedLimit(url.searchParams.get('limit'));
       sendJson(res, 200, { events: listUsageEvents(limit) });
+    } catch (e) {
+      sendJson(res, 400, { error: (e as Error).message });
+    }
+    return;
+  }
+  // ---------- 模型选型只读 API（确定性规则矩阵选型） ----------
+  if (url.pathname === '/api/models/route') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const input = await readJsonBody(req, 8 * 1024);
+      sendJson(res, 200, routeModel(parseRouteRequest(input)));
     } catch (e) {
       sendJson(res, 400, { error: (e as Error).message });
     }
