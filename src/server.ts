@@ -80,6 +80,7 @@ import { AccessControlApi } from './access-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
+import { ensureModelProfiles } from './model-profile-store.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -201,6 +202,13 @@ try {
   ensureExecutionAgent();
 } catch (error) {
   console.warn('[execution-agent-seed] 自动注册失败:', (error as Error).message);
+}
+
+// 幂等补齐模型目录种子档（data/model-profiles.json）。失败不阻塞启动。
+try {
+  ensureModelProfiles();
+} catch (error) {
+  console.warn('[model-profile-store] 模型目录初始化失败:', (error as Error).message);
 }
 
 // ---------- 状态 ----------

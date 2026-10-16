@@ -136,6 +136,7 @@ export const HarborAgentSchema = z.object({
   instructions: trimmedString(5000),
   provider: trimmedString(80, 1),
   model: trimmedString(120, 1),
+  modelProfileId: identifierSchema.nullable().default(null),
   runtimeId: identifierSchema.nullable(),
   parentAgentId: identifierSchema.nullable().default(null),
   hierarchyLevel: AgentHierarchyLevelSchema.default('L2'),
@@ -394,7 +395,7 @@ export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
   runtimeId?: unknown;
 };
 const HARBOR_AGENT_CREATE_KEYS = new Set([
-  'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
+  'name', 'role', 'description', 'instructions', 'provider', 'model', 'modelProfileId', 'runtimeId',
   'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
   'code', 'type', 'ownerOrg', 'domain', 'lifecycle', 'allowedRuntimeCapabilities', 'taskServiceProfile',
 ]);
@@ -706,6 +707,9 @@ export class HarborStore {
       if (parentAgentId && !snapshot.agents.some((agent) => agent.id === parentAgentId)) {
         throw new Error('所选上级 Agent 不存在');
       }
+      const model = optionalText(input, 'model', 120, 'provider-default');
+      // 未显式指定 modelProfileId 时，默认沿用 model 字符串作为档 id，保证既有 create 路径自动对齐。
+      const modelProfileId = optionalText(input, 'modelProfileId', 160) || model;
       const agent = HarborAgentSchema.parse({
         id: `agent-${this.idFactory()}`,
         name: requiredText(input, 'name', 80),
@@ -713,7 +717,8 @@ export class HarborStore {
         description: optionalText(input, 'description', 500),
         instructions: optionalText(input, 'instructions', 5000),
         provider: requiredText(input, 'provider', 80),
-        model: optionalText(input, 'model', 120, 'provider-default'),
+        model,
+        modelProfileId,
         runtimeId,
         parentAgentId,
         hierarchyLevel: expectedLevel,
@@ -950,6 +955,7 @@ export class HarborStore {
           instructions: '结论必须引用 evidence_refs；只输出建议动作，不越过 Guard 执行高风险操作。',
           provider: 'openai-codex',
           model: 'account-default',
+          modelProfileId: 'account-default',
           runtimeId: 'runtime-codex-local',
           parentAgentId: null,
           hierarchyLevel: 'L0',

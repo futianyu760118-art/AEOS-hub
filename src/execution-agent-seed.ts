@@ -52,6 +52,7 @@ export function ensureExecutionAgent(agentId: string = process.env.EXECUTION_AGE
       instructions: '你是公司中台执行面智能体，只执行管理面下发的只读查询或只读推理，不写入任何业务数据。',
       provider: 'remote-execution',
       model: 'provider-default',
+      modelProfileId: 'provider-default',
       autonomyLevel: 'A1',
       access: 'workspace',
       skills: ['中台只读查询', '中台只读推理'],

@@ -719,6 +719,8 @@ function syncExecutionRefresh() {
 let executionControlsWired = false;
 let selectedExecutionAgent = null;
 let executionAgents = [];
+// 每个智能体独立一份聊天窗口（线程）：切换时隐藏当前、显示目标，各自历史与进行中的查询都不丢。
+const executionThreads = new Map();
 
 function wireExecutionControls() {
   if (executionControlsWired) return;
@@ -786,12 +788,46 @@ function renderExecutionAgentList(agents) {
   refreshIcons(root);
 }
 
+function executionEmptyState() {
+  const div = document.createElement('div');
+  div.className = 'harbor-empty';
+  div.innerHTML = '<i data-lucide="messages-square"></i><strong>开始对话</strong><small>向该智能体提问，例如「查 HJY20260903-261 的缺料」</small>';
+  return div;
+}
+
+function executionThreadFor(agentId) {
+  let root = executionThreads.get(agentId);
+  if (!root) {
+    root = document.createElement('div');
+    root.className = 'execution-messages';
+    root.dataset.executionAgent = agentId;
+    root.appendChild(executionEmptyState());
+    const panel = $('.execution-chat-panel');
+    const composer = $('#execution-chat-input')?.closest('.execution-composer');
+    if (panel && composer) panel.insertBefore(root, composer);
+    else if (panel) panel.appendChild(root);
+    executionThreads.set(agentId, root);
+    refreshIcons(root);
+  }
+  return root;
+}
+
+function showExecutionThread(agentId) {
+  const defaultRoot = $('#execution-messages');
+  if (defaultRoot) defaultRoot.classList.add('hidden');
+  for (const root of executionThreads.values()) root.classList.add('hidden');
+  if (agentId) executionThreadFor(agentId).classList.remove('hidden');
+  else if (defaultRoot) defaultRoot.classList.remove('hidden');
+}
+
 function selectExecutionAgent(agentId) {
   selectedExecutionAgent = agentId;
   loadExecution();
+  showExecutionThread(agentId);
+  const name = executionAgents.find((item) => item.agentId === agentId)?.name || agentId;
   const title = $('#execution-chat-title');
   const subtitle = $('#execution-chat-subtitle');
-  if (title) title.textContent = `与「${agentId}」对话`;
+  if (title) title.textContent = `与「${name}」对话`;
   if (subtitle) subtitle.textContent = '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
 }
 
@@ -833,7 +869,7 @@ function executionMessageBubble(role, text) {
 }
 
 function appendExecutionMessage(role, text, data) {
-  const root = $('#execution-messages');
+  const root = selectedExecutionAgent ? executionThreadFor(selectedExecutionAgent) : $('#execution-messages');
   if (!root) return null;
   const empty = root.querySelector('.harbor-empty');
   if (empty) empty.remove();
