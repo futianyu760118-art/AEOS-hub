@@ -28,6 +28,7 @@ test('助手会话列表与详情重新设计', () => {
   assert.match(app, /assistantTraceDuration/);
   assert.match(app, /assistant-detail-summary/);
   assert.match(app, /assistantFilters/);
+  assert.match(app, /用量未上报/);
 });
 
 test('视图注册、两个标签页数据加载与轮询', () => {
@@ -58,5 +59,5 @@ test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);
   assert.match(css, /\.assistant-trace-item/);
-  assert.match(html, /ai-obs-clean-20261019/);
+  assert.match(html, /usage-labels-20261019/);
 });

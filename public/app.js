@@ -839,17 +839,51 @@ function formatUsageCost(value) {
 function usageTableHtml(rows, key, emptyText) {
   if (!rows.length) return `<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>${esc(emptyText)}</small></div>`;
   const head = key === 'agentId' ? 'Agent' : '系统';
-  const body = rows.map((row) => `<div class="harbor-row"><span>${esc(row[key])}</span><span class="num">${formatTokenCount(row.tokensIn)}</span><span class="num">${formatTokenCount(row.tokensOut)}</span><span class="num">¥${formatUsageCost(row.cost)}</span><span class="num">${formatTokenCount(row.events)}</span></div>`).join('');
+  const body = rows.map((row) => {
+    const raw = row[key];
+    const label = key === 'agentId' ? usageAgentLabel(raw) : usageSystemLabel(raw);
+    return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span><span class="num">${formatTokenCount(row.tokensIn)}</span><span class="num">${formatTokenCount(row.tokensOut)}</span><span class="num">¥${formatUsageCost(row.cost)}</span><span class="num">${formatTokenCount(row.events)}</span></div>`;
+  }).join('');
   return `<div class="harbor-table usage-table"><div class="harbor-row harbor-head"><span>${head}</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">调用次数</span></div>${body}</div>`;
+}
+
+const USAGE_AGENT_LABELS = {
+  'agent-aeos-hub': 'AEOS 中枢 Agent',
+  'control-platform-assistant': '中台智能助手',
+  'runtime-control-platform-agent': '中台执行面智能体',
+  'runtime-execution-query': '恒剑 PLM 执行面智能体',
+  'usage-probe-agent': '用量探针（临时）',
+};
+const USAGE_SYSTEM_LABELS = {
+  'aeos-hub': 'AEOS Hub',
+  'control-platform': '中台智能助手',
+  'demo-usage-probe': '用量探针（临时）',
+};
+let usageAgentNames = new Map();
+
+function usageAgentLabel(agentId) {
+  return USAGE_AGENT_LABELS[agentId] || usageAgentNames.get(agentId) || agentId;
+}
+
+function usageSystemLabel(systemId) {
+  return USAGE_SYSTEM_LABELS[systemId] || systemId;
 }
 
 async function loadUsage() {
   wireUsageControls();
   let data;
   try {
-    const response = await fetch('/api/usage/summary', { headers: { accept: 'application/json' } });
-    if (!response.ok) return;
-    data = await response.json();
+    const [usageResponse, agentsResponse] = await Promise.all([
+      fetch('/api/usage/summary', { headers: { accept: 'application/json' } }),
+      fetch('/api/execution/agents', { headers: { accept: 'application/json' } }),
+    ]);
+    if (!usageResponse.ok) return;
+    data = await usageResponse.json();
+    if (agentsResponse.ok) {
+      const agentsData = await agentsResponse.json();
+      usageAgentNames = new Map((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
+        .map((agent) => [agent.agentId, agent.name]));
+    }
   } catch { return; }
   usageSummary = data;
   renderUsage();
@@ -1598,9 +1632,14 @@ function renderAssistantTraces() {
     const selected = selectedAssistantTrace
       && selectedAssistantTrace.traceId === trace.traceId
       && selectedAssistantTrace.systemId === trace.systemId ? ' selected' : '';
+    const traceEvents = assistantTraceEvents(trace);
+    const hasModelCall = traceEvents.some((event) => event.event === 'model_call');
+    const hasReportedUsage = traceEvents.some((event) => event.usage
+      && ((event.usage.tokensIn || 0) > 0 || (event.usage.tokensOut || 0) > 0));
+    const usageNote = hasModelCall && !hasReportedUsage ? ' · 用量未上报' : '';
     return `<button class="assistant-trace-item${selected}" type="button" data-assistant-trace="${esc(trace.traceId)}" data-assistant-system="${esc(trace.systemId)}">
       <span class="assistant-trace-top"><strong>${esc(assistantTraceTitle(trace))}</strong>${trace.hasError ? '<b class="status-pill danger">有错误</b>' : '<b class="status-pill ok">正常</b>'}</span>
-      <span class="assistant-trace-meta">${esc(trace.systemId)} · ${formatTokenCount(trace.count)} 条事件 · 时长 ${esc(assistantTraceDuration(trace))} · ${borrowTime(trace.lastAt)}</span>
+      <span class="assistant-trace-meta">${esc(trace.systemId)} · ${formatTokenCount(trace.count)} 条事件 · 时长 ${esc(assistantTraceDuration(trace))} · ${borrowTime(trace.lastAt)}${usageNote}</span>
     </button>`;
   }).join('');
   root.innerHTML = `<div class="assistant-trace-list-inner">${cards}</div>`;
@@ -1622,13 +1661,15 @@ function renderAssistantDetail() {
   const trace = assistantFilteredTraces.find((item) => item.traceId === traceId && item.systemId === systemId)
     || (assistantData?.traces || []).find((item) => item.traceId === traceId && item.systemId === systemId);
   const events = assistantTraceEvents({ traceId, systemId });
-  const usageEvents = events.filter((event) => event.usage);
+  const usageEvents = events.filter((event) => event.usage
+    && ((event.usage.tokensIn || 0) > 0 || (event.usage.tokensOut || 0) > 0));
+  const hasModelCall = events.some((event) => event.event === 'model_call');
   const tokensIn = usageEvents.reduce((sum, event) => sum + (event.usage.tokensIn || 0), 0);
   const tokensOut = usageEvents.reduce((sum, event) => sum + (event.usage.tokensOut || 0), 0);
   const cost = usageEvents.reduce((sum, event) => sum + (event.usage.cost || 0), 0);
   const usageLine = usageEvents.length
     ? `输入 ${formatTokenCount(tokensIn)} / 输出 ${formatTokenCount(tokensOut)} / ¥${formatUsageCost(cost)}`
-    : '未上报模型用量';
+    : (hasModelCall ? '未上报模型用量（需中台回传 Token）' : '未上报模型用量');
   root.innerHTML = `<div class="assistant-detail-summary">
       <div><span>系统</span><strong>${esc(systemId)}</strong></div>
       <div><span>事件数</span><strong>${formatTokenCount(events.length)}</strong></div>

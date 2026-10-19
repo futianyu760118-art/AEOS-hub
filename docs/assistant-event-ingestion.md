@@ -29,6 +29,8 @@
 | `durationMs` | 否 | 毫秒 |
 | `usage` | 否 | 模型用量：`{ modelId, tokensIn, cachedTokens, tokensOut, cost }`；`cost` 可空，Hub 会按模型目录补算 |
 
+> **用量必须填真实值**：`tokensIn` / `tokensOut` 两项都为 0 时，Hub 视为"未上报"，不会写入用量台账；请从大模型返回的 usage 字段中取值。
+
 ### 事件类型
 
 | 值 | 含义 |

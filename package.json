@@ -18,7 +18,7 @@
     "test:production": "node --test test/production-coordination.test.ts",
     "test:pagination": "node --test test/mcp-pagination.test.ts",
     "test:harbor": "node --test test/harbor-store.test.ts",
-    "test:usage": "node --test test/usage-ledger-store.test.ts test/codex-usage-baseline-store.test.ts",
+    "test:usage": "node --test test/usage-ledger-store.test.ts test/codex-usage-baseline-store.test.ts test/usage-ui.test.ts",
     "test:router": "node --test test/model-router.test.ts",
     "test:pricing": "node --test test/model-pricing.test.ts",
     "test:borrow": "node --test test/borrow-order-store.test.ts test/borrow-order-service.test.ts test/borrow-order-api.test.ts test/borrow-order-ui.test.ts test/execution-plane-callbacks.test.ts",
