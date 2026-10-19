@@ -16,7 +16,18 @@ test('AI 观测导航与两个标签页存在', () => {
   assert.match(html, /id="ai-run-list"/);
   assert.match(html, /id="ai-run-detail"/);
   assert.match(html, /id="assistant-traces"/);
+  assert.match(html, /id="assistant-status-filter"/);
+  assert.match(html, /id="assistant-time-filter"/);
+  assert.match(html, /id="assistant-search"/);
   assert.match(html, /id="btn-ai-obs-refresh"/);
+});
+
+test('助手会话列表与详情重新设计', () => {
+  assert.match(app, /assistant-trace-item/);
+  assert.match(app, /assistantTraceTitle/);
+  assert.match(app, /assistantTraceDuration/);
+  assert.match(app, /assistant-detail-summary/);
+  assert.match(app, /assistantFilters/);
 });
 
 test('视图注册、两个标签页数据加载与轮询', () => {
@@ -46,5 +57,6 @@ test('Hub 派单任务复用执行步骤时间线', () => {
 test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);
-  assert.match(html, /ai-obs-20261019/);
+  assert.match(css, /\.assistant-trace-item/);
+  assert.match(html, /ai-obs-ui-20261019/);
 });

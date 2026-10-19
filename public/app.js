@@ -1466,13 +1466,27 @@ function syncAiObsRefresh() {
 let assistantData = null;
 let assistantControlsWired = false;
 let selectedAssistantTrace = null;
+let assistantFilteredTraces = [];
+let assistantFilters = { system: 'all', status: 'all', time: 'all', search: '' };
 
 function wireAssistantControls() {
   if (assistantControlsWired) return;
   assistantControlsWired = true;
-  $('#assistant-system-filter')?.addEventListener('change', () => {
-    selectedAssistantTrace = null;
-    loadAssistantEvents();
+  $('#assistant-system-filter')?.addEventListener('change', (event) => {
+    assistantFilters.system = event.target.value || 'all';
+    renderAssistant();
+  });
+  $('#assistant-status-filter')?.addEventListener('change', (event) => {
+    assistantFilters.status = event.target.value || 'all';
+    renderAssistant();
+  });
+  $('#assistant-time-filter')?.addEventListener('change', (event) => {
+    assistantFilters.time = event.target.value || 'all';
+    renderAssistant();
+  });
+  $('#assistant-search')?.addEventListener('input', (event) => {
+    assistantFilters.search = String(event.target.value || '').trim().toLowerCase();
+    renderAssistant();
   });
   $('#assistant-traces')?.addEventListener('click', (event) => {
     const target = event.target.closest('[data-assistant-trace]');
@@ -1487,17 +1501,55 @@ function wireAssistantControls() {
 
 async function loadAssistantEvents() {
   wireAssistantControls();
-  const system = $('#assistant-system-filter')?.value || 'all';
-  const query = new URLSearchParams({ limit: '500' });
-  if (system !== 'all') query.set('system', system);
   let data;
   try {
-    const response = await fetch(`/api/assistant-events?${query.toString()}`, { headers: { accept: 'application/json' } });
+    // 一次拉取后在本地过滤，保证系统下拉选项和筛选切换即时生效。
+    const response = await fetch('/api/assistant-events?limit=1000', { headers: { accept: 'application/json' } });
     if (!response.ok) return;
     data = await response.json();
   } catch { return; }
   assistantData = data;
   renderAssistant();
+}
+
+function assistantTraceEvents(trace) {
+  const events = Array.isArray(assistantData?.events) ? assistantData.events : [];
+  return events.filter((event) => event.traceId === trace.traceId && event.systemId === trace.systemId);
+}
+
+function assistantTraceTitle(trace) {
+  const events = assistantTraceEvents(trace);
+  const first = events.find((event) => event.event === 'conversation_started')
+    || events.find((event) => event.event === 'message')
+    || events[0];
+  const summary = first?.summary || trace.lastSummary || '';
+  return summary ? summary.slice(0, 60) : `会话 ${String(trace.traceId).slice(0, 8)}`;
+}
+
+function assistantTraceDuration(trace) {
+  const start = new Date(trace.firstAt).getTime();
+  const end = new Date(trace.lastAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—';
+  const seconds = Math.round((end - start) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+function assistantTraceMatches(trace) {
+  if (assistantFilters.system !== 'all' && trace.systemId !== assistantFilters.system) return false;
+  if (assistantFilters.status === 'error' && !trace.hasError) return false;
+  if (assistantFilters.status === 'ok' && trace.hasError) return false;
+  if (assistantFilters.time !== 'all') {
+    const ranges = { '1h': 3_600_000, '24h': 24 * 3_600_000, '7d': 7 * 24 * 3_600_000 };
+    const range = ranges[assistantFilters.time];
+    if (range && Date.now() - new Date(trace.lastAt).getTime() > range) return false;
+  }
+  if (assistantFilters.search) {
+    const haystack = `${trace.traceId} ${trace.systemId} ${trace.lastSummary || ''}`.toLowerCase();
+    if (!haystack.includes(assistantFilters.search)) return false;
+  }
+  return true;
 }
 
 function renderAssistant() {
@@ -1511,12 +1563,25 @@ function renderAssistant() {
 
   const filter = $('#assistant-system-filter');
   if (filter) {
-    const current = filter.value;
+    const current = assistantFilters.system;
     const systems = [...new Set(traces.map((trace) => trace.systemId))].sort();
     filter.innerHTML = `<option value="all">全部系统</option>${systems
       .map((system) => `<option value="${esc(system)}">${esc(system)}</option>`)
       .join('')}`;
     filter.value = current === 'all' || systems.includes(current) ? current : 'all';
+    if (filter.value !== current) assistantFilters.system = filter.value;
+  }
+
+  assistantFilteredTraces = traces.filter(assistantTraceMatches);
+  const countEl = $('#assistant-filter-count');
+  if (countEl) countEl.textContent = `筛选结果 ${assistantFilteredTraces.length} / ${traces.length}`;
+
+  if (selectedAssistantTrace && !assistantFilteredTraces.some((trace) => trace.traceId === selectedAssistantTrace.traceId && trace.systemId === selectedAssistantTrace.systemId)) {
+    selectedAssistantTrace = null;
+  }
+  if (!selectedAssistantTrace && assistantFilteredTraces.length) {
+    const first = assistantFilteredTraces[0];
+    selectedAssistantTrace = { traceId: first.traceId, systemId: first.systemId };
   }
   renderAssistantTraces();
   renderAssistantDetail();
@@ -1525,29 +1590,22 @@ function renderAssistant() {
 function renderAssistantTraces() {
   const root = $('#assistant-traces');
   if (!root) return;
-  const traces = Array.isArray(assistantData?.traces) ? assistantData.traces : [];
-  if (!traces.length) {
-    root.innerHTML = harborEmpty('messages-square', '暂无助手记录', '中台助手后端按协议上报后会显示在这里');
+  if (!assistantFilteredTraces.length) {
+    root.innerHTML = harborEmpty('messages-square', '没有匹配的会话', '调整筛选条件，或等中台助手后端上报新事件');
     refreshIcons(root);
     return;
   }
-  const rows = traces.map((trace) => {
+  const cards = assistantFilteredTraces.map((trace) => {
     const selected = selectedAssistantTrace
       && selectedAssistantTrace.traceId === trace.traceId
       && selectedAssistantTrace.systemId === trace.systemId ? ' selected' : '';
-    return `<button class="harbor-row borrow-row${selected}" type="button" data-assistant-trace="${esc(trace.traceId)}" data-assistant-system="${esc(trace.systemId)}">
-      <span class="mono" title="${esc(trace.traceId)}">${esc(trace.traceId.slice(0, 24))}</span>
-      <span>${esc(trace.systemId)}</span>
-      <span class="num">${formatTokenCount(trace.count)}</span>
-      <span class="num">${borrowTime(trace.lastAt)}</span>
-      <span>${esc(trace.lastSummary || '—')}</span>
-      <span>${trace.hasError ? '<b class="status-pill danger">有错误</b>' : '<b class="status-pill ok">正常</b>'}</span>
+    return `<button class="assistant-trace-item${selected}" type="button" data-assistant-trace="${esc(trace.traceId)}" data-assistant-system="${esc(trace.systemId)}">
+      <span class="assistant-trace-top"><strong>${esc(assistantTraceTitle(trace))}</strong>${trace.hasError ? '<b class="status-pill danger">有错误</b>' : '<b class="status-pill ok">正常</b>'}</span>
+      <span class="assistant-trace-meta">${esc(trace.systemId)} · ${formatTokenCount(trace.count)} 条事件 · 时长 ${esc(assistantTraceDuration(trace))} · ${borrowTime(trace.lastAt)}</span>
+      <span class="assistant-trace-summary">${esc(trace.lastSummary || '—')}</span>
     </button>`;
   }).join('');
-  root.innerHTML = `<div class="harbor-table assistant-trace-table">
-    <div class="harbor-row harbor-head"><span>会话</span><span>系统</span><span class="num">事件数</span><span class="num">最近时间</span><span>最近摘要</span><span>状态</span></div>
-    ${rows}
-  </div>`;
+  root.innerHTML = `<div class="assistant-trace-list-inner">${cards}</div>`;
   refreshIcons(root);
 }
 
@@ -1557,14 +1615,32 @@ function renderAssistantDetail() {
   const traceLabel = $('#assistant-trace-id');
   if (!selectedAssistantTrace) {
     if (traceLabel) traceLabel.textContent = '';
-    root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击上方会话查看上报的时间线</small></div>';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击左侧会话查看上报的时间线</small></div>';
     refreshIcons(root);
     return;
   }
   const { traceId, systemId } = selectedAssistantTrace;
   if (traceLabel) traceLabel.textContent = `${systemId} · ${traceId}`;
-  const events = (assistantData?.events || []).filter((event) => event.traceId === traceId && event.systemId === systemId);
-  root.innerHTML = `<div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
+  const trace = assistantFilteredTraces.find((item) => item.traceId === traceId && item.systemId === systemId)
+    || (assistantData?.traces || []).find((item) => item.traceId === traceId && item.systemId === systemId);
+  const events = assistantTraceEvents({ traceId, systemId });
+  const usageEvents = events.filter((event) => event.usage);
+  const tokensIn = usageEvents.reduce((sum, event) => sum + (event.usage.tokensIn || 0), 0);
+  const tokensOut = usageEvents.reduce((sum, event) => sum + (event.usage.tokensOut || 0), 0);
+  const cost = usageEvents.reduce((sum, event) => sum + (event.usage.cost || 0), 0);
+  const usageLine = usageEvents.length
+    ? `输入 ${formatTokenCount(tokensIn)} / 输出 ${formatTokenCount(tokensOut)} / ¥${formatUsageCost(cost)}`
+    : '未上报模型用量';
+  root.innerHTML = `<div class="assistant-detail-summary">
+      <div><span>系统</span><strong>${esc(systemId)}</strong></div>
+      <div><span>会话</span><strong class="mono">${esc(traceId)}</strong></div>
+      <div><span>事件数</span><strong>${formatTokenCount(events.length)}</strong></div>
+      <div><span>时长</span><strong>${esc(trace ? assistantTraceDuration(trace) : '—')}</strong></div>
+      <div><span>开始</span><strong>${borrowTime(trace?.firstAt)}</strong></div>
+      <div><span>最近</span><strong>${borrowTime(trace?.lastAt)}</strong></div>
+      <div><span>模型用量</span><strong>${esc(usageLine)}</strong></div>
+    </div>
+    <div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
   refreshIcons(root);
 }
 

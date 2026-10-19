@@ -39,7 +39,7 @@ test('监控样式存在', () => {
 });
 
 test('资源版本号已更新', () => {
-  assert.match(html, /ai-obs-20261019/);
+  assert.match(html, /ai-obs-ui-20261019/);
 });
 
 test('模型解析失败会提示用户', () => {
