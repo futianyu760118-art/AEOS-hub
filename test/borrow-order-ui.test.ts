@@ -12,9 +12,16 @@ test('导航与视图存在', () => {
   assert.match(html, /data-view="borrow"/);
   assert.match(html, /id="view-borrow"/);
   assert.match(html, /id="btn-borrow-refresh"/);
+  assert.match(html, /id="btn-borrow-collapse"/);
   assert.match(html, /id="borrow-list"/);
   assert.match(html, /id="borrow-detail"/);
   assert.match(html, /id="borrow-status-filter"/);
+});
+
+test('详情可收起且结果表格化', () => {
+  assert.match(app, /function clearBorrowSelection\(\)/);
+  assert.match(app, /function renderBorrowResultTable\(/);
+  assert.match(app, /再次点击或点「收起」关闭/);
 });
 
 test('视图注册与懒加载', () => {
@@ -36,7 +43,7 @@ test('借调视图只读：没有写请求与操作按钮', () => {
 test('缓存版本号符合约定', () => {
   assert.match(html, /style\.css\?v=[a-z0-9-]+/);
   assert.match(html, /app\.js\?v=[a-z0-9-]+/);
-  assert.match(html, /borrow-orders-20261019/);
+  assert.match(html, /borrow-ui-20261019/);
 });
 
 test('借调视图样式存在', () => {

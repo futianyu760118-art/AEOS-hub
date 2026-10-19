@@ -885,11 +885,22 @@ function wireBorrowControls() {
   borrowControlsWired = true;
   $('#btn-borrow-refresh')?.addEventListener('click', () => loadBorrowOrders());
   $('#borrow-status-filter')?.addEventListener('change', () => loadBorrowOrders());
+  $('#btn-borrow-collapse')?.addEventListener('click', clearBorrowSelection);
   $('#borrow-list')?.addEventListener('click', (event) => {
     const target = event.target.closest('[data-borrow-order]');
     const orderId = target?.getAttribute('data-borrow-order');
-    if (orderId) loadBorrowOrderDetail(orderId);
+    if (!orderId) return;
+    // 再次点击同一张单 = 收起详情。
+    if (orderId === selectedBorrowOrderId) clearBorrowSelection();
+    else loadBorrowOrderDetail(orderId);
   });
+}
+
+function clearBorrowSelection() {
+  selectedBorrowOrderId = null;
+  borrowDetail = null;
+  renderBorrowDetail();
+  renderBorrowList();
 }
 
 async function loadBorrowOrders(options = {}) {
@@ -967,11 +978,54 @@ async function loadBorrowOrderDetail(orderId, options = {}) {
   renderBorrowDetail();
 }
 
+const BORROW_FIELD_LABELS = {
+  id: 'ID', order_no: '订单号', line_no: '行号', customer: '客户', customer_code: '客户编码',
+  product_code: '产品编码', product_name: '产品名称', order_qty: '订单数量', completed_qty: '完成数量',
+  order_amount: '订单金额', status: '状态', erp_status: 'ERP 状态', risk_level: '风险等级',
+  risk_probability: '风险概率', promised_date: '承诺交期', delivery_completed_date: '完成日期',
+  planned_start_date: '计划开始', owner: '责任人', updated_at: '更新时间',
+  path: '查询路径', params: '查询参数', keyword: '关键字', message: '说明', summary: '摘要', conclusions: '结论',
+};
+
+function borrowFieldLabel(key) {
+  return BORROW_FIELD_LABELS[key] || key;
+}
+
+function borrowCell(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+/** 把 { items: [{...}] } 形态的借调结果渲染成可读表格；其他形态回退到原始 JSON。 */
+function renderBorrowResultTable(value) {
+  const items = Array.isArray(value?.items)
+    ? value.items.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  if (!items.length) return '';
+  const keys = [];
+  for (const item of items.slice(0, 50)) {
+    for (const key of Object.keys(item)) if (!keys.includes(key)) keys.push(key);
+  }
+  const cols = keys.slice(0, 8);
+  if (!cols.length) return '';
+  const head = cols.map((key) => `<span>${esc(borrowFieldLabel(key))}</span>`).join('');
+  const rows = items.slice(0, 50).map((item) => `<div class="harbor-row">${cols
+    .map((key) => `<span title="${esc(borrowCell(item[key]))}">${esc(borrowCell(item[key]))}</span>`)
+    .join('')}</div>`).join('');
+  const more = keys.length > cols.length || items.length > 50
+    ? `<p class="form-hint">仅展示前 ${cols.length} 列 / ${Math.min(items.length, 50)} 行；完整内容见下方原始 JSON。</p>`
+    : '';
+  return `<div class="harbor-table borrow-result-table" style="--borrow-cols:${cols.length}"><div class="harbor-row harbor-head">${head}</div>${rows}</div>${more}`;
+}
+
 function renderBorrowDetail() {
   const root = $('#borrow-detail');
   if (!root) return;
+  const collapse = $('#btn-borrow-collapse');
+  if (collapse) collapse.classList.toggle('hidden', !borrowDetail);
   if (!borrowDetail) {
-    root.innerHTML = '<div class="harbor-empty"><i data-lucide="arrow-left-right"></i><strong>选择一张借调单</strong><small>点击上方列表中的借调单查看输入与结果</small></div>';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="arrow-left-right"></i><strong>选择一张借调单</strong><small>点击上方列表中的借调单查看输入与结果；再次点击或点「收起」关闭</small></div>';
     refreshIcons(root);
     return;
   }
@@ -983,6 +1037,18 @@ function renderBorrowDetail() {
   const truncated = order.resultTruncated
     ? `<p class="form-hint">结果超过 256KB，仅保存摘要（原始 ${formatTokenCount(order.resultBytes)} 字节）。</p>`
     : '';
+  const inputEntries = order.input && typeof order.input === 'object' && !Array.isArray(order.input)
+    ? Object.entries(order.input)
+    : null;
+  const inputBlock = inputEntries && inputEntries.length
+    ? `<div class="borrow-detail-block"><h3>输入</h3><div class="borrow-detail-grid">${inputEntries
+      .map(([key, value]) => `<div><span>${esc(borrowFieldLabel(key))}</span><strong>${esc(borrowCell(value))}</strong></div>`)
+      .join('')}</div></div>`
+    : `<div class="borrow-detail-block"><h3>输入</h3><pre class="borrow-json">${json(order.input)}</pre></div>`;
+  const resultTable = renderBorrowResultTable(order.result);
+  const resultBlock = resultTable
+    ? `<div class="borrow-detail-block"><h3>结果</h3>${resultTable}<details class="borrow-raw"><summary>原始 JSON</summary><pre class="borrow-json">${json(order.result)}</pre></details></div>`
+    : `<div class="borrow-detail-block"><h3>结果</h3><pre class="borrow-json">${json(order.result)}</pre></div>`;
   root.innerHTML = `<div class="borrow-detail-grid">
       <div><span>借调单</span><strong class="mono">${esc(order.orderId)}</strong></div>
       <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
@@ -995,8 +1061,8 @@ function renderBorrowDetail() {
     </div>
     ${truncated}
     ${error}
-    <div class="borrow-detail-block"><h3>输入</h3><pre class="borrow-json">${json(order.input)}</pre></div>
-    <div class="borrow-detail-block"><h3>结果</h3><pre class="borrow-json">${json(order.result)}</pre></div>`;
+    ${inputBlock}
+    ${resultBlock}`;
   refreshIcons(root);
 }
 

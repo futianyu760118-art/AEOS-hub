@@ -2423,3 +2423,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .borrow-detail-block { margin-top: 14px; }
 .borrow-detail-block h3 { margin: 0 0 6px; font-size: 11px; color: var(--text-2); }
 .borrow-json { max-height: 320px; overflow: auto; margin: 0; border: 1px solid var(--line-subtle); border-radius: 6px; background: #f7f7f8; padding: 10px 12px; font-size: 10px; line-height: 1.5; }
+.borrow-result-table { height: auto; max-height: 360px; }
+.borrow-result-table .harbor-row { min-width: calc(var(--borrow-cols, 6) * 140px); grid-template-columns: repeat(var(--borrow-cols, 6), minmax(140px, 1fr)); }
+.borrow-result-table .harbor-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.borrow-raw { margin-top: 8px; }
+.borrow-raw summary { cursor: pointer; color: var(--text-3); font-size: 10px; }
+.borrow-raw .borrow-json { margin-top: 6px; }

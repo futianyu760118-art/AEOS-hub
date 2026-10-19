@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=borrow-orders-20261019" />
+  <link rel="stylesheet" href="/style.css?v=borrow-ui-20261019" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -599,7 +599,10 @@
           </section>
 
           <section class="surface">
-            <div class="surface-head"><div><h2>借调详情</h2><p>输入、结果与失败原因</p></div></div>
+            <div class="surface-head">
+              <div><h2>借调详情</h2><p>输入、结果与失败原因；本期只读，取消/召回由后续版本提供</p></div>
+              <button id="btn-borrow-collapse" class="btn secondary compact hidden" type="button"><i data-lucide="chevron-up"></i>收起</button>
+            </div>
             <div id="borrow-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="arrow-left-right"></i><strong>选择一张借调单</strong><small>点击上方列表中的借调单查看输入与结果</small></div></div>
           </section>
         </section>
@@ -798,6 +801,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=borrow-orders-20261019"></script>
+  <script type="module" src="/app.js?v=borrow-ui-20261019"></script>
 </body>
 </html>
