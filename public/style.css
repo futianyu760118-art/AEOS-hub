@@ -2491,3 +2491,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .assistant-trace-list { max-height: 360px; }
   #assistant-detail { max-height: 520px; }
 }
+.assistant-latest-reply { border: 1px solid var(--line-subtle); border-radius: 8px; background: #fafafa; padding: 10px 12px; margin-bottom: 10px; }
+.assistant-latest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.assistant-latest-head h3 { margin: 0; font-size: 11px; color: var(--text-2); }
+.assistant-latest-head span { color: var(--text-3); font-size: 10px; }
+.assistant-reply-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 11px; line-height: 1.6; color: var(--text-1); max-height: 200px; overflow: auto; }
+.assistant-latest-error { border-color: rgba(192, 57, 43, 0.25); background: rgba(192, 57, 43, 0.04); }

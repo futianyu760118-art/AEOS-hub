@@ -1353,7 +1353,10 @@ function switchAiObsTab(tab) {
   $('#ai-obs-runs')?.classList.toggle('hidden', aiObsTab !== 'runs');
   $('#ai-obs-assistants')?.classList.toggle('hidden', aiObsTab !== 'assistants');
   if (aiObsTab === 'runs') loadAiRuns();
-  else loadAssistantEvents();
+  else {
+    assistantUserSelected = false;
+    loadAssistantEvents();
+  }
 }
 
 function loadAiObs() {
@@ -1502,24 +1505,30 @@ let assistantControlsWired = false;
 let selectedAssistantTrace = null;
 let assistantFilteredTraces = [];
 let assistantFilters = { system: 'all', status: 'all', time: 'all', search: '' };
+let assistantUserSelected = false;
+let lastAssistantDetailKey = null;
 
 function wireAssistantControls() {
   if (assistantControlsWired) return;
   assistantControlsWired = true;
   $('#assistant-system-filter')?.addEventListener('change', (event) => {
     assistantFilters.system = event.target.value || 'all';
+    assistantUserSelected = false;
     renderAssistant();
   });
   $('#assistant-status-filter')?.addEventListener('change', (event) => {
     assistantFilters.status = event.target.value || 'all';
+    assistantUserSelected = false;
     renderAssistant();
   });
   $('#assistant-time-filter')?.addEventListener('change', (event) => {
     assistantFilters.time = event.target.value || 'all';
+    assistantUserSelected = false;
     renderAssistant();
   });
   $('#assistant-search')?.addEventListener('input', (event) => {
     assistantFilters.search = String(event.target.value || '').trim().toLowerCase();
+    assistantUserSelected = false;
     renderAssistant();
   });
   $('#assistant-trace-select')?.addEventListener('change', (event) => {
@@ -1531,6 +1540,7 @@ function wireAssistantControls() {
         systemId: decodeURIComponent(encodedSystem),
         traceId: decodeURIComponent(encodedTrace),
       };
+      assistantUserSelected = true;
       renderAssistantDetail();
     } catch {
       // 忽略非法选项值。
@@ -1548,6 +1558,7 @@ function wireAssistantControls() {
     const timeFilter = $('#assistant-time-filter'); if (timeFilter) timeFilter.value = 'all';
     const search = $('#assistant-search'); if (search) search.value = '';
     selectedAssistantTrace = { traceId, systemId };
+    assistantUserSelected = true;
     renderAssistant();
     $('#assistant-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
@@ -1647,12 +1658,15 @@ function renderAssistant() {
   const countEl = $('#assistant-filter-count');
   if (countEl) countEl.textContent = `筛选结果 ${assistantFilteredTraces.length} / ${traces.length}`;
 
-  if (selectedAssistantTrace && !assistantFilteredTraces.some((trace) => trace.traceId === selectedAssistantTrace.traceId && trace.systemId === selectedAssistantTrace.systemId)) {
-    selectedAssistantTrace = null;
-  }
-  if (!selectedAssistantTrace && assistantFilteredTraces.length) {
-    const first = assistantFilteredTraces[0];
-    selectedAssistantTrace = { traceId: first.traceId, systemId: first.systemId };
+  const latest = assistantFilteredTraces[0];
+  const selectedInFiltered = selectedAssistantTrace
+    && assistantFilteredTraces.some((trace) => trace.traceId === selectedAssistantTrace.traceId && trace.systemId === selectedAssistantTrace.systemId);
+  if (!selectedInFiltered) {
+    selectedAssistantTrace = latest ? { traceId: latest.traceId, systemId: latest.systemId } : null;
+    assistantUserSelected = false;
+  } else if (!assistantUserSelected && latest) {
+    // 用户没有手动选过会话时，始终跟随最新一条。
+    selectedAssistantTrace = { traceId: latest.traceId, systemId: latest.systemId };
   }
   const failedEvents = events
     .filter((event) => (assistantFilters.system === 'all' || event.systemId === assistantFilters.system)
@@ -1713,12 +1727,16 @@ function renderAssistantDetail() {
   if (!root) return;
   const traceLabel = $('#assistant-trace-id');
   if (!selectedAssistantTrace) {
+    lastAssistantDetailKey = null;
     if (traceLabel) traceLabel.textContent = '';
     root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>使用上方下拉框选择会话</small></div>';
     refreshIcons(root);
     return;
   }
   const { traceId, systemId } = selectedAssistantTrace;
+  const detailKey = `${systemId}|${traceId}`;
+  const detailChanged = detailKey !== lastAssistantDetailKey;
+  lastAssistantDetailKey = detailKey;
   if (traceLabel) traceLabel.textContent = `${systemId} · ${traceId}`;
   const trace = assistantFilteredTraces.find((item) => item.traceId === traceId && item.systemId === systemId)
     || (assistantData?.traces || []).find((item) => item.traceId === traceId && item.systemId === systemId);
@@ -1732,11 +1750,32 @@ function renderAssistantDetail() {
   const usageLine = usageEvents.length
     ? `输入 ${formatTokenCount(tokensIn)} / 输出 ${formatTokenCount(tokensOut)} / ¥${formatUsageCost(cost)}`
     : (hasModelCall ? '未上报模型用量（需中台回传 Token）' : '未上报模型用量');
+  const replies = events.filter((event) => event.event === 'assistant_reply' && event.summary);
+  const latestReply = replies[replies.length - 1];
+  const errors = events.filter((event) => event.event === 'error' || event.status === 'failed');
+  const latestError = errors[errors.length - 1];
+  const timeOf = (event) => new Date(event.endedAt || event.startedAt || event.receivedAt || 0).getTime();
+  let highlight = '';
+  if (latestReply && (!latestError || timeOf(latestReply) >= timeOf(latestError))) {
+    const text = String(latestReply.summary);
+    highlight = `<div class="assistant-latest-reply">
+      <div class="assistant-latest-head"><h3>最新回复</h3><span>${borrowTime(latestReply.endedAt || latestReply.receivedAt)}</span></div>
+      <pre class="assistant-reply-text">${esc(text.slice(0, 1200))}</pre>
+      ${text.length > 1200 ? '<p class="form-hint">内容较长，完整内容见下方时间线。</p>' : ''}
+    </div>`;
+  } else if (latestError) {
+    highlight = `<div class="assistant-latest-reply assistant-latest-error">
+      <div class="assistant-latest-head"><h3>最新错误</h3><span>${borrowTime(latestError.endedAt || latestError.receivedAt)}</span></div>
+      <pre class="assistant-reply-text">${esc(latestError.summary || '未提供错误说明')}</pre>
+    </div>`;
+  }
   root.innerHTML = `<div class="assistant-detail-line">
       <span>时间范围：${borrowTime(trace?.firstAt)} → ${borrowTime(trace?.lastAt)}</span>
       <span>模型用量：${esc(usageLine)}</span>
     </div>
+    ${highlight}
     <div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
+  if (detailChanged) root.scrollTop = 0;
   refreshIcons(root);
 }
 
