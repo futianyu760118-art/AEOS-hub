@@ -84,6 +84,9 @@ import { ensureExecutionAgent } from './execution-agent-seed.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
+import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
+import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.ts';
+import { BorrowOrderApi } from './borrow-order-api.ts';
 import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
@@ -91,6 +94,7 @@ import {
   appendUsageEvent,
   aggregateUsageByAgent,
   aggregateUsageBySystem,
+  aggregateUsageByConsumerSystem,
   listUsageEvents,
   type UsageEventAppendInput,
 } from './usage-ledger-store.ts';
@@ -191,12 +195,36 @@ function recordUsageEvent(event: UsageEventAppendInput): void {
 // 服务凭证来自环境变量 EXECUTION_PLANE_TOKEN；未配置则 /ws/agent 拒绝所有连接（fail-closed）。
 const EXECUTION_PLANE_TOKEN = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const executionHealthSyncedAt = new Map<string, { status: 'healthy' | 'unhealthy'; at: number }>();
+// 借调服务晚绑定：执行面回调在运行期才会触发，构造顺序无 TDZ 风险。
+let borrowOrderService: BorrowOrderService | null = null;
 const executionPlane = new ExecutionPlaneRegistry({
   file: join(dataDir, 'execution-plane.json'),
   onChange: () => syncExecutionHealth(),
-  onUsageEvent: (event) => recordUsageEvent(event),
+  onUsageEvent: (event) => recordUsageEvent(borrowOrderService ? borrowOrderService.attributeUsage(event) : event),
+  onRunStateChange: (event) => borrowOrderService?.handleRunStateChange(event),
+  onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
+const borrowOrderStore = new BorrowOrderStore({ file: join(dataDir, 'borrow-orders.json') });
+borrowOrderService = new BorrowOrderService({
+  store: borrowOrderStore,
+  executionPlane,
+  appendEvidence,
+  tenantId: process.env.AEOS_TENANT_ID,
+});
+const borrowOrderApi = new BorrowOrderApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  service: borrowOrderService,
+  appendEvidence,
+});
+try {
+  const reconciled = borrowOrderService.reconcileOnStartup();
+  if (reconciled.reconciled || reconciled.failed) {
+    console.log(`[borrow-order] 启动对账：同步 ${reconciled.reconciled}，失败 ${reconciled.failed}`);
+  }
+} catch (error) {
+  console.warn('[borrow-order] 启动对账失败:', (error as Error).message);
+}
 setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
 
 // 执行面心跳 → Harbor runtime 健康（节流：状态变化立即写，否则每 agent 最多 30s 写一次）。
@@ -922,6 +950,15 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
 }
 
 // ---------- HTTP ----------
+/** 系统 ID 可能包含中文；浏览器/curl 只能安全传 ASCII，故支持百分号编码后再比对令牌。 */
+function decodeSystemIdHeader(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(payload));
@@ -1423,12 +1460,40 @@ const server = createServer(async (req, res) => {
       const outcome = await agentControlApi.handle({
         method: req.method,
         pathname: url.pathname,
-        systemId: headerValue('x-aeos-system-id'),
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
         token: headerValue('x-aeos-system-token'),
         body,
         bodyParseFailed,
       });
       if (!outcome) { sendJson(res, 404, { error: 'agent-control endpoint not found' }); }
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 跨系统借调（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/borrow-orders')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = borrowOrderApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'borrow-order endpoint not found' });
       else sendJson(res, outcome.status, outcome.body);
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
@@ -1962,9 +2027,62 @@ const server = createServer(async (req, res) => {
     return;
   }
   // ---------- 用量台账只读 API（按 Agent/系统聚合 + 明细） ----------
+  // ---------- 跨系统借调只读监控（登录用户，只读） ----------
+  if (url.pathname === '/api/borrow-orders') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const statusRaw = url.searchParams.get('status');
+      let status: BorrowOrderStatus | undefined;
+      if (statusRaw) {
+        if (!(BORROW_ORDER_STATUSES as readonly string[]).includes(statusRaw)) {
+          sendJson(res, 400, { error: `status 无效：${statusRaw}` });
+          return;
+        }
+        status = statusRaw as BorrowOrderStatus;
+      }
+      const limit = boundedLimit(url.searchParams.get('limit'));
+      const orders = borrowOrderService ? borrowOrderService.listAll({ status, limit }) : [];
+      const all = borrowOrderStore.load().orders;
+      const byStatus: Record<string, number> = {};
+      for (const item of all) byStatus[item.status] = (byStatus[item.status] ?? 0) + 1;
+      const systems = new Set<string>();
+      for (const item of all) {
+        systems.add(item.fromSystem);
+        if (item.providerSystem) systems.add(item.providerSystem);
+      }
+      sendJson(res, 200, {
+        orders: orders.map(borrowOrderSummary),
+        counts: {
+          total: all.length,
+          active: (byStatus.pending ?? 0) + (byStatus.dispatched ?? 0) + (byStatus.running ?? 0),
+          completed: byStatus.completed ?? 0,
+          failed: byStatus.failed ?? 0,
+          cancelled: byStatus.cancelled ?? 0,
+          byStatus,
+          systems: systems.size,
+        },
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  const borrowDetailMatch = url.pathname.match(/^\/api\/borrow-orders\/([^/]+)$/);
+  if (borrowDetailMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const orderId = decodeURIComponent(borrowDetailMatch[1] ?? '').trim();
+    const order = orderId ? borrowOrderStore.get(orderId) : null;
+    if (!order) { sendJson(res, 404, { error: 'borrow order not found' }); return; }
+    sendJson(res, 200, { order });
+    return;
+  }
   if (url.pathname === '/api/usage/summary') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    sendJson(res, 200, { byAgent: aggregateUsageByAgent(), bySystem: aggregateUsageBySystem() });
+    sendJson(res, 200, {
+      byAgent: aggregateUsageByAgent(),
+      bySystem: aggregateUsageBySystem(),
+      byConsumerSystem: aggregateUsageByConsumerSystem(),
+    });
     return;
   }
   if (url.pathname === '/api/usage/events') {

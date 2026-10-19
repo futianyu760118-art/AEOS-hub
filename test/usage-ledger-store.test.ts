@@ -96,6 +96,34 @@ test('旧版无新字段的账本可解析为 legacy，不触发隔离', (t) => 
   assert.equal(snapshot.events.length, 1);
   assert.equal(snapshot.events[0].cachedTokens, 0);
   assert.equal(snapshot.events[0].metering, 'legacy');
+  assert.equal(snapshot.events[0].consumerSystemId, null);
+  assert.equal(snapshot.events[0].consumerAgentId, null);
+  assert.equal(snapshot.events[0].borrowOrderId, null);
+});
+
+test('消费者字段落库并按消费者聚合', (t) => {
+  const { store } = fixture(t);
+  store.append(input({
+    runId: 'exec-run-borrow-1',
+    consumerSystemId: 'erp',
+    consumerAgentId: 'purchase-assistant',
+    borrowOrderId: 'borrow-1',
+  }));
+  store.append(input({
+    runId: 'exec-run-borrow-2',
+    consumerSystemId: 'erp',
+    tokensIn: 20,
+    tokensOut: 5,
+    cost: 0.2,
+  }));
+  store.append(input({ runId: 'exec-run-plain' }));
+  const events = store.list();
+  assert.equal(events.find((event) => event.runId === 'exec-run-borrow-1')?.borrowOrderId, 'borrow-1');
+  const rows = store.aggregateByConsumerSystem();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].consumerSystemId, 'erp');
+  assert.equal(rows[0].events, 2);
+  assert.equal(rows[0].tokensIn, 120);
 });
 
 test('list 按新到旧返回明细', (t) => {

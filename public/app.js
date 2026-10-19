@@ -225,6 +225,8 @@ const DASHBOARD_LIVE_REFRESH_MS = 60_000;
 let dashboardLiveRefreshTimer = null;
 let executionRefreshTimer = null;
 const EXECUTION_LIVE_REFRESH_MS = 2_000;
+let borrowRefreshTimer = null;
+const BORROW_LIVE_REFRESH_MS = 5_000;
 let pendingRiskAgentDispatch = null;
 const riskAgentDispatches = new Map();
 // 不同 Agent / 不同会话允许并行；同一会话仍由服务端串行，避免上下文交叉。
@@ -284,6 +286,7 @@ const commands = [
   { view: 'squad', label: 'Agent 小队', desc: '主 Agent 编排、子 Agent 记忆与协作消息', icon: 'users-round', group: 'AI 资源协作' },
   { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
   { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
+  { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
 ];
 
@@ -551,7 +554,7 @@ function viewVisibleForRole(view, session) {
     return myGrants.some((grant) => grant.resourceCode === resource && Array.isArray(grant.operations) && grant.operations.includes('read'));
   }
   if (roles.includes('manager') || roles.includes('supervisor')) return true;
-  return ['chat', 'attention', 'tasks', 'projects', 'evidence', 'usage', 'route'].includes(view);
+  return ['chat', 'attention', 'tasks', 'projects', 'evidence', 'usage', 'route', 'borrow'].includes(view);
 }
 
 function defaultViewForSession(session) {
@@ -638,6 +641,8 @@ async function logout() {
   setLoginBusy(false);
   window.clearInterval(dashboardLiveRefreshTimer);
   dashboardLiveRefreshTimer = null;
+  window.clearInterval(borrowRefreshTimer);
+  borrowRefreshTimer = null;
   history.replaceState(null, '', location.pathname);
   window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 
@@ -695,9 +700,11 @@ function showView(view, options = {}) {
   if (view === 'chat' && curConvId) send({ type: 'view', conversationId: curConvId });
   if (view === 'execution') loadExecution();
   if (view === 'usage') loadUsage();
+  if (view === 'borrow') loadBorrowOrders();
   if (view === 'route') loadRoute();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
+  syncBorrowRefresh();
 }
 
 function syncDashboardLiveRefresh() {
@@ -847,6 +854,161 @@ function renderUsage() {
   root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按 Agent</h2><p>每个智能体消耗的成本与 Token</p></div></div>${usageTableHtml(byAgent, 'agentId', '中枢或执行面还没有产生可记账的模型调用')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本与 Token</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section>`;
   refreshIcons(root);
 }
+
+// ---------- 跨系统借调（只读监控） ----------
+const BORROW_STATUS_LABELS = {
+  pending: '待派单', dispatched: '已派单', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消',
+};
+const BORROW_STATUS_TONES = {
+  pending: 'info', dispatched: 'info', running: 'warn', completed: 'ok', failed: 'danger', cancelled: 'neutral',
+};
+let borrowOrders = [];
+let borrowCounts = null;
+let selectedBorrowOrderId = null;
+let borrowDetail = null;
+let borrowControlsWired = false;
+
+function borrowStatusPill(status) {
+  const tone = BORROW_STATUS_TONES[status] || 'neutral';
+  const label = BORROW_STATUS_LABELS[status] || status || '未知';
+  return `<b class="status-pill ${tone}">${esc(label)}</b>`;
+}
+
+function borrowTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? esc(String(value)) : esc(date.toLocaleString('zh-CN', { hour12: false }));
+}
+
+function wireBorrowControls() {
+  if (borrowControlsWired) return;
+  borrowControlsWired = true;
+  $('#btn-borrow-refresh')?.addEventListener('click', () => loadBorrowOrders());
+  $('#borrow-status-filter')?.addEventListener('change', () => loadBorrowOrders());
+  $('#borrow-list')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-borrow-order]');
+    const orderId = target?.getAttribute('data-borrow-order');
+    if (orderId) loadBorrowOrderDetail(orderId);
+  });
+}
+
+async function loadBorrowOrders(options = {}) {
+  wireBorrowControls();
+  const root = $('#borrow-list');
+  if (!options.silent && root && !borrowOrders.length) root.innerHTML = '<div class="dashboard-loading">正在读取借调单…</div>';
+  const status = $('#borrow-status-filter')?.value || 'all';
+  const query = new URLSearchParams({ limit: '100' });
+  if (status !== 'all') query.set('status', status);
+  let data;
+  try {
+    const response = await fetch(`/api/borrow-orders?${query.toString()}`, { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  borrowOrders = Array.isArray(data?.orders) ? data.orders : [];
+  borrowCounts = data?.counts ?? null;
+  renderBorrowMetrics();
+  renderBorrowList();
+  if (selectedBorrowOrderId) await loadBorrowOrderDetail(selectedBorrowOrderId, { silent: true });
+}
+
+function renderBorrowMetrics() {
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#borrow-total', formatTokenCount(borrowCounts?.total ?? 0));
+  setText('#borrow-active', formatTokenCount(borrowCounts?.active ?? 0));
+  setText('#borrow-completed', formatTokenCount(borrowCounts?.completed ?? 0));
+  setText('#borrow-failed', formatTokenCount(borrowCounts?.failed ?? 0));
+}
+
+function renderBorrowList() {
+  const root = $('#borrow-list');
+  if (!root) return;
+  if (!borrowOrders.length) {
+    root.innerHTML = harborEmpty('arrow-left-right', '暂无借调单', '系统通过 token API 发起借调后会显示在这里');
+    refreshIcons(root);
+    return;
+  }
+  const rows = borrowOrders.map((order) => {
+    const selected = order.orderId === selectedBorrowOrderId ? ' selected' : '';
+    return `<button class="harbor-row borrow-row${selected}" type="button" data-borrow-order="${esc(order.orderId)}">
+      <span class="mono">${esc(order.orderId.slice(0, 18))}…</span>
+      <span>${esc(order.fromSystem)} → ${esc(order.providerSystem || order.toSystem || '待解析')}</span>
+      <span>${esc(order.capability)}</span>
+      <span>${borrowStatusPill(order.status)}</span>
+      <span class="num">${borrowTime(order.dispatchedAt)}</span>
+      <span class="num">${borrowTime(order.endedAt)}</span>
+    </button>`;
+  }).join('');
+  root.innerHTML = `<div class="harbor-table borrow-table">
+    <div class="harbor-row harbor-head"><span>借调单</span><span>发起 → 提供</span><span>能力</span><span>状态</span><span class="num">派发时间</span><span class="num">结束时间</span></div>
+    ${rows}
+  </div>`;
+  refreshIcons(root);
+}
+
+async function loadBorrowOrderDetail(orderId, options = {}) {
+  let data;
+  try {
+    const response = await fetch(`/api/borrow-orders/${encodeURIComponent(orderId)}`, { headers: { accept: 'application/json' } });
+    if (response.status === 404) {
+      selectedBorrowOrderId = null;
+      borrowDetail = null;
+      renderBorrowDetail();
+      return;
+    }
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  const order = data?.order;
+  if (!order) return;
+  selectedBorrowOrderId = order.orderId;
+  borrowDetail = order;
+  if (!options.silent) renderBorrowList();
+  renderBorrowDetail();
+}
+
+function renderBorrowDetail() {
+  const root = $('#borrow-detail');
+  if (!root) return;
+  if (!borrowDetail) {
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="arrow-left-right"></i><strong>选择一张借调单</strong><small>点击上方列表中的借调单查看输入与结果</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const order = borrowDetail;
+  const json = (value) => esc(JSON.stringify(value ?? null, null, 2).slice(0, 8_000));
+  const error = order.error
+    ? `<div class="borrow-detail-block"><h3>失败原因</h3><pre class="borrow-json">${esc(JSON.stringify(order.error, null, 2))}</pre></div>`
+    : '';
+  const truncated = order.resultTruncated
+    ? `<p class="form-hint">结果超过 256KB，仅保存摘要（原始 ${formatTokenCount(order.resultBytes)} 字节）。</p>`
+    : '';
+  root.innerHTML = `<div class="borrow-detail-grid">
+      <div><span>借调单</span><strong class="mono">${esc(order.orderId)}</strong></div>
+      <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
+      <div><span>发起方</span><strong>${esc(order.fromSystem)}${order.fromAgentId ? ` · ${esc(order.fromAgentId)}` : ''}</strong></div>
+      <div><span>提供方</span><strong>${esc(order.providerSystem || '—')}${order.providerAgentId ? ` · ${esc(order.providerAgentId)}` : ''}</strong></div>
+      <div><span>能力</span><strong>${esc(order.capability)}</strong></div>
+      <div><span>状态</span><strong>${borrowStatusPill(order.status)}</strong></div>
+      <div><span>执行 run</span><strong class="mono">${esc(order.runId || '—')}</strong></div>
+      <div><span>时间</span><strong>创建 ${borrowTime(order.createdAt)} · 结束 ${borrowTime(order.endedAt)}</strong></div>
+    </div>
+    ${truncated}
+    ${error}
+    <div class="borrow-detail-block"><h3>输入</h3><pre class="borrow-json">${json(order.input)}</pre></div>
+    <div class="borrow-detail-block"><h3>结果</h3><pre class="borrow-json">${json(order.result)}</pre></div>`;
+  refreshIcons(root);
+}
+
+function syncBorrowRefresh() {
+  window.clearInterval(borrowRefreshTimer);
+  borrowRefreshTimer = null;
+  if (currentView !== 'borrow' || els.app.classList.contains('hidden')) return;
+  borrowRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadBorrowOrders({ silent: true });
+  }, BORROW_LIVE_REFRESH_MS);
+}
+
 
 let routeControlsWired = false;
 

@@ -59,6 +59,23 @@ export interface ExecutionPlaneSnapshot {
   runs: ExecutionRunRecord[];
 }
 
+/** 运行状态变化事件：所有 run 生命周期变更都通过该回调发出（不再只依赖 WS 层）。 */
+export interface ExecutionRunStateEvent {
+  runId: string;
+  agentId: string;
+  state: ExecutionRunState;
+  result?: unknown;
+  error?: { code: string; message: string };
+  startedAt: string;
+  endedAt: string | null;
+}
+
+/** 执行面离线事件：带出离线瞬间未完成的 runId（若有）。 */
+export interface AgentOfflineEvent {
+  agentId: string;
+  runId: string | null;
+}
+
 export class ExecutionPlaneError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
@@ -205,6 +222,8 @@ export class ExecutionPlaneRegistry {
   private readonly clock: () => Date;
   private readonly onChange?: () => void;
   private readonly onUsageEvent?: (event: UsageEventAppendInput) => void;
+  private readonly onRunStateChange?: (event: ExecutionRunStateEvent) => void;
+  private readonly onAgentOffline?: (event: AgentOfflineEvent) => void;
 
   constructor(options: {
     file: string;
@@ -213,6 +232,8 @@ export class ExecutionPlaneRegistry {
     clock?: () => Date;
     onChange?: () => void;
     onUsageEvent?: (event: UsageEventAppendInput) => void;
+    onRunStateChange?: (event: ExecutionRunStateEvent) => void;
+    onAgentOffline?: (event: AgentOfflineEvent) => void;
   }) {
     this.file = options.file;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
@@ -220,6 +241,8 @@ export class ExecutionPlaneRegistry {
     this.clock = options.clock ?? (() => new Date());
     this.onChange = options.onChange;
     this.onUsageEvent = options.onUsageEvent;
+    this.onRunStateChange = options.onRunStateChange;
+    this.onAgentOffline = options.onAgentOffline;
     this.load();
   }
 
@@ -270,6 +293,35 @@ export class ExecutionPlaneRegistry {
 
   private nowIso(): string {
     return this.clock().toISOString();
+  }
+
+  // ---------- 运行状态/离线回调（供借调单等上层订阅；回调异常不影响执行面） ----------
+  private emitRunState(run: ExecutionRunRecord): void {
+    try {
+      this.onRunStateChange?.({
+        runId: run.runId,
+        agentId: run.agentId,
+        state: run.state,
+        result: run.result,
+        error: run.error,
+        startedAt: run.startedAt,
+        endedAt: run.endedAt,
+      });
+    } catch {
+      // 订阅方异常不得中断执行面状态机。
+    }
+  }
+
+  private emitAgentOffline(agentId: string, runId: string | null): void {
+    try {
+      this.onAgentOffline?.({ agentId, runId });
+    } catch {
+      // 同上。
+    }
+  }
+
+  getRun(runId: string): ExecutionRunRecord | undefined {
+    return this.runs.get(runId);
   }
 
   // ---------- 执行面 → 管理面 ----------
@@ -329,6 +381,7 @@ export class ExecutionPlaneRegistry {
     run.endedAt = null;
     this.requireAgent(agentId).record.currentRunId = runId;
     this.persist();
+    this.emitRunState(run);
   }
 
   onRunComplete(agentId: string, input: { runId?: unknown; result?: unknown; usage?: unknown }): void {
@@ -351,6 +404,8 @@ export class ExecutionPlaneRegistry {
     entry.record.currentRunId = null;
     entry.record.runtimeStatus = 'idle';
     this.persist();
+    // 先通知运行状态订阅方（借调单落终态），再记用量，保证记账时订单已终结。
+    this.emitRunState(run);
     // 每次 run_complete 落一条用量事件（设计稿 §3.2）；未上报用量时明确标记 metering='missing'。
     const usage = normalizeUsage(input.usage);
     const hasUsage = usage.modelId !== null || usage.tokensIn > 0 || usage.tokensOut > 0 || usage.cost > 0;
@@ -383,6 +438,7 @@ export class ExecutionPlaneRegistry {
     entry.record.currentRunId = null;
     entry.record.runtimeStatus = 'error';
     this.persist();
+    this.emitRunState(run);
   }
 
   // ---------- 管理面 → 执行面 ----------
@@ -425,37 +481,44 @@ export class ExecutionPlaneRegistry {
     const entry = this.requireAgent(agentId);
     const runId = entry.record.currentRunId;
     entry.send({ type: 'recall', runId });
+    let recalledRun: ExecutionRunRecord | undefined;
     if (runId) {
       const run = this.runs.get(runId);
       if (run && (run.state === 'dispatched' || run.state === 'running')) {
         run.state = 'recalled';
         run.endedAt = this.nowIso();
+        recalledRun = run;
       }
     }
     entry.record.currentRunId = null;
     entry.record.runtimeStatus = 'idle';
     this.persist();
+    if (recalledRun) this.emitRunState(recalledRun);
     return { recalled: true, runId };
   }
 
   disconnect(agentId: string): void {
     const entry = this.agents.get(agentId);
     if (!entry) return;
+    const unfinishedRunId = entry.record.currentRunId;
     entry.record.connectionStatus = 'offline';
     entry.record.runtimeStatus = 'idle';
     entry.record.currentRunId = null;
     entry.send = () => {};
     this.persist();
+    this.emitAgentOffline(agentId, unfinishedRunId);
   }
 
   /** 心跳超时判离线；返回本次标记离线的 agent 数。 */
   markStaleOffline(): number {
     const now = this.clock().getTime();
     let count = 0;
+    const offlineEvents: AgentOfflineEvent[] = [];
     for (const entry of this.agents.values()) {
       if (entry.record.connectionStatus !== 'online') continue;
       const lastSeen = new Date(entry.record.lastSeenAt).getTime();
       if (Number.isNaN(lastSeen) || now - lastSeen > this.heartbeatTimeoutMs) {
+        offlineEvents.push({ agentId: entry.record.agentId, runId: entry.record.currentRunId });
         entry.record.connectionStatus = 'offline';
         entry.record.runtimeStatus = 'idle';
         entry.record.currentRunId = null;
@@ -463,6 +526,7 @@ export class ExecutionPlaneRegistry {
       }
     }
     if (count > 0) this.persist();
+    for (const event of offlineEvents) this.emitAgentOffline(event.agentId, event.runId);
     return count;
   }
 
@@ -512,9 +576,11 @@ export class ExecutionPlaneRegistry {
     entry.record.deregisteredAt = this.nowIso();
     entry.record.connectionStatus = 'offline';
     entry.record.runtimeStatus = 'idle';
+    const unfinishedRunId = entry.record.currentRunId;
     entry.record.currentRunId = null;
     entry.send = () => {};
     this.persist();
+    this.emitAgentOffline(agentId, unfinishedRunId);
     return entry.record;
   }
 

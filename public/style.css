@@ -2408,3 +2408,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-raw summary:hover { opacity: 1; }
 .execution-composer { display: flex; gap: 0.5rem; padding: 0.75rem 1rem 1rem; border-top: 1px solid var(--line-subtle); }
 .execution-composer input { flex: 1; padding: 0.55rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+
+/* ---------- 跨系统借调（只读监控） ---------- */
+.borrow-filter { height: 30px; border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 0 8px; color: var(--text-2); font-size: 11px; }
+.borrow-table { height: auto; max-height: 460px; }
+.borrow-table .harbor-row { min-width: 860px; grid-template-columns: 180px minmax(220px, 1.4fr) minmax(180px, 1.2fr) 90px 150px 150px; }
+.borrow-row { width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.borrow-row.selected { background: rgba(47, 111, 190, 0.07); }
+.borrow-detail { padding: 4px 16px 16px; }
+.borrow-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 20px; padding: 12px 0; }
+.borrow-detail-grid > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.borrow-detail-grid span { color: var(--text-3); font-size: 10px; }
+.borrow-detail-grid strong { font-size: 11px; overflow-wrap: anywhere; }
+.borrow-detail-block { margin-top: 14px; }
+.borrow-detail-block h3 { margin: 0 0 6px; font-size: 11px; color: var(--text-2); }
+.borrow-json { max-height: 320px; overflow: auto; margin: 0; border: 1px solid var(--line-subtle); border-radius: 6px; background: #f7f7f8; padding: 10px 12px; font-size: 10px; line-height: 1.5; }

@@ -33,6 +33,10 @@ export const UsageEventSchema = z.object({
   systemId: identifierSchema,
   modelId: identifierSchema.nullable(),
   runId: identifierSchema.nullable(),
+  // 借调归属：systemId/agentId 是执行方；以下三个字段描述请求方（消费方）。
+  consumerSystemId: identifierSchema.nullable().default(null),
+  consumerAgentId: identifierSchema.nullable().default(null),
+  borrowOrderId: identifierSchema.nullable().default(null),
   tokensIn: z.number().int().nonnegative(),
   // 输入 Token 中命中缓存的部分（用于按缓存价计费与后续重算）。
   cachedTokens: z.number().int().nonnegative().default(0),
@@ -58,6 +62,9 @@ export interface UsageEventAppendInput {
   systemId: string;
   modelId: string | null;
   runId: string | null;
+  consumerSystemId?: string | null;
+  consumerAgentId?: string | null;
+  borrowOrderId?: string | null;
   tokensIn: number;
   cachedTokens?: number;
   tokensOut: number;
@@ -77,6 +84,14 @@ export interface UsageByAgentRow {
 
 export interface UsageBySystemRow {
   systemId: string;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  events: number;
+}
+
+export interface UsageByConsumerSystemRow {
+  consumerSystemId: string;
   tokensIn: number;
   tokensOut: number;
   cost: number;
@@ -180,6 +195,9 @@ export class UsageLedgerStore {
       systemId: input.systemId,
       modelId: input.modelId,
       runId: input.runId,
+      consumerSystemId: typeof input.consumerSystemId === 'string' && input.consumerSystemId.trim() ? input.consumerSystemId.trim() : null,
+      consumerAgentId: typeof input.consumerAgentId === 'string' && input.consumerAgentId.trim() ? input.consumerAgentId.trim() : null,
+      borrowOrderId: typeof input.borrowOrderId === 'string' && input.borrowOrderId.trim() ? input.borrowOrderId.trim() : null,
       tokensIn: input.tokensIn,
       cachedTokens: input.cachedTokens ?? 0,
       tokensOut: input.tokensOut,
@@ -230,6 +248,22 @@ export class UsageLedgerStore {
     return [...bySystem.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
   }
 
+  /** 按借调请求方聚合（仅统计带 consumerSystemId 的事件）。 */
+  aggregateByConsumerSystem(): UsageByConsumerSystemRow[] {
+    const byConsumer = new Map<string, UsageByConsumerSystemRow>();
+    for (const event of this.load().events) {
+      if (!event.consumerSystemId) continue;
+      const row = byConsumer.get(event.consumerSystemId)
+        ?? { consumerSystemId: event.consumerSystemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0 };
+      row.tokensIn += event.tokensIn;
+      row.tokensOut += event.tokensOut;
+      row.cost += event.cost;
+      row.events += 1;
+      byConsumer.set(event.consumerSystemId, row);
+    }
+    return [...byConsumer.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
+  }
+
   list(limit = 200): UsageEvent[] {
     const events = [...this.load().events].reverse();
     const bounded = Math.max(0, Math.min(Math.trunc(limit), 1000));
@@ -253,6 +287,10 @@ export function aggregateUsageByAgent(): UsageByAgentRow[] {
 
 export function aggregateUsageBySystem(): UsageBySystemRow[] {
   return defaultStore.aggregateBySystem();
+}
+
+export function aggregateUsageByConsumerSystem(): UsageByConsumerSystemRow[] {
+  return defaultStore.aggregateByConsumerSystem();
 }
 
 export function listUsageEvents(limit = 200): UsageEvent[] {
