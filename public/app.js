@@ -1069,8 +1069,15 @@ function renderBorrowDetail() {
     ${truncated}
     ${error}
     ${inputBlock}
-    ${resultBlock}`;
+    ${resultBlock}
+    <div class="borrow-detail-block"><div class="borrow-steps-head"><h3>执行步骤</h3><button id="btn-borrow-steps-refresh" class="btn ghost compact" type="button">刷新</button></div><div id="borrow-steps"></div></div>`;
   refreshIcons(root);
+  $('#btn-borrow-steps-refresh')?.addEventListener('click', () => {
+    if (!order.runId) return;
+    runEventsCache.delete(order.runId);
+    void loadBorrowSteps(order.runId, true);
+  });
+  void loadBorrowSteps(order.runId);
 }
 
 function syncBorrowRefresh() {
@@ -1486,6 +1493,7 @@ function pollExecutionRun(runId, pending) {
             details.appendChild(dataEl);
             pending.inner.appendChild(details);
           }
+          attachExecutionSteps(pending.inner, runId);
         } else if (run.state === 'failed') {
           pending.textEl.textContent = `查询失败：${run.error?.message || '未知错误'}`;
         } else {
@@ -1498,6 +1506,89 @@ function pollExecutionRun(runId, pending) {
     else if (pending) pending.textEl.textContent = '查询超时，请稍后重试';
   };
   tick();
+}
+
+// ---------- 执行步骤（中台上报的工序回执） ----------
+const EXECUTION_EVENT_LABELS = {
+  run_received: '收到任务', step_started: '步骤开始', step_completed: '步骤完成',
+  tool_call: '工具调用', tool_result: '工具结果', model_call: '模型调用',
+  error: '错误', note: '备注', run_summary: '任务总结',
+};
+const runEventsCache = new Map();
+
+function executionEventLabel(event) {
+  return EXECUTION_EVENT_LABELS[event] || event || '步骤';
+}
+
+function executionTimelineHtml(events) {
+  if (!Array.isArray(events) || !events.length) {
+    return '<div class="harbor-empty"><i data-lucide="list-tree"></i><strong>该智能体未上报执行步骤</strong><small>不影响任务结果；接入上报后可在这里看到内部过程</small></div>';
+  }
+  return `<div class="execution-timeline">${events.map((event) => {
+    const time = event.startedAt || event.receivedAt || null;
+    const tone = event.status === 'failed' ? 'danger' : event.status === 'completed' ? 'ok' : event.status === 'started' ? 'info' : 'neutral';
+    const label = event.status === 'failed' ? '失败' : event.status === 'completed' ? '完成' : event.status === 'started' ? '进行中' : '信息';
+    const duration = event.durationMs !== null && event.durationMs !== undefined ? `${event.durationMs} ms` : '';
+    const detail = event.detail
+      ? `<details class="execution-step-detail"><summary>详情</summary><pre class="execution-data">${esc(JSON.stringify(event.detail, null, 2).slice(0, 4000))}</pre></details>`
+      : '';
+    return `<div class="execution-step">
+      <span class="execution-step-time">${borrowTime(time)}</span>
+      <span class="execution-step-main"><strong>${esc(executionEventLabel(event.event))}${event.name ? ` · ${esc(event.name)}` : ''}</strong><small>${esc(event.summary || '')}</small>${detail}</span>
+      <span class="execution-step-meta"><b class="status-pill ${tone}">${label}</b><small>${esc(duration)}</small></span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+async function fetchRunEvents(runId, options = {}) {
+  if (!runId) return [];
+  if (!options.refresh && runEventsCache.has(runId)) return runEventsCache.get(runId);
+  try {
+    const response = await fetch(`/api/execution/runs/${encodeURIComponent(runId)}/events?limit=200`, { headers: { accept: 'application/json' } });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const events = Array.isArray(data?.events) ? data.events : [];
+    runEventsCache.set(runId, events);
+    return events;
+  } catch {
+    return [];
+  }
+}
+
+function attachExecutionSteps(container, runId) {
+  const details = document.createElement('details');
+  details.className = 'execution-raw execution-steps';
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = '查看执行步骤';
+  details.appendChild(summaryEl);
+  const body = document.createElement('div');
+  body.className = 'execution-steps-body';
+  body.innerHTML = '<div class="dashboard-loading">正在读取执行步骤…</div>';
+  details.appendChild(body);
+  container.appendChild(details);
+  let loaded = false;
+  details.addEventListener('toggle', async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    const events = await fetchRunEvents(runId);
+    body.innerHTML = executionTimelineHtml(events);
+    refreshIcons(body);
+  });
+}
+
+async function loadBorrowSteps(runId, force = false) {
+  const root = $('#borrow-steps');
+  if (!root) return;
+  if (!runId) {
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="list-tree"></i><strong>暂无执行记录</strong><small>该借调单没有关联的执行 run</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const events = await fetchRunEvents(runId, { refresh: force });
+  const target = $('#borrow-steps');
+  if (!target) return;
+  target.innerHTML = executionTimelineHtml(events);
+  refreshIcons(target);
 }
 
 function openPrompt(prompt) {

@@ -1,0 +1,34 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = process.cwd();
+const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
+const css = readFileSync(join(root, 'public', 'style.css'), 'utf8');
+
+test('执行步骤 API 与时间线已接入', () => {
+  assert.match(app, /\/api\/execution\/runs\//);
+  assert.match(app, /async function fetchRunEvents/);
+  assert.match(app, /function executionTimelineHtml/);
+  assert.match(app, /function attachExecutionSteps/);
+  assert.match(app, /function loadBorrowSteps/);
+});
+
+test('借调详情包含执行步骤区域', () => {
+  assert.match(app, /id="borrow-steps"/);
+  assert.match(app, /btn-borrow-steps-refresh/);
+});
+
+test('时间线只读：没有写请求', () => {
+  const start = app.indexOf('// ---------- 执行步骤（中台上报的工序回执） ----------');
+  const end = app.indexOf('function openPrompt');
+  assert.ok(start > 0 && end > start);
+  const block = app.slice(start, end);
+  assert.doesNotMatch(block, /method:\s*'(POST|PUT|PATCH|DELETE)'/);
+});
+
+test('时间线样式存在', () => {
+  assert.match(css, /\.execution-timeline/);
+  assert.match(css, /\.execution-step/);
+});

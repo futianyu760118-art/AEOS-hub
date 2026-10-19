@@ -90,6 +90,7 @@ import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.t
 import { BorrowOrderApi } from './borrow-order-api.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
 import { OpsMonitor } from './ops-monitor.ts';
+import { ExecutionEventStore } from './execution-event-store.ts';
 import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
@@ -208,6 +209,7 @@ const executionPlane = new ExecutionPlaneRegistry({
   onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
+const executionEventStore = new ExecutionEventStore();
 const borrowOrderStore = new BorrowOrderStore({ file: join(dataDir, 'borrow-orders.json') });
 borrowOrderService = new BorrowOrderService({
   store: borrowOrderStore,
@@ -2059,6 +2061,26 @@ const server = createServer(async (req, res) => {
     sendJson(res, 200, executionPlane.list());
     return;
   }
+  const executionRunEventsMatch = url.pathname.match(/^\/api\/execution\/runs\/([^/]+)\/events$/);
+  if (executionRunEventsMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const runId = decodeURIComponent(executionRunEventsMatch[1] ?? '').trim();
+    if (!runId || !executionPlane.getRun(runId)) {
+      sendJson(res, 404, { error: 'run not found' });
+      return;
+    }
+    try {
+      const limit = boundedLimit(url.searchParams.get('limit'));
+      sendJson(res, 200, {
+        runId,
+        count: executionEventStore.countByRun(runId),
+        events: executionEventStore.listByRun(runId, limit),
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
   const executionDispatchMatch = url.pathname.match(/^\/api\/execution\/agents\/([^/]+)\/dispatch$/);
   if (executionDispatchMatch) {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
@@ -2288,6 +2310,22 @@ executionWss.on('connection', (ws, request) => {
       } else if (type === 'run_failed') {
         const agentId = executionWsAgent.get(ws);
         if (agentId) executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });
+      } else if (type === 'run_event') {
+        // 执行步骤回执：校验归属、去重、限额后落库；失败只回 ack，不影响任务本身。
+        const agentId = executionWsAgent.get(ws);
+        if (!agentId) {
+          send(ws, { type: 'run_event_ack', runId: msg.runId ?? null, eventId: msg.eventId ?? null, accepted: false, reason: 'AGENT_NOT_REGISTERED' });
+          return;
+        }
+        const runId = typeof msg.runId === 'string' ? msg.runId.trim() : '';
+        const run = runId ? executionPlane.getRun(runId) : undefined;
+        const agentRecord = executionPlane.list().agents.find((agent) => agent.agentId === agentId);
+        const outcome = executionEventStore.record(msg, {
+          agentId,
+          sourceSystem: agentRecord?.sourceSystem ?? 'unknown',
+          runAgentId: run?.agentId ?? null,
+        });
+        send(ws, { type: 'run_event_ack', runId: msg.runId ?? null, eventId: msg.eventId ?? null, ...outcome });
       }
     } catch (error) {
       send(ws, { type: 'error', message: (error as Error).message });

@@ -2433,3 +2433,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .ops-check-table .harbor-row { min-width: 820px; grid-template-columns: 110px minmax(180px, 1fr) minmax(260px, 1.6fr) 90px; }
 .ops-alert-table .harbor-row { min-width: 980px; grid-template-columns: 150px 80px minmax(220px, 1.2fr) minmax(260px, 1.5fr) 90px; }
 .ops-check-table .harbor-row > span, .ops-alert-table .harbor-row > span { overflow: hidden; text-overflow: ellipsis; }
+.execution-timeline { display: flex; flex-direction: column; padding: 6px 0; }
+.execution-step { display: grid; grid-template-columns: 110px minmax(0, 1fr) 100px; gap: 10px; padding: 7px 0; border-bottom: 1px solid rgba(18, 18, 24, 0.055); }
+.execution-step:last-child { border-bottom: 0; }
+.execution-step-time { color: var(--text-3); font-size: 10px; }
+.execution-step-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.execution-step-main strong { font-size: 11px; overflow-wrap: anywhere; }
+.execution-step-main small { color: var(--text-3); font-size: 10px; }
+.execution-step-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.execution-step-meta small { color: var(--text-3); font-size: 9px; }
+.execution-step-detail summary { cursor: pointer; color: var(--text-3); font-size: 10px; }
+.execution-steps-body { padding: 6px 0; }
+.borrow-steps-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -95,6 +95,33 @@ function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
+// 执行步骤回执：模拟真实中台在上报任务时逐步发送（方法 2 的参考实现）。
+const runSeq = new Map();
+function sendRunEvent(runId, event, name, status, summary, detail = null, timings = {}) {
+  const seq = (runSeq.get(runId) ?? 0) + 1;
+  runSeq.set(runId, seq);
+  send({
+    type: 'run_event',
+    runId,
+    eventId: `evt-${runId}-${seq}`,
+    seq,
+    event,
+    name,
+    status,
+    summary,
+    detail,
+    startedAt: timings.startedAt ?? null,
+    endedAt: timings.endedAt ?? null,
+    durationMs: timings.durationMs ?? null,
+  });
+}
+
+function summarizeRows(data) {
+  if (Array.isArray(data?.items)) return data.items.length;
+  if (Array.isArray(data)) return data.length;
+  return null;
+}
+
 function startHeartbeat(intervalMs) {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
@@ -110,10 +137,25 @@ function stopHeartbeat() {
 async function handleReasoningDispatch(msg) {
   const runId = msg.runId;
   const input = msg.input && typeof msg.input === 'object' ? msg.input : {};
+  const runStartedAt = new Date().toISOString();
   console.log(`[simulator] 收到推理派单 ${runId}: prompt=${String(input.prompt || '').slice(0, 80)}`);
+  sendRunEvent(runId, 'run_received', '收到推理任务', 'info', `prompt=${String(input.prompt || '').slice(0, 120)}`, { prompt: input.prompt ?? null }, { startedAt: runStartedAt });
   send({ type: 'run_update', runId, state: 'running' });
   if (simulateDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, simulateDelayMs));
-  if (recalled) { console.log(`[simulator] 推理派单 ${runId} 已被召回，跳过执行`); return; }
+  if (recalled) {
+    sendRunEvent(runId, 'run_summary', '任务已召回', 'info', '任务在推理前被召回', null, { startedAt: runStartedAt, endedAt: new Date().toISOString() });
+    console.log(`[simulator] 推理派单 ${runId} 已被召回，跳过执行`);
+    return;
+  }
+  const stepStartedAt = new Date().toISOString();
+  sendRunEvent(runId, 'step_started', '调用中台推理能力', 'started', '准备调用推理接口', null, { startedAt: stepStartedAt });
+  const endedAt = new Date().toISOString();
+  sendRunEvent(runId, 'step_completed', '调用中台推理能力', 'completed', '推理接口尚未接通（模拟占位）', null, {
+    startedAt: stepStartedAt,
+    endedAt,
+    durationMs: Math.max(0, new Date(endedAt).getTime() - new Date(stepStartedAt).getTime()),
+  });
+  sendRunEvent(runId, 'run_summary', '任务完成', 'completed', '推理能力尚未接通中台大模型（模拟占位）', { data_confidence: 'low' }, { startedAt: runStartedAt, endedAt });
   send({
     type: 'run_complete',
     runId,
@@ -142,14 +184,25 @@ async function handleDispatch(msg) {
   const input = msg.input && typeof msg.input === 'object' ? msg.input : {};
   const path = typeof input.path === 'string' ? input.path : '';
   const params = input.params && typeof input.params === 'object' ? input.params : {};
+  const runStartedAt = new Date().toISOString();
   console.log(`[simulator] 收到派单 ${runId}: path=${path} params=${JSON.stringify(params)}`);
   if (!path) {
+    const endedAt = new Date().toISOString();
+    sendRunEvent(runId, 'error', '参数校验', 'failed', 'input.path 不能为空', null, { startedAt: runStartedAt, endedAt });
+    sendRunEvent(runId, 'run_summary', '任务失败', 'failed', 'input.path 不能为空', null, { startedAt: runStartedAt, endedAt });
     send({ type: 'run_failed', runId, error: { code: 'INVALID_ARGUMENT', message: 'input.path 不能为空' } });
     return;
   }
+  sendRunEvent(runId, 'run_received', '收到查询任务', 'info', `path=${path}`, { path, params }, { startedAt: runStartedAt });
   send({ type: 'run_update', runId, state: 'running' });
   if (simulateDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, simulateDelayMs));
-  if (recalled) { console.log(`[simulator] 派单 ${runId} 已被召回，跳过执行`); return; }
+  if (recalled) {
+    sendRunEvent(runId, 'run_summary', '任务已召回', 'info', '任务在执行前被召回', { path }, { startedAt: runStartedAt, endedAt: new Date().toISOString() });
+    console.log(`[simulator] 派单 ${runId} 已被召回，跳过执行`);
+    return;
+  }
+  const stepStartedAt = new Date().toISOString();
+  sendRunEvent(runId, 'step_started', '查询中台接口', 'started', path, { path, params }, { startedAt: stepStartedAt });
   currentChild = execFile(
     pythonExe,
     [queryHelper, path, JSON.stringify(params)],
@@ -157,19 +210,29 @@ async function handleDispatch(msg) {
     (err, stdout) => {
       currentChild = null;
       if (recalled) return;
+      const endedAt = new Date().toISOString();
+      const durationMs = Math.max(0, new Date(endedAt).getTime() - new Date(stepStartedAt).getTime());
+      const finishFailure = (code, message) => {
+        sendRunEvent(runId, 'error', '查询中台接口', 'failed', message, { path, code }, { startedAt: stepStartedAt, endedAt, durationMs });
+        sendRunEvent(runId, 'run_summary', '任务失败', 'failed', message, { path, code }, { startedAt: runStartedAt, endedAt });
+        send({ type: 'run_failed', runId, error: { code, message } });
+      };
       if (err) {
-        send({ type: 'run_failed', runId, error: { code: 'EXECUTION_FAILED', message: String(err.message || err) } });
+        finishFailure('EXECUTION_FAILED', String(err.message || err));
         return;
       }
       try {
         const parsed = JSON.parse(stdout);
         if (parsed.ok) {
+          const rows = summarizeRows(parsed.data);
+          sendRunEvent(runId, 'step_completed', '查询中台接口', 'completed', `查询完成${rows !== null ? `，返回 ${rows} 条` : ''}`, { path, rows }, { startedAt: stepStartedAt, endedAt, durationMs });
+          sendRunEvent(runId, 'run_summary', '任务完成', 'completed', `查询 ${path} 完成`, { path, rows }, { startedAt: runStartedAt, endedAt });
           send({ type: 'run_complete', runId, result: parsed.data });
         } else {
-          send({ type: 'run_failed', runId, error: { code: parsed.code || 'EXECUTION_FAILED', message: parsed.message || '查询失败' } });
+          finishFailure(parsed.code || 'EXECUTION_FAILED', parsed.message || '查询失败');
         }
       } catch {
-        send({ type: 'run_failed', runId, error: { code: 'EXECUTION_FAILED', message: '查询结果解析失败' } });
+        finishFailure('EXECUTION_FAILED', '查询结果解析失败');
       }
     },
   );
