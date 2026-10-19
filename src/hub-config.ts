@@ -53,7 +53,7 @@ export function ensureConfigFile(): void {
 
 /** 各提供商的默认"可切换模型"清单（存 data/model-presets.json，不写入 config.toml） */
 export const DEFAULT_MODEL_PRESETS: Record<string, string[]> = {
-  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  deepseek: ['deepseek-flash', 'deepseek-v4-pro'],
   openai: [],
 };
 

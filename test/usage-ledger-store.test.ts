@@ -70,6 +70,34 @@ test('append 对同一 runId 幂等去重', (t) => {
   assert.equal(store.list()[0].tokensIn, 100);
 });
 
+test('缓存 Token 与计量来源落库；缺省按 0 / reported', (t) => {
+  const { store } = fixture(t);
+  const withCache = store.append(input({ cachedTokens: 60, metering: 'direct' }));
+  assert.equal(withCache.cachedTokens, 60);
+  assert.equal(withCache.metering, 'direct');
+  const noCache = store.append(input({ runId: 'exec-run-2' }));
+  assert.equal(noCache.cachedTokens, 0);
+  assert.equal(noCache.metering, 'reported');
+});
+
+test('旧版无新字段的账本可解析为 legacy，不触发隔离', (t) => {
+  const { file, store } = fixture(t);
+  store.ensure();
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    revision: 1,
+    events: [{
+      id: 'usage-old-1', agentId: 'a', systemId: 's', modelId: null, runId: null,
+      tokensIn: 1, tokensOut: 2, cost: 0.1,
+      startedAt: '2026-10-01T00:00:00.000Z', endedAt: '2026-10-01T00:00:01.000Z',
+    }],
+  }), 'utf8');
+  const snapshot = store.load();
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.events[0].cachedTokens, 0);
+  assert.equal(snapshot.events[0].metering, 'legacy');
+});
+
 test('list 按新到旧返回明细', (t) => {
   const { store } = fixture(t);
   store.append(input({ runId: 'exec-run-1', tokensIn: 1 }));

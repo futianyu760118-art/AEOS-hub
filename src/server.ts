@@ -81,7 +81,9 @@ import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
-import { ensureModelProfiles, getModelProfile } from './model-profile-store.ts';
+import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
+import { estimateUsageCostCny } from './model-pricing.ts';
+import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
 import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
@@ -598,8 +600,67 @@ async function persistAgentDispatchResult(runId: string, fallbackText = ''): Pro
   }
 }
 
+// ---------- Codex 运行时用量记账（第三次台账来源） ----------
+// app-server 的 thread/tokenUsage/updated 报告线程累计用量；基线持久化后只记增量。
+// 归属：threadId → 会话 → Harbor Agent；未关联会话时记到中枢 Agent。
+function codexUsageInt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+}
+
+function recordCodexTokenUsage(event: RuntimeEvent): void {
+  const params = event.data as {
+    threadId?: unknown;
+    tokenUsage?: { total?: { inputTokens?: unknown; cachedInputTokens?: unknown; outputTokens?: unknown } };
+  } | undefined;
+  const threadId = typeof params?.threadId === 'string' && params.threadId.trim()
+    ? params.threadId.trim()
+    : event.sessionId;
+  const total = params?.tokenUsage?.total;
+  if (!threadId || !total) return;
+  const inputTokens = codexUsageInt(total.inputTokens);
+  const cachedInputTokens = codexUsageInt(total.cachedInputTokens);
+  const outputTokens = codexUsageInt(total.outputTokens);
+  if (!inputTokens && !outputTokens) return;
+
+  const delta = recordThreadUsageTotal(threadId, { inputTokens, cachedInputTokens, outputTokens });
+  if (!delta.inputTokens && !delta.cachedInputTokens && !delta.outputTokens) return;
+
+  const convId = convByThread.get(threadId);
+  const conv = convId ? convCache.get(convId) : undefined;
+  const configuredModel = readConfig().model?.trim();
+  const modelName = conv?.lastChoice?.model?.trim() || configuredModel || 'deepseek-flash';
+  const profiles = loadModelProfiles().profiles;
+  const profile = profiles.find((item) => !item.followsDefault && item.modelName === modelName)
+    ?? profiles.find((item) => !item.followsDefault && item.provider === 'deepseek');
+  const cost = profile
+    ? estimateUsageCostCny(profile, {
+      inputTokens: delta.inputTokens,
+      cachedInputTokens: delta.cachedInputTokens,
+      outputTokens: delta.outputTokens,
+    }, new Date(event.occurredAt))
+    : 0;
+  recordUsageEvent({
+    agentId: conv?.agentId || 'agent-aeos-hub',
+    systemId: 'aeos-hub',
+    modelId: profile?.id ?? modelName,
+    runId: null,
+    tokensIn: delta.inputTokens,
+    cachedTokens: delta.cachedInputTokens,
+    tokensOut: delta.outputTokens,
+    cost,
+    metering: 'app-server',
+    startedAt: event.occurredAt,
+    endedAt: new Date().toISOString(),
+  });
+}
+
 function handleRuntimeEvent(event: RuntimeEvent): void {
   if (event.kind === 'notification') {
+    // 用量通知只用于记账，不进入前端事件流。
+    if (event.name === 'thread/tokenUsage/updated') {
+      recordCodexTokenUsage(event);
+      return;
+    }
     if (!NOTIFY_ALLOW.has(event.name)) return;
     const sessionId = runtimeEventSessionId(event);
     const runId = runtimeEventRunId(event);
@@ -1828,26 +1889,33 @@ const server = createServer(async (req, res) => {
       const agent = agentId ? executionPlane.list().agents.find((item) => item.agentId === agentId) : undefined;
       const intent = agent?.capabilities.find((cap) => cap.intent)?.intent;
       // LLM 优先路径，按 Agent 注册的查询语义（intent）动态解析；失败返回 { error }，由前端回退。
-      // 模型选择统一走选型器（意图解析是轻任务 → light 档）；仅当选定档可执行时才覆盖模型名。
+      // 模型选择统一走选型器（意图解析是轻任务 → light 档，deepseek-flash + effort=low）。
       const route = routeModel({ difficulty: 'light' });
-      const routedModel = route.executable && route.profile ? route.profile.modelName : undefined;
-      // 用量回调：把中枢自身这次 DeepSeek 调用的 Token/成本记账（systemId 对齐中枢注册码 aeos-hub）。
+      const routedProfile = route.satisfied ? route.profile : null;
+      const routedModel = route.executable && routedProfile ? routedProfile.modelName : undefined;
       sendJson(res, 200, await parseIntentWithLLM(text, {
         intent,
         model: routedModel,
+        effort: routedProfile?.effort,
+        // 用量回调：把中枢自身这次 DeepSeek 调用的 Token/成本记账（systemId 对齐中枢注册码 aeos-hub）。
         onUsage: (usage) => {
-          const profile = getModelProfile(usage.model);
-          const cost = profile
-            ? (usage.tokensIn / 1_000_000) * profile.inputPrice + (usage.tokensOut / 1_000_000) * profile.outputPrice
+          const cost = routedProfile
+            ? estimateUsageCostCny(routedProfile, {
+              inputTokens: usage.tokensIn,
+              cachedInputTokens: usage.cachedTokens,
+              outputTokens: usage.tokensOut,
+            }, new Date(usage.endedAt))
             : 0;
           recordUsageEvent({
             agentId: 'agent-aeos-hub',
             systemId: 'aeos-hub',
-            modelId: usage.model,
+            modelId: routedProfile?.id ?? usage.model,
             runId: null,
             tokensIn: usage.tokensIn,
+            cachedTokens: usage.cachedTokens,
             tokensOut: usage.tokensOut,
             cost,
+            metering: 'direct',
             startedAt: usage.startedAt,
             endedAt: usage.endedAt,
           });

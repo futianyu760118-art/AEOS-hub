@@ -15,11 +15,13 @@ export interface IntentParseDeps {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /** 思考强度（DeepSeek：low/high/max）；不传则用模型默认（high）。 */
+  effort?: 'low' | 'high' | 'max';
   timeoutMs?: number;
   /** Agent 注册的查询语义（query_control_platform 能力的 intent.paths），本模块据此动态生成提示。 */
   intent?: QueryIntent;
   /** 模型调用成功后回传用量（Token 计数与起止时间），由调用方决定是否记账。 */
-  onUsage?: (usage: { model: string; tokensIn: number; tokensOut: number; startedAt: string; endedAt: string }) => void;
+  onUsage?: (usage: { model: string; tokensIn: number; cachedTokens: number; tokensOut: number; startedAt: string; endedAt: string }) => void;
 }
 
 function readDeepSeekApiKey(): string {
@@ -41,7 +43,7 @@ function deepSeekConfig(deps: IntentParseDeps): { baseUrl: string; model: string
     ?? cfg.providers.find((p) => p.id === 'deepseek');
   return {
     baseUrl: (deps.baseUrl ?? provider?.base_url ?? 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
-    model: deps.model ?? (cfg.model || 'deepseek-chat'),
+    model: deps.model ?? (cfg.model || 'deepseek-flash'),
     apiKey: deps.apiKey ?? readDeepSeekApiKey(),
   };
 }
@@ -160,6 +162,7 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
+        ...(deps.effort ? { reasoning_effort: deps.effort } : {}),
         messages: [
           { role: 'system', content: buildQueryIntentPrompt(deps.intent) },
           { role: 'user', content: query },
@@ -171,13 +174,23 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
     if (!response.ok) return { error: `模型接口返回 ${response.status}` };
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: unknown } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      };
     };
     const tokensIn = typeof data?.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0;
     const tokensOut = typeof data?.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0;
+    const cachedTokens = typeof data?.usage?.prompt_cache_hit_tokens === 'number'
+      ? data.usage.prompt_cache_hit_tokens
+      : typeof data?.usage?.prompt_tokens_details?.cached_tokens === 'number'
+        ? data.usage.prompt_tokens_details.cached_tokens
+        : 0;
     // 模型实际消耗了 Token，无论内容是否有效都回传用量，便于记账。
     if (deps.onUsage && (tokensIn > 0 || tokensOut > 0)) {
-      deps.onUsage({ model, tokensIn, tokensOut, startedAt, endedAt: new Date().toISOString() });
+      deps.onUsage({ model, tokensIn, cachedTokens, tokensOut, startedAt, endedAt: new Date().toISOString() });
     }
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || !content.trim()) return { error: '模型未返回有效内容' };

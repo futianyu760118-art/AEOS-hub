@@ -3,12 +3,24 @@ import assert from 'node:assert/strict';
 import { routeModel, parseRouteRequest, ModelRouterError, isHubExecutableProfile } from '../src/model-router.ts';
 import type { ModelProfile } from '../src/model-profile-store.ts';
 
+const FLASH = {
+  provider: 'deepseek' as const,
+  modelName: 'deepseek-flash',
+  inputPrice: 2,
+  inputPriceCached: 0.04,
+  outputPrice: 8,
+  offPeakMultiplier: 0.5,
+  contextWindow: 1_048_576,
+  followsDefault: false,
+  description: '',
+};
+
 const SEED = [
-  { id: 'deepseek-chat', provider: 'deepseek', modelName: 'deepseek-chat', tier: 'light', inputPrice: 1, outputPrice: 2, latencyMs: 800, contextWindow: 64_000 },
-  { id: 'deepseek-reasoner', provider: 'deepseek', modelName: 'deepseek-reasoner', tier: 'medium', inputPrice: 4, outputPrice: 16, latencyMs: 3_000, contextWindow: 64_000 },
-  { id: 'gpt-4o', provider: 'openai', modelName: 'gpt-4o', tier: 'heavy', inputPrice: 18, outputPrice: 72, latencyMs: 1_200, contextWindow: 128_000 },
-  { id: 'local-llama', provider: 'local', modelName: 'llama3.1', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 200, contextWindow: 8_192 },
-].map((p) => ({ followsDefault: false, description: '', ...p })) as ModelProfile[];
+  { ...FLASH, id: 'deepseek-chat', tier: 'light', effort: 'low', latencyMs: 800 },
+  { ...FLASH, id: 'deepseek-reasoner', tier: 'medium', effort: 'high', latencyMs: 3_000 },
+  { ...FLASH, id: 'deepseek-flash-max', tier: 'heavy', effort: 'max', latencyMs: 6_000 },
+  { id: 'local-llama', provider: 'local', modelName: 'llama3.1', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 200, contextWindow: 8_192, followsDefault: false, description: '' },
+].map((p) => ({ inputPriceCached: 0, offPeakMultiplier: 1, ...p })) as ModelProfile[];
 
 const FOLLOWS_DEFAULT = [
   { id: 'account-default', provider: 'account', modelName: 'account-default', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 0, contextWindow: 0, followsDefault: true, description: '' },
@@ -17,29 +29,33 @@ const FOLLOWS_DEFAULT = [
 
 const ANCHOR = [
   ...SEED,
-  { id: 'deepseek-flash', provider: 'deepseek', modelName: 'deepseek-flash', tier: 'light', inputPrice: 0.5, outputPrice: 1, latencyMs: 400, contextWindow: 32_000, followsDefault: false, description: '' },
+  { id: 'deepseek-flash-cheap', provider: 'deepseek', modelName: 'deepseek-flash', tier: 'light', inputPrice: 1, inputPriceCached: 0.02, outputPrice: 4, offPeakMultiplier: 0.5, latencyMs: 400, contextWindow: 1_048_576, followsDefault: false, description: '' },
 ] as ModelProfile[];
 
-test('轻难度非脱敏 → deepseek-chat，可执行', () => {
+test('轻难度非脱敏 → deepseek-chat（flash/effort=low），可执行', () => {
   const decision = routeModel({ difficulty: 'light' }, SEED);
   assert.equal(decision.satisfied, true);
   assert.equal(decision.profileId, 'deepseek-chat');
+  assert.equal(decision.profile?.modelName, 'deepseek-flash');
+  assert.equal(decision.profile?.effort, 'low');
   assert.equal(decision.executable, true);
   assert.ok(decision.reasons.some((r) => r.includes('非脱敏')));
 });
 
-test('中难度 → deepseek-reasoner，可执行', () => {
+test('中难度 → deepseek-reasoner（flash/effort=high），可执行', () => {
   const decision = routeModel({ difficulty: 'medium' }, SEED);
   assert.equal(decision.satisfied, true);
   assert.equal(decision.profileId, 'deepseek-reasoner');
+  assert.equal(decision.profile?.effort, 'high');
   assert.equal(decision.executable, true);
 });
 
-test('重难度 → gpt-4o，但 Hub 尚不可执行', () => {
+test('重难度 → deepseek-flash-max（flash/effort=max），可执行', () => {
   const decision = routeModel({ difficulty: 'heavy' }, SEED);
   assert.equal(decision.satisfied, true);
-  assert.equal(decision.profileId, 'gpt-4o');
-  assert.equal(decision.executable, false);
+  assert.equal(decision.profileId, 'deepseek-flash-max');
+  assert.equal(decision.profile?.effort, 'max');
+  assert.equal(decision.executable, true);
 });
 
 test('脱敏轻任务 → local-llama', () => {
@@ -58,7 +74,7 @@ test('脱敏中任务无本地中档 → 不满足且不可回退云端', () => 
 });
 
 test('最小上下文约束过滤后回退', () => {
-  const decision = routeModel({ difficulty: 'light', minContextWindow: 100_000 }, SEED);
+  const decision = routeModel({ difficulty: 'light', minContextWindow: 2_000_000 }, SEED);
   assert.equal(decision.satisfied, false);
   assert.equal(decision.fallbackProfileId, 'deepseek-chat');
 });
@@ -81,9 +97,9 @@ test('followsDefault 档从不进入候选', () => {
   assert.notEqual(decision.fallbackProfileId, 'account-default');
 });
 
-test('同档内成本优先：无锚点时选更便宜的 deepseek-flash', () => {
+test('同档内成本优先：无锚点时选更便宜的 deepseek-flash-cheap', () => {
   const decision = routeModel({ difficulty: 'light' }, ANCHOR);
-  assert.equal(decision.profileId, 'deepseek-flash');
+  assert.equal(decision.profileId, 'deepseek-flash-cheap');
 });
 
 test('Agent 默认档锚点：满足约束时沿用而非换更便宜的档', () => {
@@ -105,5 +121,5 @@ test('parseRouteRequest 校验非法输入', () => {
 
 test('isHubExecutableProfile 仅认 deepseek', () => {
   assert.equal(isHubExecutableProfile(SEED.find((p) => p.id === 'deepseek-chat')!), true);
-  assert.equal(isHubExecutableProfile(SEED.find((p) => p.id === 'gpt-4o')!), false);
+  assert.equal(isHubExecutableProfile(SEED.find((p) => p.id === 'local-llama')!), false);
 });

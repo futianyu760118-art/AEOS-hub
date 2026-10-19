@@ -23,6 +23,9 @@ const trimmedString = (max: number, min = 0) => z.string()
   .refine((value) => value === value.trim(), '字符串前后不能包含空白');
 const identifierSchema = trimmedString(160, 1);
 const timestampSchema = z.string().min(1).max(64);
+// 用量来源：direct=Hub 直连供应商；gateway=统一网关；app-server=Codex 运行时通知；
+// reported=执行面 run_complete 上报；missing=调用发生但未拿到用量；legacy=引入该字段前的历史账。
+const METERING_SOURCES = ['direct', 'gateway', 'app-server', 'reported', 'missing', 'legacy'] as const;
 
 export const UsageEventSchema = z.object({
   id: identifierSchema,
@@ -31,8 +34,11 @@ export const UsageEventSchema = z.object({
   modelId: identifierSchema.nullable(),
   runId: identifierSchema.nullable(),
   tokensIn: z.number().int().nonnegative(),
+  // 输入 Token 中命中缓存的部分（用于按缓存价计费与后续重算）。
+  cachedTokens: z.number().int().nonnegative().default(0),
   tokensOut: z.number().int().nonnegative(),
   cost: z.number().nonnegative(),
+  metering: z.enum(METERING_SOURCES).default('legacy'),
   startedAt: timestampSchema,
   endedAt: timestampSchema,
 }).strict();
@@ -53,8 +59,10 @@ export interface UsageEventAppendInput {
   modelId: string | null;
   runId: string | null;
   tokensIn: number;
+  cachedTokens?: number;
   tokensOut: number;
   cost: number;
+  metering?: (typeof METERING_SOURCES)[number];
   startedAt: string;
   endedAt: string;
 }
@@ -173,8 +181,10 @@ export class UsageLedgerStore {
       modelId: input.modelId,
       runId: input.runId,
       tokensIn: input.tokensIn,
+      cachedTokens: input.cachedTokens ?? 0,
       tokensOut: input.tokensOut,
       cost: input.cost,
+      metering: input.metering ?? 'reported',
       startedAt: input.startedAt,
       endedAt: input.endedAt,
     });

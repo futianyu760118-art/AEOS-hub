@@ -99,3 +99,34 @@ test('分页越界被钳制到安全范围', async () => {
   const result = await parseIntentWithLLM('查供应商', { ...deps, fetchImpl });
   assert.deepEqual(result, { kind: 'query', path: '/external/suppliers/list', params: { page: 1000, page_size: 100 } });
 });
+
+test('effort 透传为 reasoning_effort，并回传缓存命中 Token', async () => {
+  let sentBody: Record<string, unknown> = {};
+  const fetchImpl = (async (_url: unknown, init?: { body?: string }) => {
+    sentBody = JSON.parse(init?.body ?? '{}');
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"kind":"query","path":"/external/orders/list","params":{}}' } }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 60 },
+    }), { status: 200 });
+  }) as unknown as typeof fetch;
+  let usage: { tokensIn: number; cachedTokens: number; tokensOut: number } | undefined;
+  await parseIntentWithLLM('查订单', {
+    ...deps,
+    effort: 'low',
+    fetchImpl,
+    onUsage: (value) => { usage = value; },
+  });
+  assert.equal(sentBody.reasoning_effort, 'low');
+  assert.deepEqual(usage && { tokensIn: usage.tokensIn, cachedTokens: usage.cachedTokens, tokensOut: usage.tokensOut },
+    { tokensIn: 100, cachedTokens: 60, tokensOut: 20 });
+});
+
+test('未指定 effort 时不发送 reasoning_effort', async () => {
+  let sentBody: Record<string, unknown> = {};
+  const fetchImpl = (async (_url: unknown, init?: { body?: string }) => {
+    sentBody = JSON.parse(init?.body ?? '{}');
+    return new Response(JSON.stringify(deepSeekResponse('{"kind":"query","path":"/external/orders/list","params":{}}')), { status: 200 });
+  }) as unknown as typeof fetch;
+  await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal('reasoning_effort' in sentBody, false);
+});

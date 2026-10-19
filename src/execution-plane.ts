@@ -173,9 +173,9 @@ function parseStatus(value: unknown): ExecutionAgentRuntimeStatus {
 }
 
 /** run_complete 可选携带的用量上报：字段容错归一化，未上报记 0 / null。 */
-function normalizeUsage(value: unknown): { modelId: string | null; tokensIn: number; tokensOut: number; cost: number } {
+function normalizeUsage(value: unknown): { modelId: string | null; tokensIn: number; cachedTokens: number; tokensOut: number; cost: number } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { modelId: null, tokensIn: 0, tokensOut: 0, cost: 0 };
+    return { modelId: null, tokensIn: 0, cachedTokens: 0, tokensOut: 0, cost: 0 };
   }
   const record = value as Record<string, unknown>;
   const nonNegativeInt = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : 0);
@@ -184,6 +184,7 @@ function normalizeUsage(value: unknown): { modelId: string | null; tokensIn: num
   return {
     modelId,
     tokensIn: nonNegativeInt(record.tokensIn),
+    cachedTokens: nonNegativeInt(record.cachedTokens),
     tokensOut: nonNegativeInt(record.tokensOut),
     cost: nonNegative(record.cost),
   };
@@ -350,16 +351,19 @@ export class ExecutionPlaneRegistry {
     entry.record.currentRunId = null;
     entry.record.runtimeStatus = 'idle';
     this.persist();
-    // 每次 run_complete 落一条用量事件（设计稿 §3.2）；未上报用量时记 0 / null，保留 run 关联。
+    // 每次 run_complete 落一条用量事件（设计稿 §3.2）；未上报用量时明确标记 metering='missing'。
     const usage = normalizeUsage(input.usage);
+    const hasUsage = usage.modelId !== null || usage.tokensIn > 0 || usage.tokensOut > 0 || usage.cost > 0;
     this.onUsageEvent?.({
       agentId,
       systemId: entry.record.sourceSystem.trim() ? entry.record.sourceSystem.trim() : 'unknown',
       modelId: usage.modelId,
       runId: run.runId,
       tokensIn: usage.tokensIn,
+      cachedTokens: usage.cachedTokens,
       tokensOut: usage.tokensOut,
       cost: usage.cost,
+      metering: hasUsage ? 'reported' : 'missing',
       startedAt: run.startedAt,
       endedAt: run.endedAt ?? this.nowIso(),
     });
