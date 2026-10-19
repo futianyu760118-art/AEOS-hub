@@ -64,11 +64,16 @@ test('Hub 派单任务复用执行步骤时间线', () => {
   assert.match(app, /fetchRunEvents\(run\.runId\)/);
 });
 
+test('时间线状态标签为说明/已完成/进行中/失败', () => {
+  assert.match(app, /status === 'completed' \? '已完成'/);
+  assert.match(app, /status === 'started' \? '进行中' : '说明'/);
+});
+
 test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);
   assert.match(css, /\.assistant-trace-select/);
   assert.match(css, /\.assistant-failure-item/);
   assert.match(css, /\.assistant-latest-reply/);
-  assert.match(html, /ai-obs-latest-20261019/);
+  assert.match(html, /timeline-labels-20261019/);
 });

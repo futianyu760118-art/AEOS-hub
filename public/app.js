@@ -2102,7 +2102,7 @@ function executionTimelineHtml(events) {
   return `<div class="execution-timeline">${events.map((event) => {
     const time = event.startedAt || event.receivedAt || null;
     const tone = event.status === 'failed' ? 'danger' : event.status === 'completed' ? 'ok' : event.status === 'started' ? 'info' : 'neutral';
-    const label = event.status === 'failed' ? '失败' : event.status === 'completed' ? '完成' : event.status === 'started' ? '进行中' : '信息';
+    const label = event.status === 'failed' ? '失败' : event.status === 'completed' ? '已完成' : event.status === 'started' ? '进行中' : '说明';
     const duration = event.durationMs !== null && event.durationMs !== undefined ? `${event.durationMs} ms` : '';
     const detail = event.detail
       ? `<details class="execution-step-detail"><summary>详情</summary><pre class="execution-data">${esc(JSON.stringify(event.detail, null, 2).slice(0, 4000))}</pre></details>`
