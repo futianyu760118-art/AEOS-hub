@@ -1392,6 +1392,8 @@ async function tryParseIntentRemote(text, agentId) {
     });
     if (!response.ok) return null;
     const body = await response.json();
+    // 服务端会返回结构化失败原因（401/429/超时等），交给调用方决定提示与回退。
+    if (body && typeof body.error === 'string') return { kind: 'error', error: body.error, code: body.code };
     return body && (body.kind === 'query' || body.kind === 'reasoning') ? body : null;
   } catch {
     return null;
@@ -1427,7 +1429,12 @@ async function sendExecutionQuery() {
     // LLM 失败/不可用 → 按 Agent 注册的 intent 做关键词回退（确定性，不依赖模型）。
     const fallback = parseExecutionQueryByIntent(text, selectedAgentIntent());
     if (fallback) {
+      if (remote?.kind === 'error') toast(`模型解析失败：${remote.error}；已使用关键词规则回退`, true);
       await dispatchExecution(selectedExecutionAgent, queryCap, { path: fallback.path, params: fallback.params }, `正在查询：${describeExecutionQuery(fallback)}…`);
+      return;
+    }
+    if (remote?.kind === 'error') {
+      appendExecutionMessage('agent', `意图识别失败：${remote.error}`, null);
       return;
     }
     appendExecutionMessage('agent', '意图识别失败，请换一种说法重试', null);

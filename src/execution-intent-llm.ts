@@ -11,6 +11,35 @@ export type IntentDecision =
   | { kind: 'query'; path: string; params: Record<string, string | number> }
   | { kind: 'reasoning'; request: { prompt: string; task_type: string; context: Record<string, unknown>; constraints: { read_only: boolean; require_evidence: boolean } } };
 
+export type IntentParseFailureCode =
+  | 'INVALID_INPUT'
+  | 'MODEL_NOT_CONFIGURED'
+  | 'MODEL_AUTH'
+  | 'MODEL_RATE_LIMIT'
+  | 'MODEL_SERVER'
+  | 'MODEL_BAD_REQUEST'
+  | 'MODEL_TIMEOUT'
+  | 'MODEL_NETWORK'
+  | 'MODEL_EMPTY'
+  | 'MODEL_INVALID_INTENT';
+
+export interface IntentParseFailure {
+  error: string;
+  code: IntentParseFailureCode;
+  retryable: boolean;
+  attempts: number;
+  status?: number;
+}
+
+export interface IntentRetryOptions {
+  /** 429/5xx 等 HTTP 瞬时错误的最大重试次数（不含首次）。 */
+  httpMaxRetries?: number;
+  /** 超时/网络错误的最大重试次数（不含首次）。 */
+  networkMaxRetries?: number;
+  /** 指数退避基数（毫秒）。 */
+  baseDelayMs?: number;
+}
+
 export interface IntentParseDeps {
   fetchImpl?: typeof fetch;
   apiKey?: string;
@@ -19,6 +48,9 @@ export interface IntentParseDeps {
   /** 思考强度（DeepSeek：low/high/max）；不传则用模型默认（high）。 */
   effort?: 'low' | 'high' | 'max';
   timeoutMs?: number;
+  retry?: IntentRetryOptions;
+  /** 测试注入：替代 setTimeout 的等待实现。 */
+  sleepImpl?: (ms: number) => Promise<void>;
   /** Agent 注册的查询语义（query_control_platform 能力的 intent.paths），本模块据此动态生成提示。 */
   intent?: QueryIntent;
   /** 模型调用成功后回传用量（Token 计数与起止时间），由调用方决定是否记账。 */
@@ -143,71 +175,119 @@ function toDecision(raw: unknown, intent: QueryIntent): IntentDecision | { error
   return { error: '意图类型必须为 query 或 reasoning' };
 }
 
-/** 用大模型把一句自然语言解析为受控派单请求；失败/未提供 intent 返回 { error }，由调用方决定回退。 */
-export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {}): Promise<IntentDecision | { error: string }> {
+/** 用大模型把一句自然语言解析为受控派单请求；瞬时错误自动重试，失败返回结构化原因。 */
+export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {}): Promise<IntentDecision | IntentParseFailure> {
   const query = String(text || '').trim();
-  if (!query) return { error: '输入为空' };
+  if (!query) return { error: '输入为空', code: 'INVALID_INPUT', retryable: false, attempts: 0 };
   if (!deps.intent || !Array.isArray(deps.intent.paths) || deps.intent.paths.length === 0) {
-    return { error: '未提供查询语义（intent），无法解析' };
+    return { error: '未提供查询语义（intent），无法解析', code: 'INVALID_INPUT', retryable: false, attempts: 0 };
   }
   const { baseUrl, model, apiKey } = deepSeekConfig(deps);
-  if (!apiKey) return { error: '未配置 DeepSeek 模型密钥，已回退本地规则解析' };
+  if (!apiKey) {
+    return { error: '未配置 DeepSeek 模型密钥，已回退本地规则解析', code: 'MODEL_NOT_CONFIGURED', retryable: false, attempts: 0 };
+  }
   const fetchImpl = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? 30_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const startedAt = new Date().toISOString();
-  try {
-    const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        ...(deps.effort ? { reasoning_effort: deps.effort } : {}),
-        messages: [
-          { role: 'system', content: buildQueryIntentPrompt(deps.intent) },
-          { role: 'user', content: query },
-        ],
-        temperature: 0,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      recordModelCall({ ok: false, status: response.status, kind: 'http', model });
-      return { error: `模型接口返回 ${response.status}` };
-    }
-    recordModelCall({ ok: true, status: response.status, kind: 'success', model });
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: unknown } }>;
-      usage?: {
-        prompt_tokens?: number;
-        completion_tokens?: number;
-        prompt_cache_hit_tokens?: number;
-        prompt_tokens_details?: { cached_tokens?: number };
+  const httpMaxRetries = deps.retry?.httpMaxRetries ?? 2;
+  const networkMaxRetries = deps.retry?.networkMaxRetries ?? 1;
+  const baseDelayMs = deps.retry?.baseDelayMs ?? 500;
+  const sleep = deps.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  const attemptOnce = async (): Promise<
+    { kind: 'decision'; value: IntentDecision } | { kind: 'failure'; failure: Omit<IntentParseFailure, 'attempts'> }
+  > => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = new Date().toISOString();
+    try {
+      const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          ...(deps.effort ? { reasoning_effort: deps.effort } : {}),
+          messages: [
+            { role: 'system', content: buildQueryIntentPrompt(deps.intent) },
+            { role: 'user', content: query },
+          ],
+          temperature: 0,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) return { kind: 'failure', failure: classifyHttpFailure(response.status) };
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+        usage?: {
+          prompt_tokens?: number;
+          completion_tokens?: number;
+          prompt_cache_hit_tokens?: number;
+          prompt_tokens_details?: { cached_tokens?: number };
+        };
       };
-    };
-    const tokensIn = typeof data?.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0;
-    const tokensOut = typeof data?.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0;
-    const cachedTokens = typeof data?.usage?.prompt_cache_hit_tokens === 'number'
-      ? data.usage.prompt_cache_hit_tokens
-      : typeof data?.usage?.prompt_tokens_details?.cached_tokens === 'number'
-        ? data.usage.prompt_tokens_details.cached_tokens
-        : 0;
-    // 模型实际消耗了 Token，无论内容是否有效都回传用量，便于记账。
-    if (deps.onUsage && (tokensIn > 0 || tokensOut > 0)) {
-      deps.onUsage({ model, tokensIn, cachedTokens, tokensOut, startedAt, endedAt: new Date().toISOString() });
+      const tokensIn = typeof data?.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0;
+      const tokensOut = typeof data?.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0;
+      const cachedTokens = typeof data?.usage?.prompt_cache_hit_tokens === 'number'
+        ? data.usage.prompt_cache_hit_tokens
+        : typeof data?.usage?.prompt_tokens_details?.cached_tokens === 'number'
+          ? data.usage.prompt_tokens_details.cached_tokens
+          : 0;
+      // 模型实际消耗了 Token，无论内容是否有效都回传用量，便于记账。
+      if (deps.onUsage && (tokensIn > 0 || tokensOut > 0)) {
+        deps.onUsage({ model, tokensIn, cachedTokens, tokensOut, startedAt, endedAt: new Date().toISOString() });
+      }
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) {
+        return { kind: 'failure', failure: { error: '模型未返回有效内容', code: 'MODEL_EMPTY', retryable: false } };
+      }
+      const decision = toDecision(extractJson(content), deps.intent);
+      if ('error' in decision) {
+        return { kind: 'failure', failure: { error: decision.error, code: 'MODEL_INVALID_INTENT', retryable: false } };
+      }
+      return { kind: 'decision', value: decision };
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') {
+        return { kind: 'failure', failure: { error: '意图解析超时', code: 'MODEL_TIMEOUT', retryable: true } };
+      }
+      return { kind: 'failure', failure: { error: `意图解析失败：${(error as Error).message}`, code: 'MODEL_NETWORK', retryable: true } };
+    } finally {
+      clearTimeout(timer);
     }
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || !content.trim()) return { error: '模型未返回有效内容' };
-    return toDecision(extractJson(content), deps.intent);
-  } catch (error) {
-    if ((error as Error).name === 'AbortError') {
-      recordModelCall({ ok: false, status: null, kind: 'timeout', model });
-      return { error: '意图解析超时' };
+  };
+
+  let attempts = 0;
+  while (true) {
+    attempts += 1;
+    const outcome = await attemptOnce();
+    if (outcome.kind === 'decision') {
+      recordModelCall({ ok: true, status: 200, kind: 'success', model });
+      return outcome.value;
     }
-    recordModelCall({ ok: false, status: null, kind: 'network', model });
-    return { error: `意图解析失败：${(error as Error).message}` };
-  } finally {
-    clearTimeout(timer);
+    const failure: IntentParseFailure = { ...outcome.failure, attempts };
+    const retryLimit = failure.retryable
+      ? (failure.code === 'MODEL_TIMEOUT' || failure.code === 'MODEL_NETWORK' ? networkMaxRetries : httpMaxRetries)
+      : 0;
+    if (attempts > retryLimit) {
+      recordModelCall({
+        ok: false,
+        status: failure.status ?? null,
+        kind: failure.code === 'MODEL_TIMEOUT' ? 'timeout' : (failure.status !== undefined ? 'http' : 'network'),
+        model,
+      });
+      return failure;
+    }
+    await sleep(baseDelayMs * (2 ** (attempts - 1)));
   }
+}
+
+function classifyHttpFailure(status: number): Omit<IntentParseFailure, 'attempts'> {
+  if (status === 401 || status === 403) {
+    return { error: `模型接口返回 ${status}（密钥无效或已失效）`, code: 'MODEL_AUTH', retryable: false, status };
+  }
+  if (status === 429) {
+    return { error: '模型接口返回 429（触发限流）', code: 'MODEL_RATE_LIMIT', retryable: true, status };
+  }
+  if (status >= 500) {
+    return { error: `模型接口返回 ${status}（服务端异常）`, code: 'MODEL_SERVER', retryable: true, status };
+  }
+  return { error: `模型接口返回 ${status}`, code: 'MODEL_BAD_REQUEST', retryable: false, status };
 }
