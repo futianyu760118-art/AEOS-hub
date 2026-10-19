@@ -8,36 +8,43 @@ const html = readFileSync(join(root, 'public', 'index.html'), 'utf8');
 const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
 const css = readFileSync(join(root, 'public', 'style.css'), 'utf8');
 
-test('助手观测导航与视图存在', () => {
-  assert.match(html, /data-view="assistant"/);
-  assert.match(html, /id="view-assistant"/);
-  assert.match(html, /id="btn-assistant-refresh"/);
+test('AI 观测导航与两个标签页存在', () => {
+  assert.match(html, /data-view="ai-obs"/);
+  assert.match(html, /id="view-ai-obs"/);
+  assert.match(html, /data-ai-tab="runs"/);
+  assert.match(html, /data-ai-tab="assistants"/);
+  assert.match(html, /id="ai-run-list"/);
+  assert.match(html, /id="ai-run-detail"/);
   assert.match(html, /id="assistant-traces"/);
-  assert.match(html, /id="assistant-detail"/);
-  assert.match(html, /id="assistant-system-filter"/);
+  assert.match(html, /id="btn-ai-obs-refresh"/);
 });
 
-test('视图注册、懒加载与轮询', () => {
-  assert.match(app, /view: 'assistant', label: '助手观测'/);
-  assert.match(app, /if \(view === 'assistant'\) loadAssistantEvents\(\);/);
-  assert.match(app, /function syncAssistantRefresh\(\)/);
-  assert.match(app, /\/api\/assistant-events/);
+test('视图注册、两个标签页数据加载与轮询', () => {
+  assert.match(app, /view: 'ai-obs', label: 'AI 观测'/);
+  assert.match(app, /if \(view === 'ai-obs'\) loadAiObs\(\);/);
+  assert.match(app, /function loadAiRuns\(\)/);
+  assert.match(app, /function loadAssistantEvents\(\)/);
+  assert.match(app, /function syncAiObsRefresh\(\)/);
+  assert.match(app, /\/api\/execution\/agents/);
+  assert.match(app, /\/api\/borrow-orders/);
 });
 
-test('助手观测为只读：没有写请求', () => {
-  const start = app.indexOf('// ---------- 助手观测（中台自有助手主动上报） ----------');
+test('AI 观测为只读：没有写请求', () => {
+  const start = app.indexOf('// ---------- AI 观测（统一总览：Hub 派单任务 / 各系统助手） ----------');
   const end = app.indexOf('let routeControlsWired');
   assert.ok(start > 0 && end > start);
   const block = app.slice(start, end);
   assert.doesNotMatch(block, /method:\s*'(POST|PUT|PATCH|DELETE)'/);
 });
 
-test('时间线展示模型用量', () => {
-  assert.match(app, /event\.usage/);
-  assert.match(app, /formatUsageCost/);
+test('Hub 派单任务复用执行步骤时间线', () => {
+  assert.match(app, /function renderAiRunDetail\(\)/);
+  assert.match(app, /executionTimelineHtml\(events\)/);
+  assert.match(app, /fetchRunEvents\(run\.runId\)/);
 });
 
 test('样式与版本号', () => {
-  assert.match(css, /\.assistant-trace-table/);
-  assert.match(html, /assistant-obs-20261019/);
+  assert.match(css, /\.ai-obs-tabs/);
+  assert.match(css, /\.ai-run-table/);
+  assert.match(html, /ai-obs-20261019/);
 });

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=assistant-obs-20261019" />
+  <link rel="stylesheet" href="/style.css?v=ai-obs-20261019" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -135,7 +135,7 @@
           <span class="nav-label">执行面</span>
           <button class="nav-item" type="button" data-view="execution" data-title="执行面仪表盘"><i data-lucide="radio-tower"></i><span>执行面仪表盘</span></button>
           <button class="nav-item" type="button" data-view="borrow" data-title="跨系统借调"><i data-lucide="arrow-left-right"></i><span>跨系统借调</span></button>
-          <button class="nav-item" type="button" data-view="assistant" data-title="助手观测"><i data-lucide="messages-square"></i><span>助手观测</span></button>
+          <button class="nav-item" type="button" data-view="ai-obs" data-title="AI 观测"><i data-lucide="scan-eye"></i><span>AI 观测</span></button>
         </div>
         <div class="nav-group">
           <span class="nav-label">治理与证据</span>
@@ -608,33 +608,67 @@
           </section>
         </section>
 
-        <section id="view-assistant" class="view app-view hidden">
+        <section id="view-ai-obs" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">跨系统协作</span><h1>助手观测</h1><p>中台自有智能助手的调用记录（中台主动上报，只读）</p></div>
-            <div class="page-actions"><button id="btn-assistant-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
+            <div><span class="page-module">跨系统协作</span><h1>AI 观测</h1><p>Hub 派单任务与各系统自有助手的统一观测（只读）</p></div>
+            <div class="page-actions"><button id="btn-ai-obs-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
-          <div class="harbor-metrics usage-metrics">
-            <div><span>记录数</span><strong id="assistant-total">0</strong><small>已上报事件</small></div>
-            <div><span>会话数</span><strong id="assistant-traces">0</strong><small>按 traceId 归并</small></div>
-            <div><span>涉及系统</span><strong id="assistant-systems">0</strong><small>上报方</small></div>
-            <div><span>失败事件</span><strong id="assistant-errors">0</strong><small>需要关注</small></div>
+          <div class="segmented ai-obs-tabs" role="tablist" aria-label="AI 观测视图">
+            <button type="button" class="active" data-ai-tab="runs">Hub 派单任务</button>
+            <button type="button" data-ai-tab="assistants">各系统助手</button>
           </div>
 
-          <section class="surface">
-            <div class="surface-head">
-              <div><h2>会话</h2><p>点击一行查看该会话的时间线</p></div>
-              <select id="assistant-system-filter" class="borrow-filter" aria-label="筛选上报系统">
-                <option value="all">全部系统</option>
-              </select>
+          <div id="ai-obs-runs" class="ai-obs-panel">
+            <div class="harbor-metrics usage-metrics">
+              <div><span>任务总数</span><strong id="ai-run-total">0</strong><small>Hub 派单</small></div>
+              <div><span>进行中</span><strong id="ai-run-active">0</strong><small>已派单 / 运行中</small></div>
+              <div><span>已完成</span><strong id="ai-run-completed">0</strong><small>成功返回结果</small></div>
+              <div><span>失败</span><strong id="ai-run-failed">0</strong><small>含召回</small></div>
             </div>
-            <div id="assistant-traces" class="usage-list"><div class="dashboard-loading">正在读取助手记录…</div></div>
-          </section>
+            <section class="surface">
+              <div class="surface-head">
+                <div><h2>任务列表</h2><p>点击一行查看执行步骤</p></div>
+                <select id="ai-run-status-filter" class="borrow-filter" aria-label="筛选任务状态">
+                  <option value="all">全部状态</option>
+                  <option value="dispatched">已派单</option>
+                  <option value="running">运行中</option>
+                  <option value="completed">已完成</option>
+                  <option value="failed">失败</option>
+                  <option value="recalled">已召回</option>
+                </select>
+              </div>
+              <div id="ai-run-list" class="usage-list"><div class="dashboard-loading">正在读取派单任务…</div></div>
+            </section>
+            <section class="surface">
+              <div class="surface-head"><div><h2>执行步骤</h2><p>Hub 派单任务的步骤时间线</p></div><span id="ai-run-id" class="mono subtle"></span></div>
+              <div id="ai-run-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="list-tree"></i><strong>选择一个任务</strong><small>点击上方任务查看执行步骤</small></div></div>
+            </section>
+          </div>
 
-          <section class="surface">
-            <div class="surface-head"><div><h2>会话时间线</h2><p>消息、工具调用、模型调用与错误</p></div><span id="assistant-trace-id" class="mono subtle"></span></div>
-            <div id="assistant-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击上方会话查看上报的时间线</small></div></div>
-          </section>
+          <div id="ai-obs-assistants" class="ai-obs-panel hidden">
+            <div class="harbor-metrics usage-metrics">
+              <div><span>记录数</span><strong id="assistant-total">0</strong><small>已上报事件</small></div>
+              <div><span>会话数</span><strong id="assistant-traces">0</strong><small>按 traceId 归并</small></div>
+              <div><span>涉及系统</span><strong id="assistant-systems">0</strong><small>上报方</small></div>
+              <div><span>失败事件</span><strong id="assistant-errors">0</strong><small>需要关注</small></div>
+            </div>
+
+            <section class="surface">
+              <div class="surface-head">
+                <div><h2>会话</h2><p>点击一行查看该会话的时间线</p></div>
+                <select id="assistant-system-filter" class="borrow-filter" aria-label="筛选上报系统">
+                  <option value="all">全部系统</option>
+                </select>
+              </div>
+              <div id="assistant-traces" class="usage-list"><div class="dashboard-loading">正在读取助手记录…</div></div>
+            </section>
+
+            <section class="surface">
+              <div class="surface-head"><div><h2>会话时间线</h2><p>消息、工具调用、模型调用与错误</p></div><span id="assistant-trace-id" class="mono subtle"></span></div>
+              <div id="assistant-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击上方会话查看上报的时间线</small></div></div>
+            </section>
+          </div>
         </section>
 
         <section id="view-usage" class="view app-view hidden">
@@ -855,6 +889,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=assistant-obs-20261019"></script>
+  <script type="module" src="/app.js?v=ai-obs-20261019"></script>
 </body>
 </html>

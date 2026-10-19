@@ -229,8 +229,13 @@ let borrowRefreshTimer = null;
 const BORROW_LIVE_REFRESH_MS = 5_000;
 let opsRefreshTimer = null;
 const OPS_LIVE_REFRESH_MS = 15_000;
-let assistantRefreshTimer = null;
-const ASSISTANT_LIVE_REFRESH_MS = 15_000;
+let aiObsRefreshTimer = null;
+const AI_OBS_REFRESH_MS = 15_000;
+let aiObsTab = 'runs';
+let aiRuns = [];
+let aiAgents = [];
+let aiBorrowByRun = new Map();
+let selectedAiRunId = null;
 let pendingRiskAgentDispatch = null;
 const riskAgentDispatches = new Map();
 // 不同 Agent / 不同会话允许并行；同一会话仍由服务端串行，避免上下文交叉。
@@ -291,7 +296,7 @@ const commands = [
   { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
   { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
   { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
-  { view: 'assistant', label: '助手观测', desc: '中台自有助手的调用记录与时间线', icon: 'messages-square', group: '执行面' },
+  { view: 'ai-obs', label: 'AI 观测', desc: 'Hub 派单任务与各系统自有助手的统一观测', icon: 'scan-eye', group: '执行面' },
   { view: 'ops', label: '运行监控', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
 ];
@@ -651,8 +656,8 @@ async function logout() {
   borrowRefreshTimer = null;
   window.clearInterval(opsRefreshTimer);
   opsRefreshTimer = null;
-  window.clearInterval(assistantRefreshTimer);
-  assistantRefreshTimer = null;
+  window.clearInterval(aiObsRefreshTimer);
+  aiObsRefreshTimer = null;
   history.replaceState(null, '', location.pathname);
   window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 
@@ -711,13 +716,13 @@ function showView(view, options = {}) {
   if (view === 'execution') loadExecution();
   if (view === 'usage') loadUsage();
   if (view === 'borrow') loadBorrowOrders();
-  if (view === 'assistant') loadAssistantEvents();
+  if (view === 'ai-obs') loadAiObs();
   if (view === 'ops') loadOps();
   if (view === 'route') loadRoute();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
   syncBorrowRefresh();
-  syncAssistantRefresh();
+  syncAiObsRefresh();
   syncOpsRefresh();
 }
 
@@ -1282,6 +1287,181 @@ function syncOpsRefresh() {
   }, OPS_LIVE_REFRESH_MS);
 }
 
+// ---------- AI 观测（统一总览：Hub 派单任务 / 各系统助手） ----------
+let aiObsControlsWired = false;
+
+function wireAiObsControls() {
+  if (aiObsControlsWired) return;
+  aiObsControlsWired = true;
+  $('#btn-ai-obs-refresh')?.addEventListener('click', () => {
+    if (aiObsTab === 'runs') loadAiRuns();
+    else loadAssistantEvents();
+  });
+  $$('#view-ai-obs [data-ai-tab]').forEach((button) => {
+    button.addEventListener('click', () => switchAiObsTab(button.dataset.aiTab));
+  });
+  $('#ai-run-status-filter')?.addEventListener('change', () => loadAiRuns());
+  $('#ai-run-list')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-ai-run]');
+    const runId = target?.getAttribute('data-ai-run');
+    if (!runId) return;
+    selectedAiRunId = selectedAiRunId === runId ? null : runId;
+    renderAiRunList();
+    void renderAiRunDetail();
+  });
+}
+
+function switchAiObsTab(tab) {
+  aiObsTab = tab === 'assistants' ? 'assistants' : 'runs';
+  $$('#view-ai-obs [data-ai-tab]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.aiTab === aiObsTab);
+  });
+  $('#ai-obs-runs')?.classList.toggle('hidden', aiObsTab !== 'runs');
+  $('#ai-obs-assistants')?.classList.toggle('hidden', aiObsTab !== 'assistants');
+  if (aiObsTab === 'runs') loadAiRuns();
+  else loadAssistantEvents();
+}
+
+function loadAiObs() {
+  wireAiObsControls();
+  switchAiObsTab(aiObsTab);
+}
+
+async function loadAiRuns() {
+  let data;
+  try {
+    const response = await fetch('/api/execution/agents', { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  aiAgents = Array.isArray(data?.agents) ? data.agents : [];
+  aiRuns = (Array.isArray(data?.runs) ? data.runs : [])
+    .slice()
+    .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+  try {
+    const ordersResponse = await fetch('/api/borrow-orders?limit=100', { headers: { accept: 'application/json' } });
+    if (ordersResponse.ok) {
+      const ordersData = await ordersResponse.json();
+      aiBorrowByRun = new Map((Array.isArray(ordersData?.orders) ? ordersData.orders : [])
+        .filter((order) => order.runId)
+        .map((order) => [order.runId, order]));
+    }
+  } catch {
+    // 借调信息只用于标注来源，失败不影响任务列表。
+  }
+  renderAiRunMetrics();
+  renderAiRunList();
+  void renderAiRunDetail();
+}
+
+function aiRunStatusLabel(state) {
+  return { dispatched: '已派单', running: '运行中', completed: '已完成', failed: '失败', recalled: '已召回' }[state] || state || '未知';
+}
+
+function aiRunStatusTone(state) {
+  return state === 'completed' ? 'ok' : state === 'failed' ? 'danger' : state === 'running' ? 'warn' : state === 'recalled' ? 'neutral' : 'info';
+}
+
+function aiRunResultSummary(run) {
+  if (!run || run.result === undefined || run.result === null) return '—';
+  const result = run.result;
+  if (Array.isArray(result?.items)) {
+    return `返回 ${result.items.length} 条${result.total !== undefined ? `，共 ${result.total} 条` : ''}`;
+  }
+  if (typeof result?.summary === 'string') return result.summary.slice(0, 120);
+  if (typeof result === 'string') return result.slice(0, 120);
+  return '已返回结果';
+}
+
+function aiRunDuration(run) {
+  if (!run?.startedAt) return '—';
+  const end = run.endedAt ? new Date(run.endedAt).getTime() : Date.now();
+  const start = new Date(run.startedAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return '—';
+  return `${Math.max(0, Math.round((end - start) / 1000))} s`;
+}
+
+function renderAiRunMetrics() {
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#ai-run-total', formatTokenCount(aiRuns.length));
+  setText('#ai-run-active', formatTokenCount(aiRuns.filter((run) => run.state === 'dispatched' || run.state === 'running').length));
+  setText('#ai-run-completed', formatTokenCount(aiRuns.filter((run) => run.state === 'completed').length));
+  setText('#ai-run-failed', formatTokenCount(aiRuns.filter((run) => run.state === 'failed' || run.state === 'recalled').length));
+}
+
+function renderAiRunList() {
+  const root = $('#ai-run-list');
+  if (!root) return;
+  const status = $('#ai-run-status-filter')?.value || 'all';
+  const runs = aiRuns.filter((run) => status === 'all' || run.state === status);
+  if (!runs.length) {
+    root.innerHTML = harborEmpty('list-tree', '暂无派单任务', 'Hub 派发任务后会显示在这里');
+    refreshIcons(root);
+    return;
+  }
+  const rows = runs.slice(0, 200).map((run) => {
+    const selected = run.runId === selectedAiRunId ? ' selected' : '';
+    const order = aiBorrowByRun.get(run.runId);
+    const from = order ? `借调：${esc(order.fromSystem)}` : 'Hub 直接派单';
+    const agent = aiAgents.find((item) => item.agentId === run.agentId);
+    return `<button class="harbor-row borrow-row${selected}" type="button" data-ai-run="${esc(run.runId)}">
+      <span class="num">${borrowTime(run.startedAt)}</span>
+      <span><strong>${esc(agent?.name || run.agentId)}</strong><br/><small>${from}</small></span>
+      <span>${esc(borrowCapabilityLabel(run.capability))}</span>
+      <span><b class="status-pill ${aiRunStatusTone(run.state)}">${esc(aiRunStatusLabel(run.state))}</b></span>
+      <span class="num">${esc(aiRunDuration(run))}</span>
+      <span>${esc(aiRunResultSummary(run))}</span>
+    </button>`;
+  }).join('');
+  root.innerHTML = `<div class="harbor-table ai-run-table">
+    <div class="harbor-row harbor-head"><span class="num">时间</span><span>Agent / 来源</span><span>能力</span><span>状态</span><span class="num">耗时</span><span>结果</span></div>
+    ${rows}
+  </div>`;
+  refreshIcons(root);
+}
+
+async function renderAiRunDetail() {
+  const root = $('#ai-run-detail');
+  if (!root) return;
+  const label = $('#ai-run-id');
+  if (!selectedAiRunId) {
+    if (label) label.textContent = '';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="list-tree"></i><strong>选择一个任务</strong><small>点击上方任务查看执行步骤</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const run = aiRuns.find((item) => item.runId === selectedAiRunId);
+  if (label) label.textContent = selectedAiRunId;
+  if (!run) {
+    root.innerHTML = '<div class="harbor-empty"><strong>任务不存在</strong></div>';
+    return;
+  }
+  const events = await fetchRunEvents(run.runId);
+  const order = aiBorrowByRun.get(run.runId);
+  root.innerHTML = `<div class="borrow-detail-grid">
+      <div><span>任务</span><strong class="mono">${esc(run.runId)}</strong></div>
+      <div><span>Agent</span><strong>${esc(run.agentId)}</strong></div>
+      <div><span>能力</span><strong>${esc(borrowCapabilityLabel(run.capability))}</strong></div>
+      <div><span>状态</span><strong><b class="status-pill ${aiRunStatusTone(run.state)}">${esc(aiRunStatusLabel(run.state))}</b></strong></div>
+      <div><span>来源</span><strong>${order ? `借调：${esc(order.fromSystem)}` : 'Hub 直接派单'}</strong></div>
+      <div><span>耗时</span><strong>${esc(aiRunDuration(run))}</strong></div>
+    </div>
+    <div class="borrow-detail-block"><h3>结果摘要</h3><p class="form-hint">${esc(aiRunResultSummary(run))}</p></div>
+    <div class="borrow-detail-block"><h3>执行步骤</h3>${executionTimelineHtml(events)}</div>`;
+  refreshIcons(root);
+}
+
+function syncAiObsRefresh() {
+  window.clearInterval(aiObsRefreshTimer);
+  aiObsRefreshTimer = null;
+  if (currentView !== 'ai-obs' || els.app.classList.contains('hidden')) return;
+  aiObsRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (aiObsTab === 'runs') loadAiRuns();
+    else loadAssistantEvents();
+  }, AI_OBS_REFRESH_MS);
+}
+
 // ---------- 助手观测（中台自有助手主动上报） ----------
 let assistantData = null;
 let assistantControlsWired = false;
@@ -1290,7 +1470,6 @@ let selectedAssistantTrace = null;
 function wireAssistantControls() {
   if (assistantControlsWired) return;
   assistantControlsWired = true;
-  $('#btn-assistant-refresh')?.addEventListener('click', () => loadAssistantEvents());
   $('#assistant-system-filter')?.addEventListener('change', () => {
     selectedAssistantTrace = null;
     loadAssistantEvents();
@@ -1388,16 +1567,6 @@ function renderAssistantDetail() {
   root.innerHTML = `<div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
   refreshIcons(root);
 }
-
-function syncAssistantRefresh() {
-  window.clearInterval(assistantRefreshTimer);
-  assistantRefreshTimer = null;
-  if (currentView !== 'assistant' || els.app.classList.contains('hidden')) return;
-  assistantRefreshTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') loadAssistantEvents();
-  }, ASSISTANT_LIVE_REFRESH_MS);
-}
-
 
 let routeControlsWired = false;
 
