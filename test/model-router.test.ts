@@ -20,16 +20,16 @@ const SEED = [
   { ...FLASH, id: 'deepseek-reasoner', tier: 'medium', effort: 'high', latencyMs: 3_000 },
   { ...FLASH, id: 'deepseek-flash-max', tier: 'heavy', effort: 'max', latencyMs: 6_000 },
   { id: 'local-llama', provider: 'local', modelName: 'llama3.1', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 200, contextWindow: 8_192, followsDefault: false, description: '' },
-].map((p) => ({ inputPriceCached: 0, offPeakMultiplier: 1, ...p })) as ModelProfile[];
+].map((p) => ({ inputPriceCached: 0, offPeakMultiplier: 1, routable: true, ...p })) as ModelProfile[];
 
 const FOLLOWS_DEFAULT = [
-  { id: 'account-default', provider: 'account', modelName: 'account-default', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 0, contextWindow: 0, followsDefault: true, description: '' },
-  { id: 'provider-default', provider: 'remote', modelName: 'provider-default', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 0, contextWindow: 0, followsDefault: true, description: '' },
+  { id: 'account-default', provider: 'account', modelName: 'account-default', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 0, contextWindow: 0, followsDefault: true, routable: true, description: '' },
+  { id: 'provider-default', provider: 'remote', modelName: 'provider-default', tier: 'light', inputPrice: 0, outputPrice: 0, latencyMs: 0, contextWindow: 0, followsDefault: true, routable: true, description: '' },
 ] as ModelProfile[];
 
 const ANCHOR = [
   ...SEED,
-  { id: 'deepseek-flash-cheap', provider: 'deepseek', modelName: 'deepseek-flash', tier: 'light', inputPrice: 1, inputPriceCached: 0.02, outputPrice: 4, offPeakMultiplier: 0.5, latencyMs: 400, contextWindow: 1_048_576, followsDefault: false, description: '' },
+  { id: 'deepseek-flash-cheap', provider: 'deepseek', modelName: 'deepseek-flash', tier: 'light', inputPrice: 1, inputPriceCached: 0.02, outputPrice: 4, offPeakMultiplier: 0.5, latencyMs: 400, contextWindow: 1_048_576, followsDefault: false, routable: true, description: '' },
 ] as ModelProfile[];
 
 test('轻难度非脱敏 → deepseek-chat（flash/effort=low），可执行', () => {
@@ -122,4 +122,14 @@ test('parseRouteRequest 校验非法输入', () => {
 test('isHubExecutableProfile 仅认 deepseek', () => {
   assert.equal(isHubExecutableProfile(SEED.find((p) => p.id === 'deepseek-chat')!), true);
   assert.equal(isHubExecutableProfile(SEED.find((p) => p.id === 'local-llama')!), false);
+});
+
+test('routable=false 的档位不参与路由（仅用于外部系统计价）', () => {
+  const profiles = [...SEED, {
+    id: 'deepseek-v4-pro', provider: 'deepseek', modelName: 'deepseek-v4-pro', tier: 'heavy',
+    inputPrice: 9, inputPriceCached: 0.3, outputPrice: 27, offPeakMultiplier: 0.5,
+    latencyMs: 5_000, contextWindow: 1_048_576, followsDefault: false, routable: false, description: '',
+  }] as ModelProfile[];
+  const decision = routeModel({ difficulty: 'heavy' }, profiles);
+  assert.equal(decision.profileId, 'deepseek-flash-max');
 });

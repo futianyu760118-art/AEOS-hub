@@ -67,7 +67,7 @@ function costPerMillion(profile: ModelProfile): number {
 
 /** 回退档：Agent 默认档（若为非 local 具体档）优先，否则成本最低的非 local 具体档。 */
 function pickFallback(profiles: ModelProfile[], agentModelProfileId?: string): ModelProfile | null {
-  const concrete = profiles.filter((profile) => !profile.followsDefault && profile.provider !== 'local');
+  const concrete = profiles.filter((profile) => !profile.followsDefault && profile.provider !== 'local' && profile.routable !== false);
   const agentDefault = agentModelProfileId
     ? concrete.find((profile) => profile.id === agentModelProfileId)
     : undefined;
@@ -79,7 +79,7 @@ export function routeModel(request: RouteRequest, profiles: ModelProfile[] = loa
   const difficulty = request.difficulty ?? 'light';
   const dataSensitive = request.dataSensitive ?? false;
   const reasons: string[] = [];
-  let candidates = profiles.filter((profile) => !profile.followsDefault);
+  let candidates = profiles.filter((profile) => !profile.followsDefault && profile.routable !== false);
 
   // 1. 脱敏：true 仅本地；false 排除本地（避免 0 成本的 local-llama 抢掉 cloud 档）。
   if (dataSensitive) {

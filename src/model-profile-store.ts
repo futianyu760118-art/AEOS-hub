@@ -45,6 +45,8 @@ export const ModelProfileSchema = z.object({
   contextWindow: z.number().int().nonnegative(),
   // true 表示「跟随默认」而非具体模型（account-default / provider-default），无真实价格与上下文。
   followsDefault: z.boolean().default(false),
+  // false 表示只用于计价/展示，不参与 Hub 的模型路由（例如外部系统自带的模型）。
+  routable: z.boolean().default(true),
   description: trimmedString(500).default(''),
 }).strict();
 
@@ -96,6 +98,22 @@ const SEED_PROFILES: ModelProfile[] = [
     effort: 'max',
     latencyMs: 6_000,
     description: 'DeepSeek V4.1-Flash · effort=max，高难度复杂推理档',
+  }),
+  // 仅用于外部系统（如中台助手）的用量计价，不参与 Hub 默认路由。
+  ModelProfileSchema.parse({
+    id: 'deepseek-v4-pro',
+    provider: 'deepseek',
+    modelName: 'deepseek-v4-pro',
+    tier: 'heavy',
+    effort: 'high',
+    inputPrice: 9.0,
+    inputPriceCached: 0.30,
+    outputPrice: 27.0,
+    offPeakMultiplier: 0.5,
+    latencyMs: 5_000,
+    contextWindow: 1_048_576,
+    routable: false,
+    description: 'DeepSeek V4-Pro，仅用于外部系统用量计价（不参与 Hub 默认路由）',
   }),
   ModelProfileSchema.parse({
     id: 'local-llama',
