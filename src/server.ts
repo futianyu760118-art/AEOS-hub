@@ -91,6 +91,8 @@ import { BorrowOrderApi } from './borrow-order-api.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
 import { OpsMonitor } from './ops-monitor.ts';
 import { ExecutionEventStore } from './execution-event-store.ts';
+import { AssistantEventStore } from './assistant-event-store.ts';
+import { AssistantEventApi } from './assistant-event-api.ts';
 import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
@@ -210,6 +212,13 @@ const executionPlane = new ExecutionPlaneRegistry({
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
 const executionEventStore = new ExecutionEventStore();
+const assistantEventStore = new AssistantEventStore();
+const assistantEventApi = new AssistantEventApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  store: assistantEventStore,
+  appendEvidence,
+  recordUsage: recordUsageEvent,
+});
 const borrowOrderStore = new BorrowOrderStore({ file: join(dataDir, 'borrow-orders.json') });
 borrowOrderService = new BorrowOrderService({
   store: borrowOrderStore,
@@ -1564,6 +1573,34 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // ---------- 中台助手观测上报（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/assistant-events')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = assistantEventApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'assistant-event endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
   const publicAsset = isPublicLoginResource(url.pathname, req.method);
   if (!authGateway.canAccess(url.pathname, req.method, req.headers.cookie)) {
     sendJson(res, 401, { error: 'authentication required' });
@@ -2079,6 +2116,19 @@ const server = createServer(async (req, res) => {
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
+    return;
+  }
+  // ---------- 中台助手观测只读 API（登录用户） ----------
+  if (url.pathname === '/api/assistant-events') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const systemId = url.searchParams.get('system')?.trim() || undefined;
+    const traceId = url.searchParams.get('traceId')?.trim() || undefined;
+    const limit = boundedLimit(url.searchParams.get('limit'));
+    sendJson(res, 200, {
+      events: assistantEventStore.listEvents({ systemId, traceId, limit }),
+      traces: assistantEventStore.listTraces({ systemId, limit }),
+      count: assistantEventStore.countEvents({ systemId, traceId }),
+    });
     return;
   }
   const executionDispatchMatch = url.pathname.match(/^\/api\/execution\/agents\/([^/]+)\/dispatch$/);

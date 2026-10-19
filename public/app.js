@@ -229,6 +229,8 @@ let borrowRefreshTimer = null;
 const BORROW_LIVE_REFRESH_MS = 5_000;
 let opsRefreshTimer = null;
 const OPS_LIVE_REFRESH_MS = 15_000;
+let assistantRefreshTimer = null;
+const ASSISTANT_LIVE_REFRESH_MS = 15_000;
 let pendingRiskAgentDispatch = null;
 const riskAgentDispatches = new Map();
 // 不同 Agent / 不同会话允许并行；同一会话仍由服务端串行，避免上下文交叉。
@@ -289,6 +291,7 @@ const commands = [
   { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
   { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
   { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
+  { view: 'assistant', label: '助手观测', desc: '中台自有助手的调用记录与时间线', icon: 'messages-square', group: '执行面' },
   { view: 'ops', label: '运行监控', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
 ];
@@ -648,6 +651,8 @@ async function logout() {
   borrowRefreshTimer = null;
   window.clearInterval(opsRefreshTimer);
   opsRefreshTimer = null;
+  window.clearInterval(assistantRefreshTimer);
+  assistantRefreshTimer = null;
   history.replaceState(null, '', location.pathname);
   window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 
@@ -706,11 +711,13 @@ function showView(view, options = {}) {
   if (view === 'execution') loadExecution();
   if (view === 'usage') loadUsage();
   if (view === 'borrow') loadBorrowOrders();
+  if (view === 'assistant') loadAssistantEvents();
   if (view === 'ops') loadOps();
   if (view === 'route') loadRoute();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
   syncBorrowRefresh();
+  syncAssistantRefresh();
   syncOpsRefresh();
 }
 
@@ -1275,6 +1282,122 @@ function syncOpsRefresh() {
   }, OPS_LIVE_REFRESH_MS);
 }
 
+// ---------- 助手观测（中台自有助手主动上报） ----------
+let assistantData = null;
+let assistantControlsWired = false;
+let selectedAssistantTrace = null;
+
+function wireAssistantControls() {
+  if (assistantControlsWired) return;
+  assistantControlsWired = true;
+  $('#btn-assistant-refresh')?.addEventListener('click', () => loadAssistantEvents());
+  $('#assistant-system-filter')?.addEventListener('change', () => {
+    selectedAssistantTrace = null;
+    loadAssistantEvents();
+  });
+  $('#assistant-traces')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-assistant-trace]');
+    const traceId = target?.getAttribute('data-assistant-trace');
+    const systemId = target?.getAttribute('data-assistant-system');
+    if (!traceId || !systemId) return;
+    selectedAssistantTrace = { traceId, systemId };
+    renderAssistantTraces();
+    renderAssistantDetail();
+  });
+}
+
+async function loadAssistantEvents() {
+  wireAssistantControls();
+  const system = $('#assistant-system-filter')?.value || 'all';
+  const query = new URLSearchParams({ limit: '500' });
+  if (system !== 'all') query.set('system', system);
+  let data;
+  try {
+    const response = await fetch(`/api/assistant-events?${query.toString()}`, { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  assistantData = data;
+  renderAssistant();
+}
+
+function renderAssistant() {
+  const events = Array.isArray(assistantData?.events) ? assistantData.events : [];
+  const traces = Array.isArray(assistantData?.traces) ? assistantData.traces : [];
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#assistant-total', formatTokenCount(events.length));
+  setText('#assistant-traces', formatTokenCount(traces.length));
+  setText('#assistant-systems', formatTokenCount(new Set(traces.map((trace) => trace.systemId)).size));
+  setText('#assistant-errors', formatTokenCount(events.filter((event) => event.status === 'failed' || event.event === 'error').length));
+
+  const filter = $('#assistant-system-filter');
+  if (filter) {
+    const current = filter.value;
+    const systems = [...new Set(traces.map((trace) => trace.systemId))].sort();
+    filter.innerHTML = `<option value="all">全部系统</option>${systems
+      .map((system) => `<option value="${esc(system)}">${esc(system)}</option>`)
+      .join('')}`;
+    filter.value = current === 'all' || systems.includes(current) ? current : 'all';
+  }
+  renderAssistantTraces();
+  renderAssistantDetail();
+}
+
+function renderAssistantTraces() {
+  const root = $('#assistant-traces');
+  if (!root) return;
+  const traces = Array.isArray(assistantData?.traces) ? assistantData.traces : [];
+  if (!traces.length) {
+    root.innerHTML = harborEmpty('messages-square', '暂无助手记录', '中台助手后端按协议上报后会显示在这里');
+    refreshIcons(root);
+    return;
+  }
+  const rows = traces.map((trace) => {
+    const selected = selectedAssistantTrace
+      && selectedAssistantTrace.traceId === trace.traceId
+      && selectedAssistantTrace.systemId === trace.systemId ? ' selected' : '';
+    return `<button class="harbor-row borrow-row${selected}" type="button" data-assistant-trace="${esc(trace.traceId)}" data-assistant-system="${esc(trace.systemId)}">
+      <span class="mono" title="${esc(trace.traceId)}">${esc(trace.traceId.slice(0, 24))}</span>
+      <span>${esc(trace.systemId)}</span>
+      <span class="num">${formatTokenCount(trace.count)}</span>
+      <span class="num">${borrowTime(trace.lastAt)}</span>
+      <span>${esc(trace.lastSummary || '—')}</span>
+      <span>${trace.hasError ? '<b class="status-pill danger">有错误</b>' : '<b class="status-pill ok">正常</b>'}</span>
+    </button>`;
+  }).join('');
+  root.innerHTML = `<div class="harbor-table assistant-trace-table">
+    <div class="harbor-row harbor-head"><span>会话</span><span>系统</span><span class="num">事件数</span><span class="num">最近时间</span><span>最近摘要</span><span>状态</span></div>
+    ${rows}
+  </div>`;
+  refreshIcons(root);
+}
+
+function renderAssistantDetail() {
+  const root = $('#assistant-detail');
+  if (!root) return;
+  const traceLabel = $('#assistant-trace-id');
+  if (!selectedAssistantTrace) {
+    if (traceLabel) traceLabel.textContent = '';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击上方会话查看上报的时间线</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const { traceId, systemId } = selectedAssistantTrace;
+  if (traceLabel) traceLabel.textContent = `${systemId} · ${traceId}`;
+  const events = (assistantData?.events || []).filter((event) => event.traceId === traceId && event.systemId === systemId);
+  root.innerHTML = `<div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
+  refreshIcons(root);
+}
+
+function syncAssistantRefresh() {
+  window.clearInterval(assistantRefreshTimer);
+  assistantRefreshTimer = null;
+  if (currentView !== 'assistant' || els.app.classList.contains('hidden')) return;
+  assistantRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadAssistantEvents();
+  }, ASSISTANT_LIVE_REFRESH_MS);
+}
+
 
 let routeControlsWired = false;
 
@@ -1584,6 +1707,7 @@ const EXECUTION_EVENT_LABELS = {
   run_received: '收到任务', step_started: '步骤开始', step_completed: '步骤完成',
   tool_call: '工具调用', tool_result: '工具结果', model_call: '模型调用',
   error: '错误', note: '备注', run_summary: '任务总结',
+  conversation_started: '会话开始', message: '用户消息', assistant_reply: '助手回复', conversation_ended: '会话结束',
 };
 const runEventsCache = new Map();
 
@@ -1603,9 +1727,12 @@ function executionTimelineHtml(events) {
     const detail = event.detail
       ? `<details class="execution-step-detail"><summary>详情</summary><pre class="execution-data">${esc(JSON.stringify(event.detail, null, 2).slice(0, 4000))}</pre></details>`
       : '';
+    const usage = event.usage
+      ? `<small>模型 ${esc(event.usage.modelId || '—')} · 输入 ${formatTokenCount(event.usage.tokensIn)} / 输出 ${formatTokenCount(event.usage.tokensOut)} · ¥${formatUsageCost(event.usage.cost ?? 0)}</small>`
+      : '';
     return `<div class="execution-step">
       <span class="execution-step-time">${borrowTime(time)}</span>
-      <span class="execution-step-main"><strong>${esc(executionEventLabel(event.event))}${event.name ? ` · ${esc(event.name)}` : ''}</strong><small>${esc(event.summary || '')}</small>${detail}</span>
+      <span class="execution-step-main"><strong>${esc(executionEventLabel(event.event))}${event.name ? ` · ${esc(event.name)}` : ''}</strong><small>${esc(event.summary || '')}</small>${usage}${detail}</span>
       <span class="execution-step-meta"><b class="status-pill ${tone}">${label}</b><small>${esc(duration)}</small></span>
     </div>`;
   }).join('')}</div>`;

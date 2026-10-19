@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=borrow-cn-20261019" />
+  <link rel="stylesheet" href="/style.css?v=assistant-obs-20261019" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -135,6 +135,7 @@
           <span class="nav-label">执行面</span>
           <button class="nav-item" type="button" data-view="execution" data-title="执行面仪表盘"><i data-lucide="radio-tower"></i><span>执行面仪表盘</span></button>
           <button class="nav-item" type="button" data-view="borrow" data-title="跨系统借调"><i data-lucide="arrow-left-right"></i><span>跨系统借调</span></button>
+          <button class="nav-item" type="button" data-view="assistant" data-title="助手观测"><i data-lucide="messages-square"></i><span>助手观测</span></button>
         </div>
         <div class="nav-group">
           <span class="nav-label">治理与证据</span>
@@ -607,6 +608,35 @@
           </section>
         </section>
 
+        <section id="view-assistant" class="view app-view hidden">
+          <div class="page-head">
+            <div><span class="page-module">跨系统协作</span><h1>助手观测</h1><p>中台自有智能助手的调用记录（中台主动上报，只读）</p></div>
+            <div class="page-actions"><button id="btn-assistant-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
+          </div>
+
+          <div class="harbor-metrics usage-metrics">
+            <div><span>记录数</span><strong id="assistant-total">0</strong><small>已上报事件</small></div>
+            <div><span>会话数</span><strong id="assistant-traces">0</strong><small>按 traceId 归并</small></div>
+            <div><span>涉及系统</span><strong id="assistant-systems">0</strong><small>上报方</small></div>
+            <div><span>失败事件</span><strong id="assistant-errors">0</strong><small>需要关注</small></div>
+          </div>
+
+          <section class="surface">
+            <div class="surface-head">
+              <div><h2>会话</h2><p>点击一行查看该会话的时间线</p></div>
+              <select id="assistant-system-filter" class="borrow-filter" aria-label="筛选上报系统">
+                <option value="all">全部系统</option>
+              </select>
+            </div>
+            <div id="assistant-traces" class="usage-list"><div class="dashboard-loading">正在读取助手记录…</div></div>
+          </section>
+
+          <section class="surface">
+            <div class="surface-head"><div><h2>会话时间线</h2><p>消息、工具调用、模型调用与错误</p></div><span id="assistant-trace-id" class="mono subtle"></span></div>
+            <div id="assistant-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击上方会话查看上报的时间线</small></div></div>
+          </section>
+        </section>
+
         <section id="view-usage" class="view app-view hidden">
           <div class="page-head">
             <div><span class="page-module">AI 资源协作</span><h1>用量台账</h1><p>每次模型调用的 Token 与成本，按 Agent / 系统聚合</p></div>
@@ -825,6 +855,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=borrow-cn-20261019"></script>
+  <script type="module" src="/app.js?v=assistant-obs-20261019"></script>
 </body>
 </html>
