@@ -16,6 +16,7 @@ test('AI 观测导航与两个标签页存在', () => {
   assert.match(html, /id="ai-run-list"/);
   assert.match(html, /id="ai-run-detail"/);
   assert.match(html, /id="assistant-traces"/);
+  assert.match(html, /id="assistant-trace-select"/);
   assert.match(html, /id="assistant-status-filter"/);
   assert.match(html, /id="assistant-time-filter"/);
   assert.match(html, /id="assistant-search"/);
@@ -23,12 +24,13 @@ test('AI 观测导航与两个标签页存在', () => {
 });
 
 test('助手会话列表与详情重新设计', () => {
-  assert.match(app, /assistant-trace-item/);
+  assert.match(app, /assistant-trace-select/);
+  assert.match(app, /function renderAssistantSelector/);
   assert.match(app, /assistantTraceTitle/);
   assert.match(app, /assistantTraceDuration/);
   assert.match(app, /assistant-detail-line/);
   assert.match(app, /assistantFilters/);
-  assert.match(app, /用量未上报/);
+  assert.match(app, /未上报模型用量/);
   assert.match(html, /id="assistant-failures"/);
   assert.match(html, /id="assistant-failures-count"/);
   assert.match(app, /function renderAssistantFailures/);
@@ -63,7 +65,7 @@ test('Hub 派单任务复用执行步骤时间线', () => {
 test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);
-  assert.match(css, /\.assistant-trace-item/);
+  assert.match(css, /\.assistant-trace-select/);
   assert.match(css, /\.assistant-failure-item/);
-  assert.match(html, /ai-obs-scroll-20261019/);
+  assert.match(html, /ai-obs-selector-20261019/);
 });

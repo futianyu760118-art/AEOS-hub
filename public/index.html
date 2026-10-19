@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=ai-obs-scroll-20261019" />
+  <link rel="stylesheet" href="/style.css?v=ai-obs-selector-20261019" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -648,8 +648,7 @@
 
           <div id="ai-obs-assistants" class="ai-obs-panel hidden">
             <div class="harbor-metrics usage-metrics assistant-metrics">
-              <div><span>会话</span><strong id="assistant-traces">0</strong><small>按 traceId 归并</small></div>
-              <div><span>事件</span><strong id="assistant-total">0</strong><small>已上报</small></div>
+              <div><span>会话 / 事件</span><strong><b id="assistant-traces">0</b> / <b id="assistant-total">0</b></strong><small>按 traceId 归并 / 已上报</small></div>
             </div>
 
             <section id="assistant-failures-panel" class="surface assistant-failures hidden">
@@ -661,6 +660,9 @@
             </section>
 
             <div class="assistant-toolbar">
+              <select id="assistant-trace-select" class="borrow-filter assistant-trace-select" aria-label="选择会话">
+                <option value="">暂无会话</option>
+              </select>
               <select id="assistant-system-filter" class="borrow-filter" aria-label="筛选上报系统">
                 <option value="all">全部系统</option>
               </select>
@@ -679,17 +681,10 @@
               <span id="assistant-filter-count" class="assistant-filter-count"></span>
             </div>
 
-            <div class="assistant-layout">
-              <section class="surface assistant-list-panel">
-                <div class="surface-head"><div><h2>会话</h2><p>点击一行查看该会话的时间线</p></div></div>
-                <div id="assistant-traces" class="assistant-trace-list"><div class="dashboard-loading">正在读取助手记录…</div></div>
-              </section>
-
-              <section class="surface assistant-detail-panel">
-                <div class="surface-head"><div><h2>会话详情</h2><p>消息、工具调用、模型调用与错误</p></div><span id="assistant-trace-id" class="mono subtle"></span></div>
-                <div id="assistant-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击左侧会话查看上报的时间线</small></div></div>
-              </section>
-            </div>
+            <section class="surface assistant-detail-panel">
+              <div class="surface-head"><div><h2>会话详情</h2><p>消息、工具调用、模型调用与错误</p></div><span id="assistant-trace-id" class="mono subtle"></span></div>
+              <div id="assistant-detail" class="borrow-detail"><div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>使用上方下拉框选择会话</small></div></div>
+            </section>
           </div>
         </section>
 
@@ -911,6 +906,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=ai-obs-scroll-20261019"></script>
+  <script type="module" src="/app.js?v=ai-obs-selector-20261019"></script>
 </body>
 </html>

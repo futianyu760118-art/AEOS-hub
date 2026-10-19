@@ -1522,14 +1522,19 @@ function wireAssistantControls() {
     assistantFilters.search = String(event.target.value || '').trim().toLowerCase();
     renderAssistant();
   });
-  $('#assistant-traces')?.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-assistant-trace]');
-    const traceId = target?.getAttribute('data-assistant-trace');
-    const systemId = target?.getAttribute('data-assistant-system');
-    if (!traceId || !systemId) return;
-    selectedAssistantTrace = { traceId, systemId };
-    renderAssistantTraces();
-    renderAssistantDetail();
+  $('#assistant-trace-select')?.addEventListener('change', (event) => {
+    const raw = String(event.target.value || '');
+    const [encodedSystem, encodedTrace] = raw.split('|');
+    if (!encodedSystem || !encodedTrace) return;
+    try {
+      selectedAssistantTrace = {
+        systemId: decodeURIComponent(encodedSystem),
+        traceId: decodeURIComponent(encodedTrace),
+      };
+      renderAssistantDetail();
+    } catch {
+      // 忽略非法选项值。
+    }
   });
   $('#assistant-failures')?.addEventListener('click', (event) => {
     const target = event.target.closest('[data-failure-trace]');
@@ -1574,7 +1579,7 @@ async function loadAssistantEvents() {
 }
 
 function renderAssistantError(message) {
-  const root = $('#assistant-traces');
+  const root = $('#assistant-detail');
   if (!root) return;
   root.innerHTML = `<div class="harbor-empty"><i data-lucide="triangle-alert"></i><strong>读取助手记录失败</strong><small>${esc(message)}</small></div>`;
   refreshIcons(root);
@@ -1655,7 +1660,7 @@ function renderAssistant() {
     .sort((a, b) => String(b.endedAt || b.startedAt || b.receivedAt)
       .localeCompare(String(a.endedAt || a.startedAt || a.receivedAt)));
   renderAssistantFailures(failedEvents);
-  renderAssistantTraces();
+  renderAssistantSelector();
   renderAssistantDetail();
 }
 
@@ -1685,30 +1690,22 @@ function renderAssistantFailures(failedEvents) {
   refreshIcons(root);
 }
 
-function renderAssistantTraces() {
-  const root = $('#assistant-traces');
-  if (!root) return;
+function renderAssistantSelector() {
+  const select = $('#assistant-trace-select');
+  if (!select) return;
   if (!assistantFilteredTraces.length) {
-    root.innerHTML = harborEmpty('messages-square', '没有匹配的会话', '调整筛选条件，或等中台助手后端上报新事件');
-    refreshIcons(root);
+    select.innerHTML = '<option value="">暂无匹配会话</option>';
     return;
   }
-  const cards = assistantFilteredTraces.map((trace) => {
-    const selected = selectedAssistantTrace
-      && selectedAssistantTrace.traceId === trace.traceId
-      && selectedAssistantTrace.systemId === trace.systemId ? ' selected' : '';
-    const traceEvents = assistantTraceEvents(trace);
-    const hasModelCall = traceEvents.some((event) => event.event === 'model_call');
-    const hasReportedUsage = traceEvents.some((event) => event.usage
-      && ((event.usage.tokensIn || 0) > 0 || (event.usage.tokensOut || 0) > 0));
-    const usageNote = hasModelCall && !hasReportedUsage ? ' · 用量未上报' : '';
-    return `<button class="assistant-trace-item${selected}" type="button" data-assistant-trace="${esc(trace.traceId)}" data-assistant-system="${esc(trace.systemId)}">
-      <span class="assistant-trace-top"><strong>${esc(assistantTraceTitle(trace))}</strong>${trace.hasError ? '<b class="status-pill danger">有错误</b>' : '<b class="status-pill ok">正常</b>'}</span>
-      <span class="assistant-trace-meta">${esc(trace.systemId)} · ${formatTokenCount(trace.count)} 条事件 · 时长 ${esc(assistantTraceDuration(trace))} · ${borrowTime(trace.lastAt)}${usageNote}</span>
-    </button>`;
+  select.innerHTML = assistantFilteredTraces.map((trace) => {
+    const value = `${encodeURIComponent(trace.systemId)}|${encodeURIComponent(trace.traceId)}`;
+    const title = assistantTraceTitle(trace);
+    return `<option value="${value}">${esc(title)} · ${esc(trace.systemId)} · ${borrowTime(trace.lastAt)}</option>`;
   }).join('');
-  root.innerHTML = `<div class="assistant-trace-list-inner">${cards}</div>`;
-  refreshIcons(root);
+  if (selectedAssistantTrace) {
+    const selectedValue = `${encodeURIComponent(selectedAssistantTrace.systemId)}|${encodeURIComponent(selectedAssistantTrace.traceId)}`;
+    select.value = selectedValue;
+  }
 }
 
 function renderAssistantDetail() {
@@ -1717,7 +1714,7 @@ function renderAssistantDetail() {
   const traceLabel = $('#assistant-trace-id');
   if (!selectedAssistantTrace) {
     if (traceLabel) traceLabel.textContent = '';
-    root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>点击左侧会话查看上报的时间线</small></div>';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>使用上方下拉框选择会话</small></div>';
     refreshIcons(root);
     return;
   }
