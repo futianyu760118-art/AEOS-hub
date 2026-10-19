@@ -40,6 +40,7 @@ test('视图注册、两个标签页数据加载与轮询', () => {
   assert.match(app, /if \(view === 'ai-obs'\) loadAiObs\(\);/);
   assert.match(app, /function loadAiRuns\(\)/);
   assert.match(app, /function loadAssistantEvents\(\)/);
+  assert.match(app, /function renderAssistantError/);
   assert.match(app, /function syncAiObsRefresh\(\)/);
   assert.match(app, /\/api\/execution\/agents/);
   assert.match(app, /\/api\/borrow-orders/);
@@ -64,5 +65,5 @@ test('样式与版本号', () => {
   assert.match(css, /\.ai-run-table/);
   assert.match(css, /\.assistant-trace-item/);
   assert.match(css, /\.assistant-failure-item/);
-  assert.match(html, /ai-obs-detail-line-20261019/);
+  assert.match(html, /ai-obs-scroll-20261019/);
 });

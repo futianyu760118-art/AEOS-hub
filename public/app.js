@@ -1554,11 +1554,30 @@ async function loadAssistantEvents() {
   try {
     // 一次拉取后在本地过滤，保证系统下拉选项和筛选切换即时生效。
     const response = await fetch('/api/assistant-events?limit=1000', { headers: { accept: 'application/json' } });
-    if (!response.ok) return;
+    if (!response.ok) {
+      renderAssistantError(response.status === 401
+        ? '登录状态已失效，请刷新页面重新登录'
+        : `接口返回 HTTP ${response.status}，请点击刷新重试`);
+      return;
+    }
     data = await response.json();
-  } catch { return; }
+  } catch (error) {
+    renderAssistantError(`网络异常：${error?.message || error}`);
+    return;
+  }
   assistantData = data;
-  renderAssistant();
+  try {
+    renderAssistant();
+  } catch (error) {
+    renderAssistantError(`渲染失败：${error?.message || error}`);
+  }
+}
+
+function renderAssistantError(message) {
+  const root = $('#assistant-traces');
+  if (!root) return;
+  root.innerHTML = `<div class="harbor-empty"><i data-lucide="triangle-alert"></i><strong>读取助手记录失败</strong><small>${esc(message)}</small></div>`;
+  refreshIcons(root);
 }
 
 function assistantTraceEvents(trace) {
