@@ -951,7 +951,7 @@ function renderBorrowList() {
     return `<button class="harbor-row borrow-row${selected}" type="button" data-borrow-order="${esc(order.orderId)}">
       <span class="mono">${esc(order.orderId.slice(0, 18))}…</span>
       <span>${esc(order.fromSystem)} → ${esc(order.providerSystem || order.toSystem || '待解析')}</span>
-      <span>${esc(order.capability)}</span>
+      <span>${esc(borrowCapabilityLabel(order.capability))}</span>
       <span>${borrowStatusPill(order.status)}</span>
       <span class="num">${borrowTime(order.dispatchedAt)}</span>
       <span class="num">${borrowTime(order.endedAt)}</span>
@@ -992,16 +992,72 @@ const BORROW_FIELD_LABELS = {
   risk_probability: '风险概率', promised_date: '承诺交期', delivery_completed_date: '完成日期',
   planned_start_date: '计划开始', owner: '责任人', updated_at: '更新时间',
   path: '查询路径', params: '查询参数', keyword: '关键字', message: '说明', summary: '摘要', conclusions: '结论',
+  items: '数据明细', total: '总条数', page: '页码', page_size: '每页条数', data_as_of: '数据时间',
+  data_confidence: '数据置信度', stale: '数据是否过期', request_id: '中台请求号',
+  material_code: '物料编码', material_name: '物料名称', on_hand_qty: '在库数量', locked_qty: '锁定数量',
+  available_qty: '可用数量', qty_in_transit: '在途数量', supplier_code: '供应商编码', supplier_name: '供应商名称',
+  demand_no: '需求单号', shortage_qty: '缺口数量', work_order_no: '工单号', issue_no: '异常单号',
+  defect_type: '缺陷类型', report_qty: '报工数量', capacity_qty: '产能数量', line_name: '产线',
 };
+
+// 结果表格优先展示的字段顺序：先业务关键信息，再技术字段。
+const BORROW_PREFERRED_COLUMNS = [
+  'order_no', 'customer', 'product_name', 'material_code', 'material_name', 'supplier_name',
+  'order_qty', 'completed_qty', 'order_amount', 'shortage_qty', 'available_qty', 'on_hand_qty',
+  'status', 'risk_level', 'risk_probability', 'promised_date', 'delivery_completed_date',
+  'work_order_no', 'issue_no', 'owner', 'updated_at', 'id',
+];
+
+const BORROW_CAPABILITY_LABELS = {
+  query_control_platform: '中台只读查询',
+  reason_control_platform: '中台推理分析',
+  query_plm: 'PLM 查询',
+  query_local_files: '本地文件查询',
+  reason_plm: 'PLM 推理分析',
+};
+
+const BORROW_RESULT_STATUS_LABELS = {
+  completed: '已完成', in_progress: '进行中', pending_review: '待评审', partially_closed: '部分关闭',
+  cancelled: '已取消', pending: '待处理', closed: '已关闭', failed: '失败',
+};
+
+const BORROW_DATA_CONFIDENCE_LABELS = { high: '高', medium: '中', low: '低' };
+const BORROW_RISK_LEVEL_LABELS = { red: '高', yellow: '中', green: '低', blue: '蓝（未分档）' };
 
 function borrowFieldLabel(key) {
   return BORROW_FIELD_LABELS[key] || key;
 }
 
-function borrowCell(value) {
+function borrowCapabilityLabel(capability) {
+  return BORROW_CAPABILITY_LABELS[capability] || capability || '—';
+}
+
+function formatDateTimeText(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function borrowCell(key, value) {
   if (value === null || value === undefined || value === '') return '—';
+  if (key === 'status') return BORROW_RESULT_STATUS_LABELS[value] || String(value);
+  if (key === 'data_confidence') return BORROW_DATA_CONFIDENCE_LABELS[value] || String(value);
+  if (key === 'risk_level') return BORROW_RISK_LEVEL_LABELS[value] || String(value);
+  if (key === 'stale') return value === true ? '是' : value === false ? '否' : String(value);
+  if (key === 'risk_probability' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`;
+  if (key === 'order_amount' && typeof value === 'number') return value.toLocaleString('zh-CN');
+  if (typeof key === 'string' && (key.endsWith('_date') || key.endsWith('_at'))) return formatDateTimeText(value);
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
+}
+
+function renderBorrowInputValue(key, value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return `<span class="borrow-param-list">${Object.entries(value)
+      .map(([paramKey, paramValue]) => `<span>${esc(borrowFieldLabel(paramKey))}：${esc(borrowCell(paramKey, paramValue))}</span>`)
+      .join('')}</span>`;
+  }
+  return esc(borrowCell(key, value));
 }
 
 /** 把 { items: [{...}] } 形态的借调结果渲染成可读表格；其他形态回退到原始 JSON。 */
@@ -1010,17 +1066,23 @@ function renderBorrowResultTable(value) {
     ? value.items.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
     : [];
   if (!items.length) return '';
-  const keys = [];
+  const allKeys = [];
   for (const item of items.slice(0, 50)) {
-    for (const key of Object.keys(item)) if (!keys.includes(key)) keys.push(key);
+    for (const key of Object.keys(item)) if (!allKeys.includes(key)) allKeys.push(key);
   }
-  const cols = keys.slice(0, 8);
+  const cols = [
+    ...BORROW_PREFERRED_COLUMNS.filter((key) => allKeys.includes(key)),
+    ...allKeys.filter((key) => !BORROW_PREFERRED_COLUMNS.includes(key)),
+  ].slice(0, 8);
   if (!cols.length) return '';
   const head = cols.map((key) => `<span>${esc(borrowFieldLabel(key))}</span>`).join('');
   const rows = items.slice(0, 50).map((item) => `<div class="harbor-row">${cols
-    .map((key) => `<span title="${esc(borrowCell(item[key]))}">${esc(borrowCell(item[key]))}</span>`)
+    .map((key) => {
+      const text = borrowCell(key, item[key]);
+      return `<span title="${esc(text)}">${esc(text)}</span>`;
+    })
     .join('')}</div>`).join('');
-  const more = keys.length > cols.length || items.length > 50
+  const more = allKeys.length > cols.length || items.length > 50
     ? `<p class="form-hint">仅展示前 ${cols.length} 列 / ${Math.min(items.length, 50)} 行；完整内容见下方原始 JSON。</p>`
     : '';
   return `<div class="harbor-table borrow-result-table" style="--borrow-cols:${cols.length}"><div class="harbor-row harbor-head">${head}</div>${rows}</div>${more}`;
@@ -1049,19 +1111,28 @@ function renderBorrowDetail() {
     : null;
   const inputBlock = inputEntries && inputEntries.length
     ? `<div class="borrow-detail-block"><h3>输入</h3><div class="borrow-detail-grid">${inputEntries
-      .map(([key, value]) => `<div><span>${esc(borrowFieldLabel(key))}</span><strong>${esc(borrowCell(value))}</strong></div>`)
+      .map(([key, value]) => `<div><span>${esc(borrowFieldLabel(key))}</span><strong>${renderBorrowInputValue(key, value)}</strong></div>`)
       .join('')}</div></div>`
     : `<div class="borrow-detail-block"><h3>输入</h3><pre class="borrow-json">${json(order.input)}</pre></div>`;
+  const resultObject = order.result && typeof order.result === 'object' && !Array.isArray(order.result) ? order.result : null;
+  const resultMetaKeys = resultObject
+    ? ['total', 'page', 'page_size', 'data_as_of', 'data_confidence', 'stale', 'request_id'].filter((key) => resultObject[key] !== undefined)
+    : [];
+  const resultMeta = resultMetaKeys.length
+    ? `<div class="borrow-detail-grid borrow-result-meta">${resultMetaKeys
+      .map((key) => `<div><span>${esc(borrowFieldLabel(key))}</span><strong>${esc(borrowCell(key, resultObject[key]))}</strong></div>`)
+      .join('')}</div>`
+    : '';
   const resultTable = renderBorrowResultTable(order.result);
   const resultBlock = resultTable
-    ? `<div class="borrow-detail-block"><h3>结果</h3>${resultTable}<details class="borrow-raw"><summary>原始 JSON</summary><pre class="borrow-json">${json(order.result)}</pre></details></div>`
-    : `<div class="borrow-detail-block"><h3>结果</h3><pre class="borrow-json">${json(order.result)}</pre></div>`;
+    ? `<div class="borrow-detail-block"><h3>结果</h3>${resultMeta}${resultTable}<details class="borrow-raw"><summary>原始 JSON（技术排查用）</summary><pre class="borrow-json">${json(order.result)}</pre></details></div>`
+    : `<div class="borrow-detail-block"><h3>结果</h3>${resultMeta}<pre class="borrow-json">${json(order.result)}</pre></div>`;
   root.innerHTML = `<div class="borrow-detail-grid">
       <div><span>借调单</span><strong class="mono">${esc(order.orderId)}</strong></div>
       <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
       <div><span>发起方</span><strong>${esc(order.fromSystem)}${order.fromAgentId ? ` · ${esc(order.fromAgentId)}` : ''}</strong></div>
       <div><span>提供方</span><strong>${esc(order.providerSystem || '—')}${order.providerAgentId ? ` · ${esc(order.providerAgentId)}` : ''}</strong></div>
-      <div><span>能力</span><strong>${esc(order.capability)}</strong></div>
+      <div><span>能力</span><strong>${esc(borrowCapabilityLabel(order.capability))}<br/><small class="mono">${esc(order.capability)}</small></strong></div>
       <div><span>状态</span><strong>${borrowStatusPill(order.status)}</strong></div>
       <div><span>执行 run</span><strong class="mono">${esc(order.runId || '—')}</strong></div>
       <div><span>时间</span><strong>创建 ${borrowTime(order.createdAt)} · 结束 ${borrowTime(order.endedAt)}</strong></div>

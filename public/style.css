@@ -2445,3 +2445,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-step-detail summary { cursor: pointer; color: var(--text-3); font-size: 10px; }
 .execution-steps-body { padding: 6px 0; }
 .borrow-steps-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.borrow-param-list { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.borrow-param-list > span { font-size: 10px; color: var(--text-2); }
+.borrow-result-meta { margin-bottom: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-subtle); }

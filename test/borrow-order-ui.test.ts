@@ -24,6 +24,15 @@ test('详情可收起且结果表格化', () => {
   assert.match(app, /再次点击或点「收起」关闭/);
 });
 
+test('借调内容中文化：能力、结果状态、参数与摘要', () => {
+  assert.match(app, /BORROW_CAPABILITY_LABELS/);
+  assert.match(app, /query_control_platform: '中台只读查询'/);
+  assert.match(app, /BORROW_RESULT_STATUS_LABELS/);
+  assert.match(app, /function renderBorrowInputValue/);
+  assert.match(app, /数据置信度/);
+  assert.match(app, /原始 JSON（技术排查用）/);
+});
+
 test('视图注册与懒加载', () => {
   assert.match(app, /view: 'borrow', label: '跨系统借调'/);
   assert.match(app, /if \(view === 'borrow'\) loadBorrowOrders\(\);/);
