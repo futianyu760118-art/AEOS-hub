@@ -1558,7 +1558,6 @@ function renderAssistant() {
   const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
   setText('#assistant-total', formatTokenCount(events.length));
   setText('#assistant-traces', formatTokenCount(traces.length));
-  setText('#assistant-systems', formatTokenCount(new Set(traces.map((trace) => trace.systemId)).size));
   setText('#assistant-errors', formatTokenCount(events.filter((event) => event.status === 'failed' || event.event === 'error').length));
 
   const filter = $('#assistant-system-filter');
@@ -1602,7 +1601,6 @@ function renderAssistantTraces() {
     return `<button class="assistant-trace-item${selected}" type="button" data-assistant-trace="${esc(trace.traceId)}" data-assistant-system="${esc(trace.systemId)}">
       <span class="assistant-trace-top"><strong>${esc(assistantTraceTitle(trace))}</strong>${trace.hasError ? '<b class="status-pill danger">有错误</b>' : '<b class="status-pill ok">正常</b>'}</span>
       <span class="assistant-trace-meta">${esc(trace.systemId)} · ${formatTokenCount(trace.count)} 条事件 · 时长 ${esc(assistantTraceDuration(trace))} · ${borrowTime(trace.lastAt)}</span>
-      <span class="assistant-trace-summary">${esc(trace.lastSummary || '—')}</span>
     </button>`;
   }).join('');
   root.innerHTML = `<div class="assistant-trace-list-inner">${cards}</div>`;
@@ -1633,11 +1631,9 @@ function renderAssistantDetail() {
     : '未上报模型用量';
   root.innerHTML = `<div class="assistant-detail-summary">
       <div><span>系统</span><strong>${esc(systemId)}</strong></div>
-      <div><span>会话</span><strong class="mono">${esc(traceId)}</strong></div>
       <div><span>事件数</span><strong>${formatTokenCount(events.length)}</strong></div>
       <div><span>时长</span><strong>${esc(trace ? assistantTraceDuration(trace) : '—')}</strong></div>
-      <div><span>开始</span><strong>${borrowTime(trace?.firstAt)}</strong></div>
-      <div><span>最近</span><strong>${borrowTime(trace?.lastAt)}</strong></div>
+      <div><span>时间范围</span><strong>${borrowTime(trace?.firstAt)} → ${borrowTime(trace?.lastAt)}</strong></div>
       <div><span>模型用量</span><strong>${esc(usageLine)}</strong></div>
     </div>
     <div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;

@@ -58,5 +58,5 @@ test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);
   assert.match(css, /\.assistant-trace-item/);
-  assert.match(html, /ai-obs-ui-20261019/);
+  assert.match(html, /ai-obs-clean-20261019/);
 });
