@@ -1607,7 +1607,6 @@ function renderAssistant() {
   const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
   setText('#assistant-total', formatTokenCount(events.length));
   setText('#assistant-traces', formatTokenCount(traces.length));
-  setText('#assistant-errors', formatTokenCount(events.filter((event) => event.status === 'failed' || event.event === 'error').length));
 
   const filter = $('#assistant-system-filter');
   if (filter) {

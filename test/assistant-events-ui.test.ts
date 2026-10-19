@@ -64,5 +64,5 @@ test('样式与版本号', () => {
   assert.match(css, /\.ai-run-table/);
   assert.match(css, /\.assistant-trace-item/);
   assert.match(css, /\.assistant-failure-item/);
-  assert.match(html, /ai-obs-failures-20261019/);
+  assert.match(html, /ai-obs-one-failure-20261019/);
 });
