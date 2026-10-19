@@ -53,6 +53,11 @@ $env:M01_AUDIENCE = 'aeos-hub-web'
 $env:AEOS_M01_ALLOWED_ROLES = 'manager,supervisor,operator,owner,analyst'
 $env:EXECUTION_PLANE_TOKEN = $settings['EXECUTION_PLANE_TOKEN']
 
+# 可选：企业微信群机器人告警 webhook。未配置时告警只写页面与日志。
+if ($settings.ContainsKey('WECOM_ALERT_WEBHOOK') -and -not [string]::IsNullOrWhiteSpace($settings['WECOM_ALERT_WEBHOOK'])) {
+  $env:WECOM_ALERT_WEBHOOK = $settings['WECOM_ALERT_WEBHOOK']
+}
+
 # Personnel administration is fail-closed: it is enabled only when the feature
 # flag is on and a non-sentinel service-client secret is present in the ignored
 # runtime .env. The secret is never written to the process command line or logs.

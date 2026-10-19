@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { hubRoot, readConfig } from './hub-config.ts';
 import { type QueryIntent } from './execution-intent-types.ts';
+import { recordModelCall } from './model-observability.ts';
 
 export type IntentDecision =
   | { kind: 'query'; path: string; params: Record<string, string | number> }
@@ -171,7 +172,11 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
       }),
       signal: controller.signal,
     });
-    if (!response.ok) return { error: `模型接口返回 ${response.status}` };
+    if (!response.ok) {
+      recordModelCall({ ok: false, status: response.status, kind: 'http', model });
+      return { error: `模型接口返回 ${response.status}` };
+    }
+    recordModelCall({ ok: true, status: response.status, kind: 'success', model });
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: unknown } }>;
       usage?: {
@@ -196,7 +201,11 @@ export async function parseIntentWithLLM(text: string, deps: IntentParseDeps = {
     if (typeof content !== 'string' || !content.trim()) return { error: '模型未返回有效内容' };
     return toDecision(extractJson(content), deps.intent);
   } catch (error) {
-    if ((error as Error).name === 'AbortError') return { error: '意图解析超时' };
+    if ((error as Error).name === 'AbortError') {
+      recordModelCall({ ok: false, status: null, kind: 'timeout', model });
+      return { error: '意图解析超时' };
+    }
+    recordModelCall({ ok: false, status: null, kind: 'network', model });
     return { error: `意图解析失败：${(error as Error).message}` };
   } finally {
     clearTimeout(timer);

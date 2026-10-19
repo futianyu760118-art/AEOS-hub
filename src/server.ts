@@ -3,6 +3,7 @@
 // 启动: npm run web   →   http://127.0.0.1:8787
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,6 +88,8 @@ import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
 import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
 import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.ts';
 import { BorrowOrderApi } from './borrow-order-api.ts';
+import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
+import { OpsMonitor } from './ops-monitor.ts';
 import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
@@ -225,7 +228,66 @@ try {
 } catch (error) {
   console.warn('[borrow-order] 启动对账失败:', (error as Error).message);
 }
+// ---------- 运行监控与告警（页面 + 日志；企微渠道配置 webhook 后自动启用） ----------
+const alertCenter = new AlertCenter({
+  channels: [new LogAlertChannel(), new WeComAlertChannel()],
+});
+const opsMonitor = new OpsMonitor({
+  alertCenter,
+  executionPlane,
+  listBorrowOrders: () => borrowOrderStore.load().orders,
+  checkKeycloak,
+  checkMcp,
+  backupLogFile: process.env.AEOS_BACKUP_LOG?.trim() || 'G:\\PyCharm\\data\\aeos-hub-backup\\backup.log',
+  diskPaths: ['G:\\', 'C:\\'],
+});
+setTimeout(() => {
+  void opsMonitor.runOnce().catch((error) => console.warn('[ops] 首次检查失败:', (error as Error).message));
+}, 5_000);
+setInterval(() => {
+  void opsMonitor.runOnce().catch((error) => console.warn('[ops] 检查失败:', (error as Error).message));
+}, 60_000);
 setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
+
+const companyControlPython = process.platform === 'win32'
+  ? join(root, '.venv', 'Scripts', 'python.exe')
+  : join(root, '.venv', 'bin', 'python');
+const companyControlDir = join(root, 'mcp-company-control');
+const companyControlQuery = join(root, 'scripts', 'company-control-query.py');
+
+/** 登录服务检查：M01 模式下探测 OIDC 发现端点；本地模式跳过。 */
+async function checkKeycloak(): Promise<'ok' | 'fail' | 'skip'> {
+  const issuer = process.env.M01_ISSUER?.trim();
+  if (!issuer) return 'skip';
+  try {
+    const response = await fetch(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    return response.ok ? 'ok' : 'fail';
+  } catch {
+    return 'fail';
+  }
+}
+
+/** 中台接口检查：复用执行面同一份只读 ping 辅助脚本。 */
+function checkMcp(): Promise<'ok' | 'fail' | 'skip'> {
+  if (!existsSync(companyControlPython) || !existsSync(companyControlQuery)) return Promise.resolve('skip');
+  return new Promise((resolve) => {
+    execFile(companyControlPython, [companyControlQuery, '/common/ping', '{}'], {
+      cwd: companyControlDir,
+      timeout: 15_000,
+      windowsHide: true,
+    }, (error, stdout) => {
+      if (error) return resolve('fail');
+      try {
+        const parsed = JSON.parse(String(stdout).trim()) as { ok?: unknown };
+        return resolve(parsed.ok === true ? 'ok' : 'fail');
+      } catch {
+        return resolve('fail');
+      }
+    });
+  });
+}
 
 // 执行面心跳 → Harbor runtime 健康（节流：状态变化立即写，否则每 agent 最多 30s 写一次）。
 function syncExecutionHealth(): void {
@@ -2027,6 +2089,23 @@ const server = createServer(async (req, res) => {
     return;
   }
   // ---------- 用量台账只读 API（按 Agent/系统聚合 + 明细） ----------
+  // ---------- 运行监控只读 API（manager / supervisor） ----------
+  if (url.pathname === '/api/ops/status') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const roles = requestActorContext?.roles ?? [];
+    if (!roles.includes('manager') && !roles.includes('supervisor')) {
+      sendJson(res, 403, { error: 'forbidden' });
+      return;
+    }
+    const limit = boundedLimit(url.searchParams.get('limit'));
+    sendJson(res, 200, {
+      snapshot: opsMonitor.snapshot(),
+      alerts: alertCenter.list(limit),
+      alertCounts: alertCenter.counts(),
+      channels: { log: true, wecom: alertCenter.channelEnabled('wecom') },
+    });
+    return;
+  }
   // ---------- 跨系统借调只读监控（登录用户，只读） ----------
   if (url.pathname === '/api/borrow-orders') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }

@@ -1,0 +1,81 @@
+# 运行监控与告警（A2）
+
+> 落地日期：2026-10-19  
+> 页面入口：「运行监控」（仅 manager / supervisor 可见）  
+> 数据文件：`data/alerts.json`（告警快照）、`data/alerts.log`（文本日志）
+
+## 监控项与默认阈值
+
+| 检查项 | 正常条件 | 异常级别 |
+|---|---|---|
+| 登录服务（Keycloak） | OIDC 发现端点可用 | 严重 |
+| 中台接口（company-control） | `/common/ping` 成功 | 警告 |
+| 磁盘空间 | 剩余 ≥ 10 GB | <10 GB 警告；<2 GB 严重 |
+| 备份 | 最近 26 小时内有成功记录 | 失败：严重；过期/缺失：警告 |
+| 模型鉴权 | 最近 10 分钟无 401/403 | 严重 |
+| 模型限流 | 最近 5 分钟无 429 | 警告 |
+| 模型 5xx | 最近 5 分钟无 5xx | 警告 |
+| 模型调用错误 | 最近 5 分钟错误 <3 次 | 警告 |
+| 借调失败率 | 近 1 小时失败率 <50% | ≥50% 警告；≥80% 且 ≥5 单严重 |
+| 执行面离线 | 之前在线、现在离线 | 警告；全部离线：严重 |
+| Hub 内存 | RSS <1500 MB | 警告 |
+
+检查每 60 秒运行一次，页面每 15 秒刷新。
+
+## 告警生命周期
+
+- 同一 `key` 只保留一条未恢复告警；
+- 持续异常只更新"最近发生时间"，**10 分钟内不重复通知**；
+- 严重级别会向上合并（提示 → 警告 → 严重）；
+- 恢复正常后自动写入"已恢复"记录并通知一次；
+- 告警快照保存在 `data/alerts.json`，最多保留 500 条。
+
+## 渠道
+
+| 渠道 | 状态 | 说明 |
+|---|---|---|
+| 页面 | 已启用 | 「运行监控」页面的告警列表 |
+| 日志 | 已启用 | 控制台 + `data/alerts.log` |
+| 企业微信群机器人 | 预留，未启用 | 配置 `WECOM_ALERT_WEBHOOK` 后自动启用 |
+
+### 启用企微群机器人
+
+1. 在企微群添加"群机器人"，复制 webhook 地址；
+2. 在 `deploy/m01/.env` 增加：
+   ```
+   WECOM_ALERT_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...
+   ```
+3. 重启 Hub；
+4. 发送测试告警：
+   ```bash
+   node scripts/test-alert-channel.ts
+   ```
+5. 群里收到消息即表示通道可用。
+
+> webhook 是密钥：不要提交到 Git、不要打印到日志。当前 `deploy/m01/.env` 已在忽略列表内。
+
+## HTTP API
+
+`GET /api/ops/status?limit=50`（manager / supervisor）
+
+返回：
+
+```json
+{
+  "snapshot": {
+    "checkedAt": "...",
+    "checks": [{ "key": "disk:G:\\", "component": "磁盘", "ok": true, "severity": "info", "title": "...", "message": "...", "action": null }],
+    "metrics": { "agentsOnline": 2, "agentsTotal": 2, "backup": { "status": "ok", "lastAt": "..." }, "borrow": { "endedInWindow": 3, "failedInWindow": 0, "active": 0 }, "model": { "...": "..." } }
+  },
+  "alerts": [],
+  "alertCounts": { "active": 0, "critical": 0, "warn": 0, "info": 0, "recovered": 0, "total": 0 },
+  "channels": { "log": true, "wecom": false }
+}
+```
+
+## 已知限制
+
+- 监控运行在 Hub 进程内：**Hub 整体挂掉时，页面和日志都无法告警**；外部存活监控需要单独的看门狗（后续可加）。
+- 模型错误目前只统计 Hub 自身的 DeepSeek 调用（意图解析）；Codex 智能体内部的模型错误后续可接入。
+- 借调失败率按近 1 小时已结束的借调单计算，样本少时不会触发。
+- 法定节假日不影响监控。

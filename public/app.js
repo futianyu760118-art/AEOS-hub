@@ -227,6 +227,8 @@ let executionRefreshTimer = null;
 const EXECUTION_LIVE_REFRESH_MS = 2_000;
 let borrowRefreshTimer = null;
 const BORROW_LIVE_REFRESH_MS = 5_000;
+let opsRefreshTimer = null;
+const OPS_LIVE_REFRESH_MS = 15_000;
 let pendingRiskAgentDispatch = null;
 const riskAgentDispatches = new Map();
 // 不同 Agent / 不同会话允许并行；同一会话仍由服务端串行，避免上下文交叉。
@@ -287,6 +289,7 @@ const commands = [
   { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
   { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
   { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
+  { view: 'ops', label: '运行监控', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
 ];
 
@@ -643,6 +646,8 @@ async function logout() {
   dashboardLiveRefreshTimer = null;
   window.clearInterval(borrowRefreshTimer);
   borrowRefreshTimer = null;
+  window.clearInterval(opsRefreshTimer);
+  opsRefreshTimer = null;
   history.replaceState(null, '', location.pathname);
   window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 
@@ -701,10 +706,12 @@ function showView(view, options = {}) {
   if (view === 'execution') loadExecution();
   if (view === 'usage') loadUsage();
   if (view === 'borrow') loadBorrowOrders();
+  if (view === 'ops') loadOps();
   if (view === 'route') loadRoute();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
   syncBorrowRefresh();
+  syncOpsRefresh();
 }
 
 function syncDashboardLiveRefresh() {
@@ -1073,6 +1080,121 @@ function syncBorrowRefresh() {
   borrowRefreshTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') loadBorrowOrders({ silent: true });
   }, BORROW_LIVE_REFRESH_MS);
+}
+
+// ---------- 运行监控（只读） ----------
+let opsData = null;
+let opsControlsWired = false;
+
+function wireOpsControls() {
+  if (opsControlsWired) return;
+  opsControlsWired = true;
+  $('#btn-ops-refresh')?.addEventListener('click', () => loadOps());
+}
+
+async function loadOps() {
+  wireOpsControls();
+  let data;
+  try {
+    const response = await fetch('/api/ops/status?limit=50', { headers: { accept: 'application/json' } });
+    if (response.status === 403) {
+      renderOpsForbidden();
+      return;
+    }
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  opsData = data;
+  renderOps();
+}
+
+function renderOpsForbidden() {
+  const message = '<div class="harbor-empty"><i data-lucide="shield-alert"></i><strong>无权查看运行监控</strong><small>仅 manager / supervisor 角色可见</small></div>';
+  for (const selector of ['#ops-checks', '#ops-alerts']) {
+    const root = $(selector);
+    if (root) { root.innerHTML = message; refreshIcons(root); }
+  }
+}
+
+function opsSeverityPill(severity) {
+  const map = { critical: ['danger', '严重'], warn: ['warn', '警告'], info: ['info', '提示'] };
+  const [tone, label] = map[severity] || ['neutral', severity];
+  return `<b class="status-pill ${tone}">${esc(label)}</b>`;
+}
+
+function renderOps() {
+  const snapshot = opsData?.snapshot;
+  const metrics = snapshot?.metrics;
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+
+  setText('#ops-agents', `${formatTokenCount(metrics?.agentsOnline ?? 0)}/${formatTokenCount(metrics?.agentsTotal ?? 0)}`);
+  const alerts = Array.isArray(opsData?.alerts) ? opsData.alerts : [];
+  const authAlert = alerts.some((alert) => alert.key === 'model:auth' && alert.status === 'active');
+  const modelErrors = metrics?.model?.errorsInWindow ?? 0;
+  setText('#ops-model', authAlert ? '密钥异常' : modelErrors > 0 ? `波动 ${modelErrors} 次` : '正常');
+
+  const ended = metrics?.borrow?.endedInWindow ?? 0;
+  const failed = metrics?.borrow?.failedInWindow ?? 0;
+  setText('#ops-borrow', `${formatTokenCount(Math.max(0, ended - failed))} / ${formatTokenCount(failed)}`);
+
+  const backup = metrics?.backup;
+  const backupLabel = !backup ? '未知'
+    : backup.status === 'ok' ? `成功 ${backup.lastAt ? borrowTime(backup.lastAt) : ''}`
+      : backup.status === 'failed' ? '失败'
+        : backup.status === 'stale' ? '已过期' : '未运行';
+  setText('#ops-backup', backupLabel);
+
+  const checked = $('#ops-checked-at');
+  if (checked) checked.textContent = snapshot?.checkedAt ? `检查于 ${borrowTime(snapshot.checkedAt)}` : '';
+
+  const checks = Array.isArray(snapshot?.checks) ? snapshot.checks : [];
+  const checksRoot = $('#ops-checks');
+  if (checksRoot) {
+    checksRoot.innerHTML = checks.length
+      ? `<div class="harbor-table ops-check-table">
+          <div class="harbor-row harbor-head"><span>组件</span><span>检查项</span><span>详情</span><span>状态</span></div>
+          ${checks.map((check) => `<div class="harbor-row">
+            <span>${esc(check.component)}</span>
+            <span>${esc(check.title)}</span>
+            <span>${esc(check.message)}</span>
+            <span>${check.ok ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(check.severity)}</span>
+          </div>`).join('')}
+        </div>`
+      : harborEmpty('activity', '暂无检查结果', '监控每 60 秒运行一次');
+    refreshIcons(checksRoot);
+  }
+
+  const counts = opsData?.alertCounts;
+  const countEl = $('#ops-alert-count');
+  if (countEl) {
+    countEl.textContent = `${formatTokenCount(counts?.active ?? 0)} 条未恢复`;
+    countEl.className = `status-pill ${counts?.critical ? 'danger' : counts?.warn ? 'warn' : 'ok'}`;
+  }
+  const alertsRoot = $('#ops-alerts');
+  if (alertsRoot) {
+    alertsRoot.innerHTML = alerts.length
+      ? `<div class="harbor-table ops-alert-table">
+          <div class="harbor-row harbor-head"><span>时间</span><span>级别</span><span>组件 / 标题</span><span>详情</span><span>状态</span></div>
+          ${alerts.map((alert) => `<div class="harbor-row">
+            <span class="num">${borrowTime(alert.lastSeenAt)}</span>
+            <span>${opsSeverityPill(alert.severity)}</span>
+            <span><strong>${esc(alert.component)}</strong><br/><small>${esc(alert.title)}</small></span>
+            <span>${esc(alert.message)}${alert.action ? `<br/><small>建议：${esc(alert.action)}</small>` : ''}</span>
+            <span>${alert.status === 'active' ? '<b class="status-pill danger">未恢复</b>' : '<b class="status-pill ok">已恢复</b>'}</span>
+          </div>`).join('')}
+        </div>`
+      : harborEmpty('shield-check', '暂无告警', '当前没有需要处理的问题');
+    refreshIcons(alertsRoot);
+  }
+}
+
+function syncOpsRefresh() {
+  window.clearInterval(opsRefreshTimer);
+  opsRefreshTimer = null;
+  if (currentView !== 'ops' || els.app.classList.contains('hidden')) return;
+  opsRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadOps();
+  }, OPS_LIVE_REFRESH_MS);
 }
 
 

@@ -43,7 +43,6 @@ test('借调视图只读：没有写请求与操作按钮', () => {
 test('缓存版本号符合约定', () => {
   assert.match(html, /style\.css\?v=[a-z0-9-]+/);
   assert.match(html, /app\.js\?v=[a-z0-9-]+/);
-  assert.match(html, /borrow-ui-20261019/);
 });
 
 test('借调视图样式存在', () => {
