@@ -101,6 +101,16 @@ const SEED_PROFILES: ModelProfile[] = [
   }),
   // 仅用于外部系统（如中台助手）的用量计价，不参与 Hub 默认路由。
   ModelProfileSchema.parse({
+    id: 'deepseek-v4-flash',
+    ...FLASH_PRICING,
+    tier: 'heavy',
+    effort: 'high',
+    latencyMs: 6_000,
+    routable: false,
+    description: 'DeepSeek V4.1-Flash 旧模型名别名，仅用于外部系统用量计价（官方推荐使用 deepseek-flash）',
+  }),
+  // 仅用于外部系统（如中台助手）的用量计价，不参与 Hub 默认路由。
+  ModelProfileSchema.parse({
     id: 'deepseek-v4-pro',
     provider: 'deepseek',
     modelName: 'deepseek-v4-pro',
