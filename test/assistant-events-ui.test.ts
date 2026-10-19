@@ -26,7 +26,7 @@ test('助手会话列表与详情重新设计', () => {
   assert.match(app, /assistant-trace-item/);
   assert.match(app, /assistantTraceTitle/);
   assert.match(app, /assistantTraceDuration/);
-  assert.match(app, /assistant-detail-summary/);
+  assert.match(app, /assistant-detail-line/);
   assert.match(app, /assistantFilters/);
   assert.match(app, /用量未上报/);
   assert.match(html, /id="assistant-failures"/);
@@ -64,5 +64,5 @@ test('样式与版本号', () => {
   assert.match(css, /\.ai-run-table/);
   assert.match(css, /\.assistant-trace-item/);
   assert.match(css, /\.assistant-failure-item/);
-  assert.match(html, /ai-obs-one-failure-20261019/);
+  assert.match(html, /ai-obs-detail-line-20261019/);
 });

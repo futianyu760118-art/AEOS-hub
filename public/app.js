@@ -1716,12 +1716,9 @@ function renderAssistantDetail() {
   const usageLine = usageEvents.length
     ? `输入 ${formatTokenCount(tokensIn)} / 输出 ${formatTokenCount(tokensOut)} / ¥${formatUsageCost(cost)}`
     : (hasModelCall ? '未上报模型用量（需中台回传 Token）' : '未上报模型用量');
-  root.innerHTML = `<div class="assistant-detail-summary">
-      <div><span>系统</span><strong>${esc(systemId)}</strong></div>
-      <div><span>事件数</span><strong>${formatTokenCount(events.length)}</strong></div>
-      <div><span>时长</span><strong>${esc(trace ? assistantTraceDuration(trace) : '—')}</strong></div>
-      <div><span>时间范围</span><strong>${borrowTime(trace?.firstAt)} → ${borrowTime(trace?.lastAt)}</strong></div>
-      <div><span>模型用量</span><strong>${esc(usageLine)}</strong></div>
+  root.innerHTML = `<div class="assistant-detail-line">
+      <span>时间范围：${borrowTime(trace?.firstAt)} → ${borrowTime(trace?.lastAt)}</span>
+      <span>模型用量：${esc(usageLine)}</span>
     </div>
     <div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
   refreshIcons(root);

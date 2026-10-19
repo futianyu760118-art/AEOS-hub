@@ -2481,3 +2481,4 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .assistant-failure-item strong { font-size: 11px; }
 .assistant-failure-item small { color: var(--text-3); font-size: 10px; }
 .assistant-failure-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.assistant-detail-line { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 6px 0 10px; border-bottom: 1px solid var(--line-subtle); margin-bottom: 8px; color: var(--text-2); font-size: 10px; }
