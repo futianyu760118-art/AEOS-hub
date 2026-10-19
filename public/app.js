@@ -1531,6 +1531,21 @@ function wireAssistantControls() {
     renderAssistantTraces();
     renderAssistantDetail();
   });
+  $('#assistant-failures')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-failure-trace]');
+    const traceId = target?.getAttribute('data-failure-trace');
+    const systemId = target?.getAttribute('data-failure-system');
+    if (!traceId || !systemId) return;
+    // 清掉可能隐藏该会话的筛选，再定位到详情。
+    assistantFilters = { system: 'all', status: 'all', time: 'all', search: '' };
+    const systemFilter = $('#assistant-system-filter'); if (systemFilter) systemFilter.value = 'all';
+    const statusFilter = $('#assistant-status-filter'); if (statusFilter) statusFilter.value = 'all';
+    const timeFilter = $('#assistant-time-filter'); if (timeFilter) timeFilter.value = 'all';
+    const search = $('#assistant-search'); if (search) search.value = '';
+    selectedAssistantTrace = { traceId, systemId };
+    renderAssistant();
+    $('#assistant-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 async function loadAssistantEvents() {
@@ -1616,8 +1631,40 @@ function renderAssistant() {
     const first = assistantFilteredTraces[0];
     selectedAssistantTrace = { traceId: first.traceId, systemId: first.systemId };
   }
+  const failedEvents = events
+    .filter((event) => (assistantFilters.system === 'all' || event.systemId === assistantFilters.system)
+      && (event.status === 'failed' || event.event === 'error'))
+    .sort((a, b) => String(b.endedAt || b.startedAt || b.receivedAt)
+      .localeCompare(String(a.endedAt || a.startedAt || a.receivedAt)));
+  renderAssistantFailures(failedEvents);
   renderAssistantTraces();
   renderAssistantDetail();
+}
+
+function renderAssistantFailures(failedEvents) {
+  const panel = $('#assistant-failures-panel');
+  const root = $('#assistant-failures');
+  const count = $('#assistant-failures-count');
+  if (!panel || !root) return;
+  if (!failedEvents.length) {
+    panel.classList.add('hidden');
+    if (count) count.textContent = '0';
+    root.innerHTML = '';
+    return;
+  }
+  panel.classList.remove('hidden');
+  if (count) count.textContent = `${failedEvents.length} 条`;
+  root.innerHTML = failedEvents.slice(0, 50).map((event) => {
+    const trace = (assistantData?.traces || []).find((item) => item.traceId === event.traceId && item.systemId === event.systemId);
+    const title = trace ? assistantTraceTitle(trace) : `会话 ${String(event.traceId).slice(0, 8)}`;
+    return `<button class="assistant-failure-item" type="button" data-failure-trace="${esc(event.traceId)}" data-failure-system="${esc(event.systemId)}">
+      <span class="num">${borrowTime(event.endedAt || event.startedAt || event.receivedAt)}</span>
+      <span>${esc(event.systemId)}</span>
+      <span><strong>${esc(event.name || executionEventLabel(event.event))}</strong><br/><small>${esc(event.summary || '—')}</small></span>
+      <span>${esc(title)}</span>
+    </button>`;
+  }).join('');
+  refreshIcons(root);
 }
 
 function renderAssistantTraces() {

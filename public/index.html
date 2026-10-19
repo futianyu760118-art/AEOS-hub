@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=usage-labels-20261019" />
+  <link rel="stylesheet" href="/style.css?v=ai-obs-failures-20261019" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -653,6 +653,14 @@
               <div><span>失败事件</span><strong id="assistant-errors">0</strong><small>需要关注</small></div>
             </div>
 
+            <section id="assistant-failures-panel" class="surface assistant-failures hidden">
+              <div class="surface-head">
+                <div><h2>失败事件</h2><p>需要关注的错误与异常；点击可定位到对应会话</p></div>
+                <span id="assistant-failures-count" class="status-pill danger">0</span>
+              </div>
+              <div id="assistant-failures" class="assistant-failure-list"></div>
+            </section>
+
             <div class="assistant-toolbar">
               <select id="assistant-system-filter" class="borrow-filter" aria-label="筛选上报系统">
                 <option value="all">全部系统</option>
@@ -904,6 +912,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=usage-labels-20261019"></script>
+  <script type="module" src="/app.js?v=ai-obs-failures-20261019"></script>
 </body>
 </html>
