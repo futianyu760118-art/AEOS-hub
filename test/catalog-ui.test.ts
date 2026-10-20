@@ -25,6 +25,9 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   assert.match(app, /data-catalog-domain-toggle="/);
   assert.match(app, /agent\.domainIds \|\| \[\]\)\.includes\(harborAgentFilter\.domain\)/);
   assert.match(app, /未登记港湾/);
+  assert.match(app, /name="systemId"/);
+  assert.match(app, /name="primaryDomainId"/);
+  assert.match(app, /name="domainIds"/);
 
   assert.match(css, /\.catalog-system\.is-expanded > \.catalog-system-body\s*\{\s*display:\s*flex/);
   assert.match(css, /\.catalog-domain\.is-expanded > \.catalog-domain-body\s*\{\s*display:\s*block/);

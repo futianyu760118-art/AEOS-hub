@@ -6339,6 +6339,9 @@ function openHarborModal(type) {
         <label><span>Agent 编码</span><input name="code" maxlength="80" pattern="[A-Za-z][A-Za-z0-9-]{1,79}" required placeholder="例如：erp-order-risk" /><small class="field-note">稳定标识；保存时会统一为小写，不能与已有 Agent 重复。</small></label>
         <label><span>Agent 类型</span><select name="type"><option value="master">系统主 Agent</option><option value="specialist" selected>专业 Agent</option><option value="tool">工具 Agent</option></select><small class="field-note">${agentTypeLabels.master}负责系统入口；专业与工具 Agent 只能归属对应上级。</small></label>
         <label><span>所属组织</span><input name="ownerOrg" maxlength="120" required placeholder="例如：供应链中心" /></label>
+        <label><span>归属系统</span><select name="systemId">${((catalogTree?.systems || []).filter((system) => !system.unregistered).map((system) => `<option value="${esc(system.id)}">${esc(system.name)}</option>`).join('')) || '<option value="aeos-hub">AEOS Hub</option>'}</select><small class="field-note">目录树第一层；决定这个 Agent 归属哪个系统。</small></label>
+        <label><span>主属业务域</span><select name="primaryDomainId">${Object.entries(CATALOG_DOMAIN_LABELS).map(([id, name]) => `<option value="${esc(id)}"${id === 'cross-domain' ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select><small class="field-note">目录树按主属域分组；跨域 Agent 选“跨域/中枢”。</small></label>
+        <label><span>服务业务域</span><input name="domainIds" placeholder="逗号分隔，例如：order,kitting" /><small class="field-note">派单与筛选按服务域匹配；留空时自动包含主属域。</small></label>
         <label><span>业务域</span><input name="domain" maxlength="120" required placeholder="例如：order-risk" /></label>
         <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" /></label>
         <label><span>模型</span><input name="model" maxlength="120" value="account-default" /></label>
@@ -6432,10 +6435,6 @@ function resizeComposer() {
 function doSend(sourceText) {
   const text = (sourceText || els.input.value).trim();
   if (!text) return;
-  if (chatScope.type === 'squad') {
-    toast('小队会话仅用于查看；请在 Agent 小队中选择具体 Agent 后发起会话', true);
-    return;
-  }
   if (curConvId && runningConversationIds.has(curConvId)) {
     toast('上一条仍在执行，请等待完成或先停止', true);
     return;
