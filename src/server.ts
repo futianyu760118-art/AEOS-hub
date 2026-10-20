@@ -2454,6 +2454,7 @@ const server = createServer(async (req, res) => {
         throw new Error('invalid actor filter');
       }
       sendJson(res, 200, await readRecentEvidence(limit, evidenceFile, {
+        tenantId: requestTenantId,
         ...(actorId ? { actorId } : {}),
         ...(requestedActorType ? { actorType: requestedActorType as 'human' | 'service' | 'agent' | 'system' } : {}),
       }));

@@ -116,6 +116,20 @@ test('normalizes a legacy JSONL entry while preserving its payload and identifie
   assert.match(recent.rows[0]?.payload_hash ?? '', /^[a-f0-9]{64}$/);
 });
 
+test('filters evidence rows by tenant', async (t) => {
+  const file = evidenceFile(t);
+  appendEvidence({ kind: 'app_event', tenant_id: 'tenant-a', correlation_id: 'corr-a', payload: { a: 1 } }, file);
+  appendEvidence({ kind: 'app_event', tenant_id: 'tenant-b', correlation_id: 'corr-b', payload: { b: 1 } }, file);
+
+  const a = await readRecentEvidence(10, file, { tenantId: 'tenant-a' });
+  assert.equal(a.rows.length, 1);
+  assert.equal(a.rows[0]?.tenant_id, 'tenant-a');
+  assert.equal(a.rows[0]?.correlation_id, 'corr-a');
+  const b = await readRecentEvidence(10, file, { tenantId: 'tenant-b' });
+  assert.equal(b.rows.length, 1);
+  assert.equal(b.rows[0]?.tenant_id, 'tenant-b');
+});
+
 test('skips a corrupt JSONL line without hiding a valid Evidence entry', async (t) => {
   const file = evidenceFile(t);
   const valid = {
