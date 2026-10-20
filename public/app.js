@@ -5,6 +5,7 @@ import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery
 import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
+import { isReasoningOnly, selectExecutionCapabilities } from './execution-agent-routing.js';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
@@ -1900,17 +1901,8 @@ function selectedAgentHasIntent() {
 
 function selectedAgentCapability(kind) {
   const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
-  const capabilities = Array.isArray(agent?.capabilities) ? agent.capabilities : [];
-  if (kind === 'query') {
-    return capabilities.find((cap) => cap.intent)?.name
-      || capabilities.find((cap) => typeof cap.name === 'string' && cap.name.startsWith('query'))?.name
-      || 'query_control_platform';
-  }
-  if (kind === 'reasoning') {
-    return capabilities.find((cap) => typeof cap.name === 'string' && cap.name.startsWith('reason'))?.name
-      || 'reason_control_platform';
-  }
-  return undefined;
+  const selection = selectExecutionCapabilities(agent?.capabilities);
+  return kind === 'query' ? selection.query : selection.reasoning;
 }
 
 function executionMessageBubble(role, text) {
@@ -1993,11 +1985,25 @@ async function sendExecutionQuery() {
 
   const queryCap = selectedAgentCapability('query');
   const reasonCap = selectedAgentCapability('reasoning');
+  const selection = { query: queryCap, reasoning: reasonCap };
+  if (!queryCap && !reasonCap) {
+    appendExecutionMessage('agent', '该 Agent 未声明可用的查询或推理能力，请先让执行面重新注册能力。', null);
+    return;
+  }
+  // 推理-only Agent：直接把原问题作为只读推理请求，不去调用不存在的查询能力。
+  if (isReasoningOnly(selection)) {
+    const parsedReasoning = parseExecutionReasoning(text);
+    const request = parsedReasoning && !parsedReasoning.error
+      ? parsedReasoning
+      : { prompt: text, task_type: 'operating_case_analysis', context: {}, constraints: { read_only: true, require_evidence: true } };
+    await dispatchExecution(selectedExecutionAgent, reasonCap, request, `正在推理：${describeExecutionReasoning(request)}…`);
+    return;
+  }
 
   // Agent 带查询语义（intent）→ 只用 LLM 解析；旧 Agent 无 intent → 回退本地正则（向后兼容）。
   if (selectedAgentHasIntent()) {
     const remote = await tryParseIntentRemote(text, selectedExecutionAgent);
-    if (remote?.kind === 'reasoning') {
+    if (remote?.kind === 'reasoning' && reasonCap) {
       await dispatchExecution(selectedExecutionAgent, reasonCap, remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
       return;
     }
@@ -2022,8 +2028,16 @@ async function sendExecutionQuery() {
   }
 
   const reasoning = parseExecutionReasoning(text);
-  if (reasoning && !reasoning.error) {
+  if (reasoning && !reasoning.error && reasonCap) {
     await dispatchExecution(selectedExecutionAgent, reasonCap, reasoning, `正在推理：${describeExecutionReasoning(reasoning)}…`);
+    return;
+  }
+  if (reasoning && !reasoning.error && !reasonCap) {
+    appendExecutionMessage('agent', '当前 Agent 只支持查询，不支持推理；请选择推理智能体或换一种查询说法。', null);
+    return;
+  }
+  if (!queryCap) {
+    appendExecutionMessage('agent', '当前 Agent 未声明查询能力，请使用“分析 / 评估 / 风险 / 建议”等推理表达。', null);
     return;
   }
 
