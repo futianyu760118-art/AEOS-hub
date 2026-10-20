@@ -47,6 +47,8 @@ export interface ExecutionAgentRecord {
   sourceSystemName: string | null;
   /** 身份来源：系统令牌 / legacy 根令牌 / 控制面声明 / 历史未知。 */
   authMode: ExecutionAgentAuthMode;
+  /** 本机模拟器注册的连接；不计入真实目录统计。 */
+  simulated: boolean;
   /** 软删除时间戳：系统自助注销后保留画像/用量台账，仅强制离线、不再派单。 */
   deregisteredAt?: string | null;
 }
@@ -278,6 +280,7 @@ export class ExecutionPlaneRegistry {
               authMode: record.authMode === 'system-token' || record.authMode === 'legacy-root' || record.authMode === 'control-plane'
                 ? record.authMode
                 : 'unknown',
+              simulated: record.simulated === true,
               connectionStatus: 'offline',
               runtimeStatus: 'idle',
               currentRunId: null,
@@ -343,7 +346,7 @@ export class ExecutionPlaneRegistry {
 
   // ---------- 执行面 → 管理面 ----------
   onRegister(
-    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown },
+    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown; simulated?: unknown },
     send: SendFn,
     identity?: ExecutionRegistrationIdentity,
   ): { agentId: string; heartbeatIntervalMs: number } {
@@ -377,6 +380,7 @@ export class ExecutionPlaneRegistry {
       sourceSystem,
       sourceSystemName: identity?.sourceSystemName ?? sourceSystem,
       authMode: identity?.authMode ?? 'legacy-root',
+      simulated: input.simulated === true,
       deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send });
@@ -583,6 +587,7 @@ export class ExecutionPlaneRegistry {
       sourceSystem: ownedSourceSystem,
       sourceSystemName: existing?.record.sourceSystemName ?? null,
       authMode: 'control-plane',
+      simulated: existing?.record.simulated ?? false,
       deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send: existing?.send ?? (() => {}) });

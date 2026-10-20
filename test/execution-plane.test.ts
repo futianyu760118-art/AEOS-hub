@@ -262,6 +262,21 @@ test('未提供认证上下文时保持 legacy 自报口径', (t) => {
   assert.equal(agent?.sourceSystemName, '公司中控平台');
 });
 
+test('模拟器注册被标记 simulated，供目录排除', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  h.registry.onRegister({
+    agentId: 'agent-simulated',
+    name: '模拟执行面',
+    version: '1.0.0',
+    sourceSystem: '公司中控平台',
+    simulated: true,
+    capabilities: [{ name: 'query_control_platform', description: '模拟查询', constraints: { readOnly: true } }],
+  }, () => {});
+  assert.equal(h.registry.list().agents.find((agent) => agent.agentId === 'agent-simulated')?.simulated, true);
+  assert.equal(h.registry.list().agents.find((agent) => agent.agentId === h.agentId)?.simulated, false);
+});
+
 test('失败回传：run_failed 记录错误', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);

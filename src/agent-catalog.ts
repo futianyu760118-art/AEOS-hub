@@ -216,16 +216,27 @@ function buildAgentUsage(rows: UsageByAgentRow[] | undefined): Map<string, Usage
   return new Map((rows ?? []).map((row) => [row.agentId, row]));
 }
 
-function usageForAgent(keys: Array<string | null | undefined>, lookup: Map<string, UsageByAgentRow>): CatalogUsageTotals | null {
+function usageForAgent(
+  keys: Array<string | null | undefined>,
+  lookup: Map<string, UsageByAgentRow>,
+  excluded: Set<string> = new Set(),
+): CatalogUsageTotals | null {
   const totals = emptyUsage();
   const seen = new Set<string>();
   for (const key of keys) {
-    if (!key || seen.has(key)) continue;
+    if (!key || seen.has(key) || excluded.has(key)) continue;
     seen.add(key);
     const row = lookup.get(key);
     if (row) addUsage(totals, row);
   }
   return totals.events > 0 ? totals : null;
+}
+
+function resolveRecordSystemId(record: ExecutionAgentRecord, systems: SystemRecord[]): string | null {
+  const system = systems.find((candidate) => candidate.systemId === record.systemId
+    || candidate.systemId === record.sourceSystem
+    || candidate.sourceSystemAliases.includes(record.sourceSystem));
+  return system?.systemId ?? null;
 }
 
 function buildSystemUsage(systems: SystemRecord[], rows: UsageBySystemRow[] | undefined): Map<string, CatalogUsageTotals> {
@@ -248,6 +259,27 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
   for (const record of sources.executionAgents) executionByExternalId.set(record.agentId, record);
   const agentUsage = buildAgentUsage(sources.usage?.byAgent);
   const systemUsage = buildSystemUsage(sources.systems, sources.usage?.bySystem);
+  const simulatedAgentIds = new Set(sources.executionAgents.filter((record) => record.simulated).map((record) => record.agentId));
+  // 模拟器产生的用量不计入真实系统统计。
+  const simulatedUsageBySystem = new Map<string, CatalogUsageTotals>();
+  for (const record of sources.executionAgents) {
+    if (!record.simulated) continue;
+    const row = agentUsage.get(record.agentId);
+    const systemId = resolveRecordSystemId(record, sources.systems);
+    if (!row || !systemId) continue;
+    const totals = simulatedUsageBySystem.get(systemId) ?? emptyUsage();
+    addUsage(totals, row);
+    simulatedUsageBySystem.set(systemId, totals);
+  }
+  for (const [systemId, simulated] of simulatedUsageBySystem) {
+    const totals = systemUsage.get(systemId);
+    if (!totals) continue;
+    totals.tokensIn = Math.max(0, totals.tokensIn - simulated.tokensIn);
+    totals.tokensOut = Math.max(0, totals.tokensOut - simulated.tokensOut);
+    totals.cost = Math.max(0, totals.cost - simulated.cost);
+    totals.events = Math.max(0, totals.events - simulated.events);
+    if (totals.events === 0) systemUsage.delete(systemId);
+  }
 
   const claimedExecution = new Set<string>();
   const nodesBySystem = new Map<string, CatalogAgentNode[]>();
@@ -261,24 +293,23 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
     const execution = (agent.externalAgentId ? executionByExternalId.get(agent.externalAgentId) : undefined)
       ?? (agent.runtimeId ? executionByExternalId.get(agent.runtimeId) : undefined)
       ?? null;
-    if (execution) claimedExecution.add(execution.agentId);
+    const realExecution = execution && !execution.simulated ? execution : null;
+    if (realExecution) claimedExecution.add(realExecution.agentId);
     if (!knownSystems.has(agent.systemId)) {
       warnings.push(`${agent.name} 归属的系统 ${agent.systemId} 未在系统登记中`);
     }
-    const node = harborNode(agent, execution);
-    node.usage = usageForAgent([node.id, node.externalAgentId, node.runtimeId], agentUsage);
+    const node = harborNode(agent, realExecution);
+    node.usage = usageForAgent([node.id, node.externalAgentId, node.runtimeId], agentUsage, simulatedAgentIds);
     addNode(agent.systemId, node);
   }
 
   for (const record of sources.executionAgents) {
-    if (claimedExecution.has(record.agentId)) continue;
-    const system = sources.systems.find((candidate) => candidate.systemId === record.systemId
-      || candidate.systemId === record.sourceSystem
-      || candidate.sourceSystemAliases.includes(record.sourceSystem));
-    const systemId = system?.systemId ?? UNREGISTERED_SYSTEM_ID;
-    if (!system) warnings.push(`执行面 Agent ${record.name} 的系统「${record.sourceSystem}」未登记，暂归未登记系统`);
+    if (record.simulated || claimedExecution.has(record.agentId)) continue;
+    const resolvedSystemId = resolveRecordSystemId(record, sources.systems);
+    const systemId = resolvedSystemId ?? UNREGISTERED_SYSTEM_ID;
+    if (!resolvedSystemId) warnings.push(`执行面 Agent ${record.name} 的系统「${record.sourceSystem}」未登记，暂归未登记系统`);
     const node = executionNode(record, systemId);
-    node.usage = usageForAgent([record.agentId, node.externalAgentId], agentUsage);
+    node.usage = usageForAgent([record.agentId, node.externalAgentId], agentUsage, simulatedAgentIds);
     addNode(systemId, node);
   }
 
@@ -333,7 +364,7 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
       systems: systems.length,
       domains: domainCount,
       agents: agentCount,
-      unregisteredInHarbor: sources.executionAgents.filter((record) => !claimedExecution.has(record.agentId)).length,
+      unregisteredInHarbor: sources.executionAgents.filter((record) => !record.simulated && !claimedExecution.has(record.agentId)).length,
     },
     warnings,
   };

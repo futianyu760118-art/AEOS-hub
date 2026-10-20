@@ -2438,6 +2438,7 @@ executionWss.on('connection', (ws, request) => {
             capabilities: msg.capabilities,
             sourceSystem: msg.sourceSystem,
             local: isLoopbackExecutionPeer(peerAddress),
+            simulated: msg.simulated,
           },
           (m) => send(ws, m),
           identity,

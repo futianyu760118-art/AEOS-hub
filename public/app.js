@@ -803,7 +803,7 @@ function renderExecutionAgentList(agents) {
         ? agent.sourceSystem.trim()
         : '来源待补充';
     return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span></span></span>
+      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span></span>
       <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
     </button>`;
   }).join('');
@@ -854,9 +854,11 @@ const USAGE_SYSTEM_LABELS = {
   'demo-usage-probe': '用量探针（临时）',
 };
 let usageAgentNames = new Map();
+let usageSimulatedAgentIds = new Set();
 
 function usageAgentLabel(agentId) {
-  return USAGE_AGENT_LABELS[agentId] || usageAgentNames.get(agentId) || agentId;
+  const label = USAGE_AGENT_LABELS[agentId] || usageAgentNames.get(agentId) || agentId;
+  return usageSimulatedAgentIds.has(agentId) ? `${label}（模拟）` : label;
 }
 
 function usageSystemLabel(systemId) {
@@ -877,6 +879,9 @@ async function loadUsage() {
       const agentsData = await agentsResponse.json();
       usageAgentNames = new Map((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
         .map((agent) => [agent.agentId, agent.name]));
+      usageSimulatedAgentIds = new Set((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
+        .filter((agent) => agent.simulated === true)
+        .map((agent) => agent.agentId));
     }
   } catch { return; }
   usageSummary = data;
@@ -6173,6 +6178,7 @@ function renderHarbor() {
   const runtimeKinds = {
     'codex-app-server': 'Codex App Server', 'openai-responses': 'OpenAI Responses',
     'mcp-agent': 'MCP Agent', 'custom-cli': 'Custom CLI',
+    'remote-execution-agent': '远程执行面', 'system-assistant': '系统托管助手',
   };
   els.harborRuntimeList.innerHTML = runtimes.length ? runtimes.map((runtime) => `<div class="harbor-row">
     <div class="harbor-identity"><span class="harbor-avatar runtime"><i data-lucide="server"></i></span><span class="harbor-primary"><strong>${esc(runtime.name)}</strong><small>${esc(runtime.owner || '未指定 Owner')}</small></span></div>

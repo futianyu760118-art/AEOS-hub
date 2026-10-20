@@ -250,7 +250,7 @@ function connect() {
   ws = new WebSocket(wsUrl, { headers: connectionHeaders });
   ws.on('open', () => {
     console.log(`[simulator] 已连接管理面（${useLegacyToken ? 'legacy 根令牌' : `系统令牌 ${systemId}`}），发送 register`);
-    send({ type: 'register', agentId, name: '公司中台执行面智能体', version: '1.0.0', sourceSystem, capabilities });
+    send({ type: 'register', agentId, name: '公司中台执行面智能体', version: '1.0.0', sourceSystem, capabilities, simulated: true });
   });
   ws.on('message', (raw) => {
     let msg;
