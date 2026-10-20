@@ -2027,8 +2027,8 @@ const server = createServer(async (req, res) => {
       const id = decodeURIComponent(harborAgentDeleteMatch[1] ?? '').trim();
       if (!id) throw new Error('Agent id 无效');
       const squad = loadAgentSquad();
-      if (squad.lead.harborAgentId === id) throw new Error('该 Agent 是当前小队主 Agent，请先更换主 Agent 关联');
-      if (squad.members.some((member) => member.harborAgentId === id)) throw new Error('该 Agent 仍在 Agent 小队中，请先将其移出小队');
+      if (squad.lead.harborAgentId === id) throw new Error('该 Agent 是当前主 Agent，请先更换主 Agent 关联');
+      if (squad.members.some((member) => member.harborAgentId === id)) throw new Error('该 Agent 仍在协作成员中，请先将其移出');
       const item = deleteHarborAgent({ id });
       sendJson(res, 200, { item });
     } catch (error) {
