@@ -143,12 +143,6 @@ const els = {
   harborModalDesc: $('#harbor-modal-desc'), harborModalClose: $('#harbor-modal-close'), harborForm: $('#harbor-form'),
   harborFormFields: $('#harbor-form-fields'), harborFormStatus: $('#harbor-form-status'),
   harborFormCancel: $('#harbor-form-cancel'), harborFormSubmit: $('#harbor-form-submit'),
-  squadLeadName: $('#squad-lead-name'), squadLeadModel: $('#squad-lead-model'), squadMemberCount: $('#squad-member-count'),
-  squadWorkingCount: $('#squad-working-count'), squadMemoryCount: $('#squad-memory-count'), squadMessageCount: $('#squad-message-count'),
-  squadMemberList: $('#squad-member-list'), squadMemberDetail: $('#squad-member-detail'), squadAddMember: $('#squad-add-member'),
-  squadProjectSelect: $('#squad-project-select'), squadProjectSave: $('#squad-project-save'), squadProjectStatus: $('#squad-project-status'),
-  squadModal: $('#squad-modal'), squadModalClose: $('#squad-modal-close'), squadMemberForm: $('#squad-member-form'),
-  squadFormStatus: $('#squad-form-status'), squadFormCancel: $('#squad-form-cancel'),
 };
 
 let ws = null;
@@ -177,10 +171,7 @@ let catalogExpansionInitialized = false;
 const expandedCatalogSystems = new Set();
 const expandedCatalogDomains = new Set();
 let harborModalType = null;
-let squad = { version: 1, lead: null, subSquads: [], squadMemories: [], squadActivities: [], members: [], memories: [], activities: [], messages: [] };
-let selectedSquadMemberId = null;
-let selectedBusinessSquadId = 'business-squad-orders';
-let selectedSquadView = 'business';
+let squad = { version: 1, lead: null, members: [], memories: [], activities: [], messages: [] };
 let chatScope = { type: 'hub', agentId: null, squadId: null, label: '中枢会话' };
 let evidenceRows = [];
 let conversationQuery = '';
@@ -193,17 +184,14 @@ let personnelUsers = [];
 let personnelTargetId = null;
 let accessRoles = [];
 const OPERATION_LABELS = { create: '新增', read: '查看', update: '编辑', delete: '删除' };
-const VIEW_RESOURCE = { dashboard: 'dashboard', chat: 'analysis', attention: 'analysis', tasks: 'tasks', projects: 'tasks', harbor: 'agents', squad: 'agents', evidence: 'evidence', registry: 'system' };
+const VIEW_RESOURCE = { dashboard: 'dashboard', chat: 'analysis', attention: 'analysis', tasks: 'tasks', projects: 'tasks', harbor: 'agents', evidence: 'evidence', registry: 'system' };
 let myGrants = [];
 let accessResources = [];
 let accessRoleTarget = null;
 let accessResourceTarget = null;
 const collapsedAccessResources = new Set();
 let onboardingUsers = [];
-// AI 港湾仅改变浏览层级；子 Agent 的身份、记忆、动作和绑定关系仍各自独立。
-const expandedHarborBusinessSquadIds = new Set();
-// Agent 小队树默认收起子 Agent；展开仅影响展示，不影响选中项或协作数据。
-const expandedSquadBusinessIds = new Set();
+// Agent 小队外壳已退役；AI 港湾与目录树承担归属展示。
 let dailyQuestionConfig = null;
 let operatingCenterState = { cases: [], decisions: [], inbox: [], unreadInboxCount: 0 };
 let taskCenterState = { tasks: [], total: 0 };
@@ -297,7 +285,6 @@ const commands = [
   { view: 'cases', label: '经营事项', desc: '风险建档、人工决策与闭环验证', icon: 'clipboard-list', group: '经营闭环' },
   { view: 'inbox', label: 'Inbox', desc: '待确认事项、扫描结果与决策留痕', icon: 'inbox', group: '经营闭环' },
   { view: 'harbor', label: 'AI 港湾', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: 'AI 资源协作' },
-  { view: 'squad', label: 'Agent 小队', desc: '主 Agent 编排、子 Agent 记忆与协作消息', icon: 'users-round', group: 'AI 资源协作' },
   { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
   { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
   { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
@@ -715,7 +702,6 @@ function showView(view, options = {}) {
   if (view === 'inbox') loadInbox();
   if (view === 'registry' || view === 'chat') loadCapabilityRegistry({ silent: view === 'chat' });
   if (view === 'harbor') loadHarbor();
-  if (view === 'squad') { loadHarbor({ silent: true }); loadSquad(); }
   if (view === 'attention') loadSquad({ silent: true });
   if (view === 'chat' && curConvId) send({ type: 'view', conversationId: curConvId });
   if (view === 'execution') loadExecution();
@@ -2649,7 +2635,7 @@ function newConversation() {
 }
 
 function openAgentConversationSpace(member, conversationId = null) {
-  chatScope = { type: 'agent', agentId: member.id, squadId: member.squadId || '', label: `${member.name} · 专属会话` };
+  chatScope = { type: 'agent', agentId: member.id, squadId: null, label: `${member.name} · 专属会话` };
   els.chatViewTitle.textContent = `${member.name} · 专属会话`;
   els.chatViewDesc.textContent = '该子 Agent 的独立会话，仅在所属 Agent / 小队中展示，不进入中枢会话列表。';
   els.conversationScopeLabel.textContent = chatScope.label;
@@ -2669,20 +2655,6 @@ function openHarborAgentConversationSpace(harborAgentId) {
     return;
   }
   openAgentConversationSpace(member);
-}
-
-function openSquadConversationSpace(businessSquad) {
-  chatScope = { type: 'squad', agentId: null, squadId: businessSquad.id, label: `${businessSquad.name} · 小队会话` };
-  els.chatViewTitle.textContent = `${businessSquad.name} · 小队会话`;
-  els.chatViewDesc.textContent = '聚合查看下辖 Agent 的已分发会话；请选择具体 Agent 后才能新建或继续派发。';
-  els.conversationScopeLabel.textContent = chatScope.label;
-  els.chatScopeBack.classList.remove('hidden');
-  els.btnNew.disabled = true;
-  curConvId = convs.filter((conv) => conv.scope === 'agent' && conv.squadId === businessSquad.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id || null;
-  showView('chat');
-  renderConvs();
-  syncCurrentConversationBusy();
-  if (curConvId) send({ type: 'view', conversationId: curConvId });
 }
 
 function openHubConversationSpace() {
@@ -3887,17 +3859,23 @@ async function dispatchDashboardRiskToAgent() {
   try {
     await Promise.all([loadSquad({ silent: true }), loadHarbor({ silent: true })]);
     const harborAgent = (harbor.agents || []).find((agent) => profile.pattern.test(`${agent.name || ''} ${agent.role || ''}`));
-    const member = harborAgent && (squad.members || []).find((item) => item.harborAgentId === harborAgent.id);
-    if (!harborAgent || !member) throw new Error(`${profile.label}尚未与 Agent 小队绑定，无法派发`);
-    await postSquad('/api/agent-squad/activities', {
-      agentId: member.id,
-      title: `已接收${profile.task}任务`,
-      detail: `${isKitting ? '需求对象' : isQuality ? '质量异常' : isProduction ? '生产对象' : '订单'} ${isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo} 已由首页派发；Evidence 线索：${risk.evidenceRef || '待运行时核对 evidence_refs'}。`,
-    });
+    if (!harborAgent) throw new Error(`${profile.label}尚未在 AI 港湾登记，无法派发`);
+    const taskType = isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order';
+    if (!(harborAgent.domainIds || []).includes(taskType)) {
+      throw new Error(`${profile.label}的服务业务域未包含${taskType}，无法派发`);
+    }
+    const member = (squad.members || []).find((item) => item.harborAgentId === harborAgent.id);
+    if (member) {
+      await postSquad('/api/agent-squad/activities', {
+        agentId: member.id,
+        title: `已接收${profile.task}任务`,
+        detail: `${isKitting ? '需求对象' : isQuality ? '质量异常' : isProduction ? '生产对象' : '订单'} ${isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo} 已由首页派发；Evidence 线索：${risk.evidenceRef || '待运行时核对 evidence_refs'}。`,
+      });
+    }
     pendingRiskAgentDispatch = {
       harborAgentId: harborAgent.id,
-      memberId: member.id,
-      squadId: member.squadId,
+      memberId: member?.id ?? harborAgent.id,
+      squadId: null,
       orderNo: isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo,
       evidenceRef: risk.evidenceRef || '',
       taskType: isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order',
@@ -3913,7 +3891,7 @@ async function dispatchDashboardRiskToAgent() {
     recordAttentionTransition(pendingRiskAgentDispatch.attentionCardId, previousAttentionState, 'review', '已派发专业 Agent 研判');
     if (dashboardSnapshot) renderAttention(dashboardSnapshot);
     closeDashboardRiskDetail();
-    chatScope = { type: 'agent', agentId: member.id, squadId: member.squadId || '', label: `${harborAgent.name} · 专属会话` };
+    chatScope = { type: 'agent', agentId: member.id, squadId: null, label: `${harborAgent.name} · 专属会话` };
     els.chatViewTitle.textContent = `${harborAgent.name} · 专属会话`;
     els.chatViewDesc.textContent = '由中枢分发的任务会话，只在该 Agent 与所属小队中呈现。';
     els.conversationScopeLabel.textContent = chatScope.label;
@@ -4000,9 +3978,7 @@ function renderAttentionSearchResults(snapshot) {
 
   const historyRows = [
     ...(evidenceRows || []).map((row) => ({ type: 'Evidence', title: row.summary || row.kind || '证据事件', detail: `${row.occurred_at || ''} ${row.item_type || ''}`, action: 'evidence' })),
-    ...(squad.squadActivities || []).map((row) => ({ type: '小队动作', title: row.title, detail: `${row.detail || ''} ${row.createdAt || ''}`, action: 'squad' })),
     ...(squad.activities || []).map((row) => ({ type: 'Agent 动作', title: row.title, detail: `${row.detail || ''} ${row.createdAt || ''}`, action: 'squad' })),
-    ...(squad.squadMemories || []).map((row) => ({ type: '小队记忆', title: row.content, detail: row.createdAt || '', action: 'squad' })),
     ...(squad.memories || []).map((row) => ({ type: 'Agent 记忆', title: row.content, detail: row.createdAt || '', action: 'squad' })),
   ].filter((row) => attentionSearchMatch(query, row.type, row.title, row.detail)).slice(0, 30);
   const historyCards = historyRows.map((row) => `<article class="attention-search-result-card"><span class="status-pill info">${esc(row.type)}</span>${attentionExpandableText(row.title)}<small>${esc(row.detail)}</small><button type="button" class="btn ghost compact" data-attention-search-target="${esc(row.action)}">查看来源</button></article>`);
@@ -6213,7 +6189,6 @@ async function loadHarbor(options = {}) {
       catalogTree = null;
     }
     renderHarbor();
-    if (!$('#view-squad').classList.contains('hidden')) renderSquad();
   } catch (error) {
     if (!options.silent) toast(`加载 AI 港湾失败：${error.message}`, true);
     [els.harborAgentList, els.harborRuntimeList, els.harborProjectList].forEach((node) => {
@@ -6223,348 +6198,27 @@ async function loadHarbor(options = {}) {
   }
 }
 
-function squadAgentById(agentId) {
-  if (squad.lead?.id === agentId) return squad.lead;
-  return (squad.members || []).find((member) => member.id === agentId) || null;
-}
-
-function squadAgentName(agentId) {
-  return squadAgentById(agentId)?.name || '未知 Agent';
-}
-
-function squadTime(value) {
-  return formatHarborTime(value);
-}
-
-function harborAgentForSquad(agentId) {
-  return (harbor.agents || []).find((agent) => agent.id === agentId) || null;
-}
-
-function squadRuntimeLabel(harborAgentId) {
-  const agent = harborAgentForSquad(harborAgentId);
-  if (!agent) return '未绑定 AI 港湾 Agent';
-  const runtime = (harbor.runtimes || []).find((item) => item.id === agent.runtimeId);
-  return runtime ? `${agent.name} · ${runtime.name}` : `${agent.name} · 未绑定 Runtime`;
-}
-
-function squadAvailableHarborAgents(memberId = '') {
-  const linked = new Set((squad.members || []).filter((member) => member.id !== memberId).map((member) => member.harborAgentId).filter(Boolean));
-  const leadId = squad.lead?.harborAgentId;
-  return (harbor.agents || []).filter((agent) => agent.id !== leadId && agent.id !== squad.lead?.id && !linked.has(agent.id));
-}
-
-function squadBusinessById(squadId) {
-  return (squad.subSquads || []).find((item) => item.id === squadId) || null;
-}
-
-/** Build a grouped recipient picker while retaining one regular form value. */
-function squadRecipientTree(recipients, businessSquads) {
-  const selected = recipients[0];
-  if (!selected) return '';
-  const groups = businessSquads
-    .map((businessSquad) => ({
-      id: businessSquad.id,
-      name: businessSquad.name,
-      recipients: recipients.filter((member) => member.squadId === businessSquad.id),
-    }))
-    .filter((group) => group.recipients.length);
-  const groupedIds = new Set(groups.flatMap((group) => group.recipients.map((member) => member.id)));
-  const ungrouped = recipients.filter((member) => !groupedIds.has(member.id));
-  if (ungrouped.length) groups.push({ id: 'direct', name: '直属 Agent', recipients: ungrouped });
-  const branch = (group) => `<section class="squad-recipient-branch" data-recipient-branch="${esc(group.id)}"><button class="squad-recipient-group" type="button" data-recipient-group="${esc(group.id)}" aria-expanded="true"><i data-lucide="chevron-down"></i><span>${esc(group.name)}</span><b>${group.recipients.length}</b></button><div class="squad-recipient-children">${group.recipients.map((recipient) => `<button class="squad-recipient-option${recipient.id === selected.id ? ' selected' : ''}" type="button" role="treeitem" data-recipient-id="${esc(recipient.id)}" data-recipient-name="${esc(recipient.name)}"><i data-lucide="bot"></i><span><strong>${esc(recipient.name)}</strong><small>${esc(recipient.role)}</small></span><i class="squad-recipient-check" data-lucide="check"></i></button>`).join('')}</div></section>`;
-  return `<div class="squad-recipient-tree" data-squad-recipient-tree><input type="hidden" name="toAgentId" value="${esc(selected.id)}" /><button class="squad-recipient-trigger" type="button" data-recipient-trigger aria-expanded="false" aria-haspopup="tree"><span><small>发送给</small><strong data-recipient-label>${esc(selected.name)}</strong></span><i data-lucide="chevron-down"></i></button><div class="squad-recipient-menu hidden" data-recipient-menu role="tree" aria-label="选择接收协作消息的 Agent"><div class="squad-recipient-root"><i data-lucide="network"></i><span>业务 Agent 小队</span></div>${groups.map(branch).join('')}</div></div>`;
-}
-
-function bindSquadRecipientTree(root) {
-  const tree = $('[data-squad-recipient-tree]', root);
-  if (!tree) return;
-  const trigger = $('[data-recipient-trigger]', tree);
-  const menu = $('[data-recipient-menu]', tree);
-  const input = $('input[name="toAgentId"]', tree);
-  const label = $('[data-recipient-label]', tree);
-  trigger.addEventListener('click', () => {
-    const open = menu.classList.toggle('hidden') === false;
-    trigger.setAttribute('aria-expanded', String(open));
-  });
-  $$('[data-recipient-group]', tree).forEach((button) => button.addEventListener('click', () => {
-    const branch = button.closest('[data-recipient-branch]');
-    const expanded = button.getAttribute('aria-expanded') !== 'true';
-    button.setAttribute('aria-expanded', String(expanded));
-    branch.classList.toggle('is-collapsed', !expanded);
-    refreshIcons(button);
-  }));
-  $$('[data-recipient-id]', tree).forEach((option) => option.addEventListener('click', () => {
-    input.value = option.dataset.recipientId;
-    label.textContent = option.dataset.recipientName;
-    $$('[data-recipient-id]', tree).forEach((item) => item.classList.toggle('selected', item === option));
-    menu.classList.add('hidden');
-    trigger.setAttribute('aria-expanded', 'false');
-  }));
-}
-
-function squadMemberButton(member, activities) {
-  const latest = activities.filter((activity) => activity.agentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-  const active = selectedSquadView === 'agent' && member.id === selectedSquadMemberId;
-  const harborAgent = harborAgentForSquad(member.harborAgentId);
-  const level = harborAgent?.hierarchyLevel || 'L2';
-  const levelLabels = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
-  return `<button class="squad-member ${active ? 'active' : ''}" type="button" data-squad-member-id="${esc(member.id)}">
-    <span class="squad-avatar"><i data-lucide="bot"></i></span><span><strong>${esc(member.name)}</strong><small class="squad-hierarchy">${esc(level)} · ${esc(levelLabels[level] || '专项执行')}</small><small>${esc(member.role)}</small><small class="squad-link-label">${esc(squadRuntimeLabel(member.harborAgentId))}</small><em>${esc(latest ? latest.title : '暂无动作')} · ${esc(squadTime(latest?.createdAt))}</em></span>
-    <b class="status-pill ${member.status === 'working' ? 'info' : 'neutral'}">${member.status === 'working' ? '协作中' : '待命'}</b>
-  </button>`;
-}
-
-function squadExpandableText(content) {
-  const text = String(content || '');
-  if (text.length <= 220) return `<p>${esc(text)}</p>`;
-  return `<p class="squad-expandable-text">${esc(text)}</p><button class="squad-expand-toggle" type="button" data-squad-expand-toggle="true" aria-expanded="false">展开完整内容</button>`;
-}
-
-function bindSquadExpandableEntries(scope) {
-  $$('[data-squad-expand-toggle]', scope).forEach((button) => button.addEventListener('click', () => {
-    const text = button.previousElementSibling;
-    const expanded = button.getAttribute('aria-expanded') === 'true';
-    button.setAttribute('aria-expanded', String(!expanded));
-    button.textContent = expanded ? '展开完整内容' : '收起内容';
-    text?.classList.toggle('is-expanded', !expanded);
-  }));
-}
-
-function renderBusinessSquadDetail(businessSquad, members, memories, activities, squadMemories, squadActivities) {
-  const ownMemories = squadMemories.filter((item) => item.squadId === businessSquad.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const ownActivities = squadActivities.filter((item) => item.squadId === businessSquad.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const memberIds = new Set(members.map((member) => member.id));
-  const childMemories = memories.filter((item) => memberIds.has(item.agentId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const childActivities = activities.filter((item) => memberIds.has(item.agentId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const sessionCount = convs.filter((conversation) => conversation.scope === 'agent' && conversation.squadId === businessSquad.id && !conversation.archived).length;
-  els.squadMemberDetail.innerHTML = `
-    <div class="squad-detail-head business-squad-detail-head"><span class="squad-avatar"><i data-lucide="network"></i></span><div><h2>${esc(businessSquad.name)}</h2><p>${esc(businessSquad.description)} · 下辖 ${members.length} 个 Agent</p></div><span class="status-pill info">业务小队</span></div>
-    <section class="squad-agent-sessions squad-team-sessions"><div><strong>小队会话</strong><small>汇总下辖 Agent 的分发任务；不会显示中枢会话。</small></div><button class="btn secondary compact" type="button" data-open-squad-sessions="${esc(businessSquad.id)}"><i data-lucide="messages-square"></i>查看 ${sessionCount} 个会话</button><p>新建会话请先选定具体 Agent，以保证任务、记忆和证据归属正确。</p></section>
-    <div class="squad-scope-note"><i data-lucide="layers-2"></i><span>以下“小队自身”记录只归属 ${esc(businessSquad.name)}；“下辖 Agent 汇总”仅用于审阅，不会写入或覆盖任何 Agent 的独立记忆与动作。</span></div>
-    <div class="squad-detail-grid">
-      <section><div class="squad-section-head"><h3>小队自身动作</h3><small>业务级协作与升级记录</small></div><div class="squad-feed">${ownActivities.length ? ownActivities.map((activity) => `<article><b>${esc(activity.title)}</b>${squadExpandableText(activity.detail)}<time>${esc(squadTime(activity.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无小队自身动作</p>'}</div><form class="squad-inline-form squad-business-activity-form" data-squad-business-form="activity"><input name="title" maxlength="160" required placeholder="业务小队动作，例如：升级订单风险"/><textarea name="detail" maxlength="1000" required placeholder="记录订单小队层面的结论或协作动作…"></textarea><button class="btn secondary compact" type="submit"><i data-lucide="list-plus"></i>记录动作</button></form></section>
-      <section><div class="squad-section-head"><h3>小队自身记忆</h3><small>仅归属业务 Agent 小队</small></div><div class="squad-feed">${ownMemories.length ? ownMemories.map((memory) => `<article>${squadExpandableText(memory.content)}<time>${esc(squadTime(memory.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无小队自身记忆</p>'}</div><form class="squad-inline-form" data-squad-business-form="memory"><textarea name="content" maxlength="2000" required placeholder="记录订单小队共享上下文、共识或升级结论…"></textarea><button class="btn secondary compact" type="submit"><i data-lucide="brain"></i>写入小队记忆</button></form></section>
-    </div>
-    <section class="squad-exchange squad-child-rollup"><div class="squad-section-head"><h3>下辖 Agent 记忆与动作汇总</h3><small>只读汇总，与小队自身记录分开保存</small></div><div class="squad-child-rollup-grid"><div><b>Agent 独立动作</b><div class="squad-feed">${childActivities.length ? childActivities.map((activity) => `<article><b>${esc(squadAgentName(activity.agentId))} · ${esc(activity.title)}</b>${squadExpandableText(activity.detail)}<time>${esc(squadTime(activity.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无下辖 Agent 动作</p>'}</div></div><div><b>Agent 独立记忆</b><div class="squad-feed">${childMemories.length ? childMemories.map((memory) => `<article><b>${esc(squadAgentName(memory.agentId))}</b>${squadExpandableText(memory.content)}<time>${esc(squadTime(memory.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无下辖 Agent 记忆</p>'}</div></div></div></section>`;
-  $('[data-open-squad-sessions]', els.squadMemberDetail)?.addEventListener('click', () => openSquadConversationSpace(businessSquad));
-  bindSquadExpandableEntries(els.squadMemberDetail);
-  refreshIcons($('#view-squad'));
-}
-
-function renderSquad() {
-  const members = Array.isArray(squad.members) ? squad.members : [];
-  const businessSquads = Array.isArray(squad.subSquads) ? squad.subSquads : [];
-  const squadMemories = Array.isArray(squad.squadMemories) ? squad.squadMemories : [];
-  const squadActivities = Array.isArray(squad.squadActivities) ? squad.squadActivities : [];
-  const memories = Array.isArray(squad.memories) ? squad.memories : [];
-  const activities = Array.isArray(squad.activities) ? squad.activities : [];
-  const messages = Array.isArray(squad.messages) ? squad.messages : [];
-  const lead = squad.lead || { name: 'AEOS 中枢 Agent', model: 'deepseek-chat' };
-  const projects = Array.isArray(harbor.projects) ? harbor.projects : [];
-  const linkedProject = projects.find((project) => project.id === squad.projectId) || null;
-  const linkedLead = harborAgentForSquad(lead.harborAgentId);
-  if (!members.some((member) => member.id === selectedSquadMemberId)) selectedSquadMemberId = members[0]?.id || null;
-  if (!businessSquads.some((item) => item.id === selectedBusinessSquadId)) selectedBusinessSquadId = businessSquads[0]?.id || null;
-  if (!selectedBusinessSquadId && selectedSquadMemberId) selectedSquadView = 'agent';
-
-  els.squadLeadName.textContent = lead.name;
-  els.squadLeadModel.textContent = linkedLead ? `${linkedLead.model} · ${squadRuntimeLabel(linkedLead.id)}` : `${lead.model} · 未绑定 AI 港湾 Agent`;
-  els.squadMemberCount.textContent = String(members.length);
-  els.squadWorkingCount.textContent = `${members.filter((member) => member.status === 'working').length} 个协作中`;
-  els.squadMemoryCount.textContent = String(memories.length);
-  els.squadMessageCount.textContent = String(messages.length);
-  els.squadProjectSelect.innerHTML = `<option value="">未关联项目</option>${projects.map((project) => `<option value="${esc(project.id)}">${esc(project.key)} · ${esc(project.name)}</option>`).join('')}`;
-  els.squadProjectSelect.value = linkedProject?.id || '';
-  els.squadProjectStatus.textContent = linkedProject
-    ? `已关联 ${linkedProject.key} · ${linkedProject.status === 'in_progress' ? '进行中' : linkedProject.status}`
-    : '未关联 AI 港湾项目';
-  const grouped = businessSquads.map((businessSquad) => {
-    const children = members.filter((member) => member.squadId === businessSquad.id);
-    const linkedChildren = children.filter((member) => member.harborAgentId && harborAgentForSquad(member.harborAgentId)).length;
-    const active = selectedSquadView === 'business' && selectedBusinessSquadId === businessSquad.id;
-    const expanded = expandedSquadBusinessIds.has(businessSquad.id);
-    const fullyLinked = children.length > 0 && linkedChildren === children.length;
-    return `<section class="business-squad ${active ? 'active' : ''} ${expanded ? 'is-expanded' : ''}"><div class="business-squad-heading"><button class="business-squad-head" type="button" data-business-squad-id="${esc(businessSquad.id)}"><span class="squad-avatar"><i data-lucide="network"></i></span><span><strong>L1 · ${esc(businessSquad.name)}</strong><small>${esc(businessSquad.description)}</small><em>${linkedChildren}/${children.length} 已接入 AI 港湾 · ${squadMemories.filter((item) => item.squadId === businessSquad.id).length} 条小队记忆</em></span><b class="status-pill ${fullyLinked ? 'ok' : 'warn'}">${fullyLinked ? '已联通' : '待绑定'}</b></button><button class="business-squad-fold" type="button" data-business-squad-toggle-id="${esc(businessSquad.id)}" aria-label="${expanded ? '收起' : '展开'} ${esc(businessSquad.name)} 的子 Agent" aria-expanded="${expanded}"><i data-lucide="chevron-right"></i></button></div><div class="business-squad-children">${children.length ? children.map((member) => squadMemberButton(member, activities)).join('') : '<p class="squad-empty">暂无下辖 Agent</p>'}</div></section>`;
-  }).join('');
-  const ungrouped = members.filter((member) => !member.squadId || !businessSquads.some((item) => item.id === member.squadId));
-  els.squadMemberList.innerHTML = `<div class="squad-root-node"><span class="squad-root-mark"><i data-lucide="waypoints"></i></span><div><strong>L0 · ${esc(lead.name)}</strong><small>顶层编排 · 负责跨小队协调与治理门禁</small></div></div>${grouped || ''}${ungrouped.length ? `<section class="business-squad ungrouped"><div class="business-squad-title">L1 · 直属 Agent</div><div class="business-squad-children">${ungrouped.map((member) => squadMemberButton(member, activities)).join('')}</div></section>` : ''}`;
-
-  const businessSquad = selectedSquadView === 'business' ? businessSquads.find((item) => item.id === selectedBusinessSquadId) : null;
-  if (businessSquad) {
-    renderBusinessSquadDetail(businessSquad, members.filter((member) => member.squadId === businessSquad.id), memories, activities, squadMemories, squadActivities);
-    refreshIcons($('#view-squad'));
-    return;
-  }
-
-  const member = members.find((item) => item.id === selectedSquadMemberId);
-  if (!member) {
-    els.squadMemberDetail.innerHTML = harborEmpty('users-round', '请选择子 Agent', '查看其独立记忆、最近动作与队内协作消息');
-    refreshIcons($('#view-squad'));
-    return;
-  }
-  const memberActivities = activities.filter((activity) => activity.agentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const memberMemories = memories.filter((memory) => memory.agentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const memberMessages = messages.filter((message) => message.fromAgentId === member.id || message.toAgentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 12);
-  const recipients = members.filter((item) => item.id !== member.id);
-  const linkedHarborAgent = harborAgentForSquad(member.harborAgentId);
-  const availableHarborAgents = squadAvailableHarborAgents(member.id);
-  const memberConversations = convs.filter((conversation) => conversation.scope === 'agent' && conversation.agentId === member.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 5);
-  const binding = linkedHarborAgent
-    ? `<div class="squad-binding"><span>AI 港湾关联</span><strong>${esc(squadRuntimeLabel(linkedHarborAgent.id))}</strong><small>身份、模型、Runtime 与能力由 AI 港湾统一管理。</small></div>`
-    : availableHarborAgents.length
-      ? `<form class="squad-binding squad-inline-form" data-squad-form="bind"><select name="harborAgentId" required><option value="">选择 AI 港湾 Agent</option>${availableHarborAgents.map((agent) => `<option value="${esc(agent.id)}">${esc(agent.name)} · ${esc(agent.role)}</option>`).join('')}</select><button class="btn secondary compact" type="submit"><i data-lucide="link"></i>绑定港湾 Agent</button></form>`
-      : '<div class="squad-binding"><span>AI 港湾关联</span><strong>暂无可绑定 Agent</strong><small>请先在 AI 港湾创建 Agent，或解除其他小队成员的绑定。</small></div>';
-  els.squadMemberDetail.innerHTML = `
-    <div class="squad-detail-head"><span class="squad-avatar"><i data-lucide="bot"></i></span><div><h2>${esc(member.name)}</h2><p>${esc(member.role)} · ${esc(member.model)} · 独立记忆空间</p></div><span class="squad-detail-actions"><b class="status-pill ${member.status === 'working' ? 'info' : 'neutral'}">${member.status === 'working' ? '协作中' : '待命'}</b><button class="btn secondary compact squad-delete-member" type="button" data-squad-member-id="${esc(member.id)}">移出小队</button></span></div>
-    ${binding}
-    <section class="squad-agent-sessions"><div><strong>专属会话</strong><small>分发给该 Agent 的任务不显示在中枢会话</small></div><button class="btn secondary compact" type="button" data-open-agent-sessions="${esc(member.id)}"><i data-lucide="messages-square"></i>进入会话</button><p>${memberConversations.length ? `最近：${esc(memberConversations[0].title || '新对话')} · ${esc(formatConvTime(memberConversations[0].updatedAt))}` : '尚无分发会话'}</p></section>
-    <div class="squad-detail-grid">
-      <section><div class="squad-section-head"><h3>最近动作</h3><small>主 Agent 可直接审阅</small></div><div class="squad-feed">${memberActivities.length ? memberActivities.map((activity) => `<article><b>${esc(activity.title)}</b>${squadExpandableText(activity.detail)}<time>${esc(squadTime(activity.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无动作记录</p>'}</div></section>
-      <section class="squad-agent-memory"><div class="squad-section-head"><div><h3>独立记忆</h3><small>仅归属该子 Agent</small></div><button class="squad-memory-conversation-link" type="button" data-open-agent-sessions="${esc(member.id)}" title="进入 ${esc(member.name)} 的专属会话"><i data-lucide="messages-square"></i><span>点击继续会话</span></button></div><p class="squad-memory-conversation-hint">从这里可随时回到 ${esc(member.name)} 的独立对话，历史会话会一直保留在该 Agent 名下。</p><div class="squad-feed">${memberMemories.length ? memberMemories.map((memory) => `<article>${squadExpandableText(memory.content)}<time>${esc(squadTime(memory.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无记忆</p>'}</div><form class="squad-inline-form" data-squad-form="memory"><textarea name="content" maxlength="2000" required placeholder="为该子 Agent 记录任务上下文或结论…"></textarea><button class="btn secondary compact" type="submit"><i data-lucide="brain"></i>写入记忆</button></form></section>
-    </div>
-    <section class="squad-exchange"><div class="squad-section-head"><h3>队内协作消息</h3><small>由主 Agent 审阅的可追溯消息记录</small></div><div class="squad-message-feed">${memberMessages.length ? memberMessages.map((message) => `<article><span>${esc(squadAgentName(message.fromAgentId))} <i data-lucide="arrow-right"></i> ${esc(squadAgentName(message.toAgentId))}</span>${squadExpandableText(message.content)}<time>${esc(squadTime(message.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无队内消息</p>'}</div>${recipients.length ? `<form class="squad-inline-form squad-message-form" data-squad-form="message">${squadRecipientTree(recipients, businessSquads)}<textarea name="content" maxlength="2000" required placeholder="记录 ${esc(member.name)} 发给队友的协作消息…"></textarea><button class="btn primary compact" type="submit"><i data-lucide="send"></i>发送协作消息</button></form>` : '<p class="squad-empty">至少需要两个子 Agent 才可登记相互协作消息</p>'}</section>`;
-  $$('[data-open-agent-sessions]', els.squadMemberDetail).forEach((button) => button.addEventListener('click', () => openAgentConversationSpace(member)));
-  bindSquadRecipientTree(els.squadMemberDetail);
-  bindSquadExpandableEntries(els.squadMemberDetail);
-  refreshIcons($('#view-squad'));
-}
-
 async function loadSquad(options = {}) {
   try {
     const response = await fetch('/api/agent-squad', { headers: { accept: 'application/json' } });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     squad = data;
-    renderSquad();
   } catch (error) {
-    if (!options.silent) toast(`加载 Agent 小队失败：${error.message}`, true);
-    els.squadMemberList.innerHTML = harborEmpty('cloud-off', 'Agent 小队数据暂不可用', '请检查本机服务后重试');
-    els.squadMemberDetail.innerHTML = '';
-    refreshIcons($('#view-squad'));
+    if (!options.silent) toast(`加载协作成员失败：${error.message}`, true);
   }
 }
 
 async function postSquad(path, payload) {
-  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) });
-  const data = await response.json();
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  squad = data.squad || squad;
-  renderSquad();
+  if (data.squad) squad = data.squad;
   return data.item;
-}
-
-async function deleteSquadMember(agentId) {
-  const member = (squad.members || []).find((item) => item.id === agentId);
-  if (!member) return;
-  const memoryCount = (squad.memories || []).filter((item) => item.agentId === agentId).length;
-  const messageCount = (squad.messages || []).filter((item) => item.fromAgentId === agentId || item.toAgentId === agentId).length;
-  if (!window.confirm(`确定将“${member.name}”移出 Agent 小队吗？将删除其 ${memoryCount} 条独立记忆和 ${messageCount} 条队内消息；AI 港湾中的 Agent 与 Runtime 不会被删除。`)) return;
-  const response = await fetch(`/api/agent-squad/members/${encodeURIComponent(agentId)}`, { method: 'DELETE', headers: { accept: 'application/json' } });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  squad = data.squad || squad;
-  selectedSquadMemberId = null;
-  renderSquad();
-  return data.item;
-}
-
-function openSquadMemberModal() {
-  const availableHarborAgents = squadAvailableHarborAgents();
-  if (!availableHarborAgents.length) {
-    toast('暂无可加入小队的 AI 港湾 Agent，请先在 AI 港湾创建并配置 Agent', true);
-    return;
-  }
-  els.squadMemberForm.reset();
-  const businessSelect = $('select[name="squadId"]', els.squadMemberForm);
-  const businessSquads = Array.isArray(squad.subSquads) ? squad.subSquads : [];
-  businessSelect.innerHTML = `<option value="">选择业务 Agent 小队</option>${businessSquads.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} · ${esc(item.description)}</option>`).join('')}`;
-  businessSelect.value = selectedBusinessSquadId || businessSquads[0]?.id || '';
-  const select = $('select[name="harborAgentId"]', els.squadMemberForm);
-  select.innerHTML = `<option value="">选择 AI 港湾 Agent</option>${availableHarborAgents.map((agent) => `<option value="${esc(agent.id)}">${esc(agent.name)} · ${esc(agent.role)}</option>`).join('')}`;
-  els.squadFormStatus.textContent = '';
-  els.squadModal.classList.remove('hidden');
-  refreshIcons(els.squadModal);
-  window.setTimeout(() => select?.focus(), 30);
-}
-
-function closeSquadMemberModal() {
-  els.squadModal.classList.add('hidden');
-  els.squadFormStatus.textContent = '';
-}
-
-async function submitSquadMember(event) {
-  event.preventDefault();
-  const form = new FormData(els.squadMemberForm);
-  const submit = $('button[type="submit"]', els.squadMemberForm);
-  submit.disabled = true;
-  els.squadFormStatus.textContent = '创建中…';
-  try {
-    const member = await postSquad('/api/agent-squad/members', Object.fromEntries(form));
-    selectedSquadMemberId = member.id;
-    selectedBusinessSquadId = member.squadId || selectedBusinessSquadId;
-    selectedSquadView = 'agent';
-    renderSquad();
-    closeSquadMemberModal();
-    toast(`${member.name} 已加入 Agent 小队`);
-  } catch (error) {
-    els.squadFormStatus.textContent = error.message;
-  } finally {
-    submit.disabled = false;
-  }
-}
-
-async function submitSquadDetail(event) {
-  const form = event.target.closest('[data-squad-form]');
-  if (!form) return;
-  event.preventDefault();
-  const kind = form.dataset.squadForm;
-  const content = new FormData(form).get('content');
-  const button = $('button[type="submit"]', form);
-  button.disabled = true;
-  try {
-    if (kind === 'memory') await postSquad('/api/agent-squad/memories', { agentId: selectedSquadMemberId, content });
-    if (kind === 'message') await postSquad('/api/agent-squad/messages', { fromAgentId: selectedSquadMemberId, toAgentId: new FormData(form).get('toAgentId'), content });
-    if (kind === 'bind') await postSquad('/api/agent-squad/member-links', { agentId: selectedSquadMemberId, harborAgentId: new FormData(form).get('harborAgentId') });
-    toast(kind === 'memory' ? '已写入子 Agent 独立记忆' : kind === 'bind' ? '已绑定 AI 港湾 Agent' : '已记录队内协作消息');
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function saveSquadProjectLink() {
-  const button = els.squadProjectSave;
-  button.disabled = true;
-  try {
-    await postSquad('/api/agent-squad/project-link', { projectId: els.squadProjectSelect.value });
-    toast(els.squadProjectSelect.value ? 'Agent 小队已关联 AI 港湾项目' : '已解除项目关联');
-  } catch (error) {
-    toast(`保存项目关联失败：${error.message}`, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function submitBusinessSquadDetail(event) {
-  const form = event.target.closest('[data-squad-business-form]');
-  if (!form) return;
-  event.preventDefault();
-  const businessSquad = squadBusinessById(selectedBusinessSquadId);
-  if (!businessSquad) return;
-  const kind = form.dataset.squadBusinessForm;
-  const values = Object.fromEntries(new FormData(form));
-  const button = $('button[type="submit"]', form);
-  button.disabled = true;
-  try {
-    if (kind === 'memory') await postSquad('/api/agent-squad/business-squads/memories', { squadId: businessSquad.id, content: values.content });
-    if (kind === 'activity') await postSquad('/api/agent-squad/business-squads/activities', { squadId: businessSquad.id, title: values.title, detail: values.detail });
-    toast(kind === 'memory' ? '已写入业务 Agent 小队独立记忆' : '已记录业务 Agent 小队动作');
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
 }
 
 async function verifyHarborRuntime(runtimeId, button) {
@@ -7416,45 +7070,6 @@ els.harborModalClose.addEventListener('click', closeHarborModal);
 els.harborFormCancel.addEventListener('click', closeHarborModal);
 els.harborForm.addEventListener('submit', submitHarborForm);
 els.harborModal.addEventListener('mousedown', (event) => { if (event.target === els.harborModal) closeHarborModal(); });
-els.squadAddMember.addEventListener('click', openSquadMemberModal);
-els.squadModalClose.addEventListener('click', closeSquadMemberModal);
-els.squadFormCancel.addEventListener('click', closeSquadMemberModal);
-els.squadMemberForm.addEventListener('submit', submitSquadMember);
-els.squadModal.addEventListener('mousedown', (event) => { if (event.target === els.squadModal) closeSquadMemberModal(); });
-els.squadProjectSave.addEventListener('click', saveSquadProjectLink);
-els.squadMemberList.addEventListener('click', (event) => {
-  const businessSquadToggle = event.target.closest('[data-business-squad-toggle-id]');
-  if (businessSquadToggle) {
-    const squadId = businessSquadToggle.dataset.businessSquadToggleId;
-    if (expandedSquadBusinessIds.has(squadId)) expandedSquadBusinessIds.delete(squadId);
-    else expandedSquadBusinessIds.add(squadId);
-    renderSquad();
-    return;
-  }
-  const businessSquad = event.target.closest('[data-business-squad-id]');
-  if (businessSquad) {
-    selectedBusinessSquadId = businessSquad.dataset.businessSquadId;
-    selectedSquadView = 'business';
-    renderSquad();
-    return;
-  }
-  const member = event.target.closest('[data-squad-member-id]');
-  if (!member) return;
-  selectedSquadMemberId = member.dataset.squadMemberId;
-  selectedSquadView = 'agent';
-  renderSquad();
-});
-els.squadMemberDetail.addEventListener('submit', submitSquadDetail);
-els.squadMemberDetail.addEventListener('submit', submitBusinessSquadDetail);
-els.squadMemberDetail.addEventListener('click', (event) => {
-  const button = event.target.closest('.squad-delete-member');
-  if (!button || button.disabled) return;
-  button.disabled = true;
-  deleteSquadMember(button.dataset.squadMemberId)
-    .then((item) => { if (item) toast(`${item.member.name} 已移出 Agent 小队`); })
-    .catch((error) => toast(`移出 Agent 小队失败：${error.message}`, true))
-    .finally(() => { button.disabled = false; });
-});
 els.headerAgent.addEventListener('click', () => showView('chat'));
 els.headerAttention.addEventListener('click', () => showView('attention'));
 els.btnAttentionRefresh.addEventListener('click', () => loadDashboard({ force: true }));
@@ -7550,10 +7165,6 @@ els.commandPalette.addEventListener('mousedown', (event) => { if (event.target =
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.harborModal.classList.contains('hidden')) {
     closeHarborModal();
-    return;
-  }
-  if (event.key === 'Escape' && !els.squadModal.classList.contains('hidden')) {
-    closeSquadMemberModal();
     return;
   }
   if (event.key === 'Escape' && els.inboxDetailModal && !els.inboxDetailModal.classList.contains('hidden')) {

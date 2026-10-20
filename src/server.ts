@@ -51,8 +51,6 @@ import {
 import {
   addAgentSquadActivity,
   addAgentSquadMemory,
-  addAgentBusinessSquadActivity,
-  addAgentBusinessSquadMemory,
   bindAgentSquadMember,
   createAgentSquadMember,
   deleteAgentSquadMember,
@@ -1747,8 +1745,6 @@ const server = createServer(async (req, res) => {
     '/api/agent-squad/activities': addAgentSquadActivity,
     '/api/agent-squad/memories': addAgentSquadMemory,
     '/api/agent-squad/messages': sendAgentSquadMessage,
-    '/api/agent-squad/business-squads/memories': addAgentBusinessSquadMemory,
-    '/api/agent-squad/business-squads/activities': addAgentBusinessSquadActivity,
   };
   if (url.pathname.startsWith('/api/agent-squad/')) {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
@@ -1766,7 +1762,7 @@ const server = createServer(async (req, res) => {
         const agent = resolveHarborAgent(input.harborAgentId);
         const current = loadAgentSquad();
         if (current.lead.harborAgentId === agent.id || current.lead.id === agent.id) throw new Error('主 Agent 不能重复加入为子 Agent');
-        item = createAgentSquadMember({ harborAgentId: agent.id, name: agent.name, role: agent.role, model: agent.model, squadId: input.squadId });
+        item = createAgentSquadMember({ harborAgentId: agent.id, name: agent.name, role: agent.role, model: agent.model });
       } else if (url.pathname === '/api/agent-squad/member-links') {
         const agent = resolveHarborAgent(input.harborAgentId);
         const current = loadAgentSquad();
@@ -2503,32 +2499,36 @@ wss.on('connection', (ws, request) => {
           const agentId = msg.agentId.trim();
           const harborAgent = loadHarbor().agents.find((item) => item.id === agentId);
           const member = loadAgentSquad().members.find((item) => item.harborAgentId === agentId);
-          const isAllowed = taskType === 'order'
-            ? /订单交付风险/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-orders'
+          const domainId = taskType === 'production' ? 'production' : taskType === 'quality' ? 'quality' : taskType === 'kitting' ? 'kitting' : 'order';
+          const roleAllowed = taskType === 'order'
+            ? /订单交付风险/.test(harborAgent?.role || '')
             : taskType === 'kitting'
-              ? /物料齐套|缺料|供给/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-material-kitting'
+              ? /物料齐套|缺料|供给/.test(harborAgent?.role || '')
               : taskType === 'production'
-                ? /生产进度|生产关联|报工产能|生产证据/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-production'
-                : /质量异常|质量追溯|质量证据|责任部门|质量协同/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-quality';
-          if (!harborAgent || !member || !isAllowed) {
+                ? /生产进度|生产关联|报工产能|生产证据/.test(harborAgent?.role || '')
+                : /质量异常|质量追溯|质量证据|责任部门|质量协同/.test(harborAgent?.role || '');
+          // 归属轴：服务业务域是派单的权威依据；小队外壳退役后不再依赖 squadId。
+          const domainAllowed = Boolean(harborAgent?.domainIds?.includes(domainId));
+          if (!harborAgent || !roleAllowed || !domainAllowed) {
             const message = taskType === 'kitting'
-              ? '只能向已绑定物料齐套 Agent 小队的专业 Agent 派发该任务'
+              ? '只能向服务域包含物料齐套的专业 Agent 派发该任务'
               : taskType === 'production'
-                ? '只能向已绑定生产协同 Agent 小队的专业 Agent 派发该任务'
+                ? '只能向服务域包含生产协同的专业 Agent 派发该任务'
                 : taskType === 'quality'
-                ? '只能向已绑定异常与质量 Agent 小队的专业 Agent 派发该任务'
-                : '只能向已加入订单 Agent 小队的风险交付 Agent 派发该任务';
+                ? '只能向服务域包含异常与质量的专业 Agent 派发该任务'
+                : '只能向服务域包含订单交付的风险交付 Agent 派发该任务';
             send(ws, { type: 'error', convId, message });
             return;
           }
-          dispatch = { agentId: member.id, orderNo, evidenceRef, taskType };
+          dispatch = { agentId: member?.id ?? harborAgent.id, orderNo, evidenceRef, taskType };
+          const dispatchedAgentId = dispatch.agentId;
           // A specialist dispatch is never a central conversation. Persist its
           // ownership defensively even if an older client created it as hub.
           const dispatchedConversation = getConv(convId);
-          if (dispatchedConversation && (dispatchedConversation.scope !== 'agent' || dispatchedConversation.agentId !== member.id)) {
+          if (dispatchedConversation && (dispatchedConversation.scope !== 'agent' || dispatchedConversation.agentId !== dispatchedAgentId)) {
             dispatchedConversation.scope = 'agent';
-            dispatchedConversation.agentId = member.id;
-            dispatchedConversation.squadId = member.squadId ?? undefined;
+            dispatchedConversation.agentId = dispatchedAgentId;
+            dispatchedConversation.squadId = undefined;
             touch(dispatchedConversation);
             broadcast({ type: 'conversations_updated', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
           }
@@ -2536,7 +2536,7 @@ wss.on('connection', (ws, request) => {
             : taskType === 'quality' ? 'quality issue task dispatched to specialist agent'
               : taskType === 'production' ? 'production coordination task dispatched to specialist agent'
               : 'order risk dispatched to risk delivery agent';
-          appendEvidence({ kind: 'app_event', summary, payload: { orderNo, evidenceRef, taskType, harborAgentId: agentId, squadAgentId: member.id } });
+          appendEvidence({ kind: 'app_event', summary, payload: { orderNo, evidenceRef, taskType, harborAgentId: agentId, squadAgentId: dispatchedAgentId } });
         }
         const requestedChoice = (msg.choice ?? {}) as { provider?: string; model?: string };
         const existingConversation = getConv(convId);

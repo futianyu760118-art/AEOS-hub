@@ -29,7 +29,7 @@
     "test:events": "node --test test/execution-event-store.test.ts test/execution-events-ui.test.ts",
     "test:assistant": "node --test test/assistant-event-store.test.ts test/assistant-event-api.test.ts test/assistant-events-ui.test.ts",
     "test:control": "node --test test/system-token.test.ts test/agent-control-api.test.ts",
-    "test:squad": "node --test test/agent-squad-store.test.ts",
+    "test:squad": "node --test test/agent-squad-store.test.ts test/squad-retirement.test.ts",
     "test:operating-center": "node --test test/operating-center.test.ts",
     "test:mcp-policy": "node --test test/mcp-registry.test.ts test/mcp-access-gateway.test.ts",
     "test:runtime": "node --test src/runtime/runtime-health.test.ts",

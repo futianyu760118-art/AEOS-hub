@@ -6,10 +6,10 @@ import { loadAgentSquad, deleteAgentSquadMember } from '../src/agent-squad-store
 const snapshot = loadAgentSquad();
 const ghosts = snapshot.members.filter((member) => member.harborAgentId == null);
 
-const removed: Array<{ id: string; name: string; squadId: string; removedMemoryCount: number; removedMessageCount: number }> = [];
+const removed: Array<{ id: string; name: string; removedMemoryCount: number; removedMessageCount: number }> = [];
 for (const member of ghosts) {
   const { removedMemoryCount, removedMessageCount } = deleteAgentSquadMember({ agentId: member.id });
-  removed.push({ id: member.id, name: member.name, squadId: member.squadId, removedMemoryCount, removedMessageCount });
+  removed.push({ id: member.id, name: member.name, removedMemoryCount, removedMessageCount });
 }
 
 console.log(JSON.stringify({ removed, remainingMembers: loadAgentSquad().members.length }, null, 2));

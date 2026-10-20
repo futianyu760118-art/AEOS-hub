@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=catalog-tree-20261020" />
+  <link rel="stylesheet" href="/style.css?v=squad-retired-20261020" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -127,7 +127,6 @@
         <div class="nav-group">
           <span class="nav-label">AI 资源协作</span>
           <button class="nav-item" type="button" data-view="harbor" data-title="AI 港湾"><i data-lucide="waypoints"></i><span>AI 港湾</span></button>
-          <button class="nav-item" type="button" data-view="squad" data-title="Agent 小队"><i data-lucide="users-round"></i><span>Agent 小队</span></button>
           <button class="nav-item" type="button" data-view="usage" data-title="用量台账"><i data-lucide="book-open"></i><span>用量台账</span></button>
           <button class="nav-item" type="button" data-view="route" data-title="模型选型"><i data-lucide="route"></i><span>模型选型</span></button>
         </div>
@@ -524,32 +523,6 @@
           <section class="surface inbox-surface"><div class="surface-head"><div><h2>工作消息</h2><p>标记已读只改变个人工作台状态，不改变业务事项或业务数据</p></div><span id="inbox-unread-count" class="status-pill info">加载中</span></div><div class="inbox-toolbar"><div class="inbox-search"><i data-lucide="search"></i><input id="inbox-search" type="search" placeholder="搜索事项、结论或编号" /></div><select id="inbox-filter" aria-label="筛选 Inbox"><option value="all">全部消息</option><option value="unread">仅未读</option><option value="decision_required">需人工决策</option></select><button id="btn-inbox-read-all" class="btn secondary compact" type="button"><i data-lucide="check-check"></i>全部标记已读</button></div><div id="inbox-list" class="inbox-list"><div class="dashboard-loading">正在读取 Inbox…</div></div></section>
         </section>
 
-        <section id="view-squad" class="view app-view hidden">
-          <div class="page-head squad-page-head">
-            <div><span class="page-module">AI 资源协作</span><h1>Agent 小队</h1><p>中枢 Agent 统筹业务 Agent 小队；每个业务小队与其下辖 Agent 分别保留记忆、动作与协作上下文</p></div>
-            <div class="page-actions"><button id="squad-add-member" class="btn primary" type="button"><i data-lucide="user-round-plus"></i>从港湾加入</button></div>
-          </div>
-
-          <section class="squad-project-link" aria-label="AI 港湾项目关联"><span>协作项目</span><select id="squad-project-select" aria-label="关联 AI 港湾项目"><option value="">未关联项目</option></select><button id="squad-project-save" class="btn secondary compact" type="button"><i data-lucide="link"></i>保存关联</button><small id="squad-project-status">正在读取 AI 港湾项目…</small></section>
-
-          <div class="squad-metrics">
-            <div><span>主 Agent</span><strong id="squad-lead-name">AEOS 中枢 Agent</strong><small id="squad-lead-model">deepseek-chat</small></div>
-            <div><span>子 Agent</span><strong id="squad-member-count">0</strong><small id="squad-working-count">0 个协作中</small></div>
-            <div><span>独立记忆</span><strong id="squad-memory-count">0</strong><small>按 Agent 隔离保存</small></div>
-            <div><span>队内消息</span><strong id="squad-message-count">0</strong><small>可追溯协作记录</small></div>
-          </div>
-
-          <div class="squad-layout">
-            <section class="surface squad-roster">
-              <div class="surface-head"><div><h2>小队层级</h2><p>顶层中枢 → 业务 Agent 小队 → 下辖子 Agent</p></div></div>
-              <div id="squad-member-list" class="squad-member-list"><div class="registry-loading">正在加载 Agent 小队…</div></div>
-            </section>
-            <section class="surface squad-detail">
-              <div id="squad-member-detail" class="squad-member-detail"><div class="harbor-empty"><i data-lucide="users-round"></i><strong>请选择子 Agent</strong><small>查看其独立记忆、最近动作与队内协作消息</small></div></div>
-            </section>
-          </div>
-        </section>
-
         <section id="view-execution" class="view app-view hidden">
           <div class="page-head">
             <div><span class="page-module">自治运行</span><h1>执行面</h1><p>用自然语言向执行面查询智能体提问</p></div>
@@ -808,16 +781,6 @@
     </div>
   </div>
 
-  <div id="squad-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="squad-modal-title">
-    <div class="modal-panel squad-modal-panel">
-      <div class="modal-head"><div><span>AGENT 小队</span><h2 id="squad-modal-title">从 AI 港湾加入 Agent</h2><p>身份、模型、Runtime 与能力以 AI 港湾配置为准；小队仅维护协作关系与独立记忆。</p></div><button id="squad-modal-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
-      <form id="squad-member-form"><div class="modal-body harbor-form-grid">
-        <label class="wide"><span>业务 Agent 小队</span><select name="squadId" required><option value="">正在读取业务小队…</option></select><small class="field-note">子 Agent 的独立记忆与动作只归属于自身；业务小队另有独立协作记录。</small></label>
-        <label class="wide"><span>AI 港湾 Agent</span><select name="harborAgentId" required><option value="">正在读取可用 Agent…</option></select><small class="field-note">一个 AI 港湾 Agent 在当前小队中只能绑定一次。</small></label>
-      </div><div class="modal-foot"><span id="squad-form-status"></span><button id="squad-form-cancel" class="btn secondary" type="button">取消</button><button class="btn primary" type="submit"><i data-lucide="check"></i><span>加入小队</span></button></div></form>
-    </div>
-  </div>
-
   <div id="role-create-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="role-create-title">
     <div class="modal-panel">
       <div class="modal-head"><div><span>角色管理</span><h2 id="role-create-title">新增业务角色</h2><p>角色编码创建后不可修改，并自动限定在当前租户与组织。</p></div><button id="role-create-close" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x"></i></button></div>
@@ -914,6 +877,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=catalog-tree-20261020"></script>
+  <script type="module" src="/app.js?v=squad-retired-20261020"></script>
 </body>
 </html>

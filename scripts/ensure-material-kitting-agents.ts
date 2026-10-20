@@ -1,7 +1,6 @@
 import { createHarborAgent, loadHarbor } from '../src/harbor-store.ts';
 import { bindAgentSquadMember, loadAgentSquad } from '../src/agent-squad-store.ts';
 
-const squadId = 'business-squad-material-kitting';
 const definitions = [
   {
     memberId: 'squad-agent-kitting-analysis',
@@ -63,7 +62,7 @@ for (const definition of definitions) {
 }
 
 const links = loadAgentSquad().members
-  .filter((item) => item.squadId === squadId)
+  .filter((item) => definitions.some((definition) => definition.name === item.name))
   .map((item) => ({ name: item.name, harborAgentId: item.harborAgentId }));
 if (links.length !== definitions.length || links.some((item) => !item.harborAgentId)) {
   throw new Error('物料齐套 Agent 小队的 AI 港湾绑定校验失败');
