@@ -137,7 +137,7 @@ const els = {
   harborRunCount: $('#harbor-run-count'), harborRunActive: $('#harbor-run-active'),
   harborRuntimeBoundaryStatus: $('#harbor-runtime-boundary-status'), harborUpdated: $('#harbor-updated'),
   harborAgentList: $('#harbor-agent-list'), harborRuntimeList: $('#harbor-runtime-list'), harborProjectList: $('#harbor-project-list'),
-  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentSquadFilter: $('#harbor-agent-squad-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'),
+  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentDomainFilter: $('#harbor-agent-domain-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'), catalogSummary: $('#catalog-summary'),
   btnAddAgent: $('#btn-add-agent'), btnAddRuntime: $('#btn-add-runtime'),
   harborModal: $('#harbor-modal'), harborModalKicker: $('#harbor-modal-kicker'), harborModalTitle: $('#harbor-modal-title'),
   harborModalDesc: $('#harbor-modal-desc'), harborModalClose: $('#harbor-modal-close'), harborForm: $('#harbor-form'),
@@ -170,7 +170,12 @@ let commandIndex = 0;
 let commandMatches = [];
 let welcomeState = { step: 0, name: '管理者', role: '决策责任人', defaultView: 'dashboard', avatar: '' };
 let harbor = { version: 1, agents: [], runtimes: [], projects: [], runs: [] };
-let harborAgentFilter = { query: '', level: 'all', status: 'all', squad: 'all' };
+let harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
+let catalogTree = null;
+let catalogView = 'ownership';
+let catalogExpansionInitialized = false;
+const expandedCatalogSystems = new Set();
+const expandedCatalogDomains = new Set();
 let harborModalType = null;
 let squad = { version: 1, lead: null, subSquads: [], squadMemories: [], squadActivities: [], members: [], memories: [], activities: [], messages: [] };
 let selectedSquadMemberId = null;
@@ -5994,57 +5999,98 @@ function harborAgentActivity(agent) {
   return { title: activity.title || '任务活动', detail: activity.detail || '未返回任务说明' };
 }
 
-function renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, hierarchy = {}) {
-  const runtime = agent.runtimeId ? runtimeById.get(agent.runtimeId) : null;
+const CATALOG_LEVEL_LABELS = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
+const CATALOG_DOMAIN_LABELS = { order: '订单交付', kitting: '物料齐套', quality: '异常与质量', production: '生产协同', 'cross-domain': '跨域/中枢' };
+
+function catalogFilterActive() {
+  return Boolean(String(harborAgentFilter.query || '').trim())
+    || harborAgentFilter.level !== 'all'
+    || harborAgentFilter.status !== 'all'
+    || harborAgentFilter.domain !== 'all';
+}
+
+function catalogAgentMatches(agent, system) {
+  if (harborAgentFilter.level !== 'all' && agent.hierarchyLevel !== harborAgentFilter.level) return false;
+  if (harborAgentFilter.status !== 'all' && agent.status !== harborAgentFilter.status) return false;
+  if (harborAgentFilter.domain !== 'all' && !(agent.domainIds || []).includes(harborAgentFilter.domain)) return false;
+  const query = String(harborAgentFilter.query || '').trim().toLowerCase();
+  if (!query) return true;
+  const text = [
+    agent.name, agent.role, agent.externalAgentId, system.name,
+    ...(agent.skills || []),
+    ...(agent.domainIds || []).map((id) => CATALOG_DOMAIN_LABELS[id] || id),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes(query);
+}
+
+function renderCatalogAgentRow(agent, system) {
+  const runtime = agent.runtimeId ? (harbor.runtimes || []).find((item) => item.id === agent.runtimeId) : null;
   const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
-  const isRoot = hierarchy.root === true;
-  // The root is an orchestrator, not a squad member.  Do not surface legacy
-  // child-member activity (which can contain retired records) in its row.
-  const recent = isRoot
-    ? { title: '顶层编排节点', detail: '仅负责跨小队路由与治理，不归属任何业务小队' }
-    : harborAgentActivity(agent);
-  const hierarchyLabels = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
-  const tier = hierarchy.tier || `${agent.hierarchyLevel || 'L2'} · ${hierarchyLabels[agent.hierarchyLevel] || '专项执行'}`;
-  const parent = hierarchy.parent || (agent.parentAgentId ? `上级：${(harbor.agents || []).find((item) => item.id === agent.parentAgentId)?.name || '未找到'}` : (linkedMember ? '已关联业务小队' : '待关联业务小队'));
-  return `<div class="harbor-row">
-    <div class="harbor-identity"><span class="harbor-avatar"><i data-lucide="bot"></i></span><span class="harbor-primary"><strong>${esc(agent.name)}</strong><small><b class="harbor-tier">${esc(tier)}</b>${esc(parent)} · ${esc(agent.role || agent.description || '未定义角色')}</small></span></div>
-    <span><b class="status-pill info">${esc(agent.autonomyLevel)} ${esc(autonomyLabels[agent.autonomyLevel] || '')}</b></span>
-    <span class="harbor-cell"><strong>${esc(runtime?.name || '未绑定 Runtime')}</strong><small>${esc(agent.provider)} · ${esc(agent.model)}</small></span>
-    <span>${harborTags(agent.skills, '尚未配置 Skill')}</span>
-    <span>${esc(accessLabels[agent.access] || agent.access)}</span>
-    <span class="harbor-cell harbor-agent-recent"><strong>${esc(recent.title)}</strong><small title="${esc(recent.detail)}">${esc(recent.detail)}</small></span>
-    <span class="harbor-agent-actions">${statusPill('agent', agent.status)}${isRoot
-      ? '<span class="harbor-root-locked">根节点 · 不加入小队</span>'
-      : `${linkedMember
-        ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
-        : `<button class="btn secondary compact harbor-add-to-squad" type="button" data-harbor-agent-id="${esc(agent.id)}">加入小队</button>`}<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`}</span>
+  const isRoot = agent.type === 'hub';
+  const serviceDomains = (agent.domainIds || []).map((id) => CATALOG_DOMAIN_LABELS[id] || id);
+  const environment = agent.execution
+    ? `${agent.execution.local ? '港湾本机' : '远程执行面'} · ${agent.execution.connectionStatus === 'online' ? '在线' : '离线'}`
+    : runtime?.name || '未绑定 Runtime';
+  const updated = agent.execution ? formatHarborTime(agent.execution.lastSeenAt) : formatHarborTime(agent.updatedAt);
+  return `<div class="catalog-agent-row" data-catalog-agent-id="${esc(agent.id)}">
+    <span class="catalog-agent-avatar"><i data-lucide="bot"></i></span>
+    <div class="catalog-agent-main">
+      <span class="catalog-agent-title"><strong>${esc(agent.name)}</strong><b class="harbor-tier">${esc(agent.hierarchyLevel)} · ${esc(CATALOG_LEVEL_LABELS[agent.hierarchyLevel] || '专项执行')}</b>${isRoot ? '<b class="status-pill ok">根节点</b>' : ''}${agent.registeredInHarbor === false ? '<b class="status-pill warn">未登记港湾</b>' : ''}</span>
+      <small>${esc(agent.role || '未定义角色')} · ${esc(system.name)} · 服务域 ${esc(serviceDomains.join('、') || '未设置')}</small>
+    </div>
+    <span class="catalog-agent-skills">${harborTags(agent.skills, '尚未配置 Skill')}</span>
+    <span class="catalog-agent-runtime"><strong>${esc(environment)}</strong><small>${esc(agent.modelProfileId || '未指定模型档')} · ${esc(updated)}</small></span>
+    <span class="catalog-agent-status">${statusPill('agent', agent.status)}</span>
+    <span class="catalog-agent-actions">${linkedMember
+      ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
+      : ''}${agent.registeredInHarbor !== false && !isRoot
+      ? `<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`
+      : ''}</span>
   </div>`;
 }
 
-function renderHarborRootAgent(agent, runtimeById, autonomyLabels, accessLabels) {
-  if (!agent) return '';
-  return `<section class="harbor-agent-root">
-    <div class="harbor-agent-root-head"><span class="harbor-agent-root-icon"><i data-lucide="crown"></i></span><span><strong>L0 · 中枢 Agent</strong><small>负责跨小队编排、任务路由与治理门禁</small></span><b class="status-pill ok">根节点</b></div>
-    <div class="harbor-agent-root-member">${renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L0 · 中枢 Agent', parent: 'AI 港湾根节点', root: true })}</div>
+function renderCatalogDomain(system, domain, forceExpand) {
+  const key = `${system.id}/${domain.id}`;
+  const expanded = forceExpand || expandedCatalogDomains.has(key);
+  return `<section class="catalog-domain ${expanded ? 'is-expanded' : ''}">
+    <button class="catalog-domain-toggle" type="button" data-catalog-domain-toggle="${esc(key)}" aria-expanded="${expanded}">
+      <span class="catalog-node-icon domain"><i data-lucide="folder-tree"></i></span>
+      <span class="catalog-node-copy"><strong>${esc(domain.name)}</strong><small>主属业务域 · 服务域筛选会一并命中</small></span>
+      <span class="catalog-node-count">${domain.agentCount} 个智能体</span>
+      <i class="catalog-node-chevron" data-lucide="chevron-right"></i>
+    </button>
+    <div class="catalog-domain-body">${domain.agents.length
+      ? domain.agents.map((agent) => renderCatalogAgentRow(agent, system)).join('')
+      : '<div class="catalog-empty-node">该业务域暂无智能体</div>'}</div>
   </section>`;
 }
 
-function renderHarborBusinessSquadGroup(businessSquad, agents, runtimeById, autonomyLabels, accessLabels) {
-  const expanded = expandedHarborBusinessSquadIds.has(businessSquad.id);
-  const members = (squad.members || []).filter((member) => member.squadId === businessSquad.id);
-  const linkedCount = members.filter((member) => member.harborAgentId && agents.some((agent) => agent.id === member.harborAgentId)).length;
-  const workingCount = agents.filter((agent) => agent.status === 'working').length;
-  const standbyCount = agents.filter((agent) => ['idle', 'starting'].includes(agent.status)).length;
-  return `<section class="harbor-agent-group ${expanded ? 'is-expanded' : ''}">
-    <button class="harbor-agent-group-toggle" type="button" data-harbor-business-squad-id="${esc(businessSquad.id)}" aria-expanded="${expanded}">
-      <span class="harbor-agent-group-icon"><i data-lucide="layers"></i></span>
-      <span class="harbor-agent-group-copy"><strong>L1 · ${esc(businessSquad.name)}</strong><small>${esc(businessSquad.description || '业务 Agent 协作单元')} · ${linkedCount}/${members.length} 已接入 AI 港湾</small></span>
-      <span class="harbor-agent-group-note">${workingCount ? `${workingCount} 个执行中` : `${standbyCount} 个待命`} · ${linkedCount === members.length ? '链路就绪' : '有待绑定'}</span>
-      <i class="harbor-agent-group-chevron" data-lucide="chevron-right"></i>
+function renderCatalogSystem(system, forceExpand) {
+  const expanded = forceExpand || expandedCatalogSystems.has(system.id);
+  return `<section class="catalog-system ${expanded ? 'is-expanded' : ''}">
+    <button class="catalog-system-toggle" type="button" data-catalog-system-toggle="${esc(system.id)}" aria-expanded="${expanded}">
+      <span class="catalog-node-icon system"><i data-lucide="building-2"></i></span>
+      <span class="catalog-node-copy"><strong>${esc(system.name)}</strong><small>${system.unregistered ? '未登记系统' : esc(system.owner || '未指定负责人')} · ${system.domains.length} 个业务域</small></span>
+      <span class="catalog-node-count">${system.agentCount} 个智能体</span>
+      <i class="catalog-node-chevron" data-lucide="chevron-right"></i>
     </button>
-    <div class="harbor-agent-group-members">${agents.length ? agents.map((agent) => renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L2 · 专项 Agent', parent: businessSquad.name })).join('') : '<div class="harbor-agent-group-empty">暂无已接入的专项 Agent</div>'}</div>
+    <div class="catalog-system-body">${system.domains.length
+      ? system.domains.map((domain) => renderCatalogDomain(system, domain, forceExpand)).join('')
+      : '<div class="catalog-empty-node">该业务域暂无智能体</div>'}</div>
   </section>`;
 }
+
+function renderCatalogHierarchyView(pairs) {
+  return `<div class="catalog-hierarchy">${['L0', 'L1', 'L2', 'L3'].map((level) => {
+    const members = pairs.filter(({ agent }) => agent.hierarchyLevel === level);
+    if (!members.length) return '';
+    return `<section class="catalog-hierarchy-group">
+      <div class="catalog-hierarchy-head"><span class="catalog-node-icon domain"><i data-lucide="layers"></i></span><span class="catalog-node-copy"><strong>${level} · ${esc(CATALOG_LEVEL_LABELS[level])}</strong><small>功能层级视图，不改变系统与业务域归属</small></span><b class="catalog-node-count">${members.length}</b></div>
+      <div class="catalog-hierarchy-members">${members.map(({ agent, system }) => renderCatalogAgentRow(agent, system)).join('')}</div>
+    </section>`;
+  }).join('')}</div>`;
+}
+
 
 function renderHarbor() {
   const agents = Array.isArray(harbor.agents) ? harbor.agents : [];
@@ -6070,42 +6116,43 @@ function renderHarbor() {
   els.harborRuntimeBoundaryStatus.textContent = `${readyRuntimes} 个待命`;
   els.harborUpdated.textContent = `最近同步 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 
-  const autonomyLabels = { A0: '观察', A1: '建议', A2: '编排', A3: '低风险自治', A4: '经营自治', A5: '例外管理' };
-  const accessLabels = { private: '仅自己', workspace: '工作区', selected: '指定成员' };
-  const businessSquads = Array.isArray(squad.subSquads) ? squad.subSquads : [];
-  const businessSquadById = new Map(businessSquads.map((item) => [item.id, item]));
-  const memberByHarborAgentId = new Map((squad.members || []).filter((item) => item.harborAgentId).map((item) => [item.harborAgentId, item]));
-  const leadHarborAgentId = squad.lead?.harborAgentId || 'agent-aeos-hub';
-  if (els.harborAgentSquadFilter) {
-    const previous = harborAgentFilter.squad || 'all';
-    els.harborAgentSquadFilter.innerHTML = `<option value="all">全部小队</option>${businessSquads.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}`;
-    els.harborAgentSquadFilter.value = businessSquadById.has(previous) ? previous : 'all';
-    harborAgentFilter.squad = els.harborAgentSquadFilter.value;
+  const catalogSystems = Array.isArray(catalogTree?.systems) ? catalogTree.systems : [];
+  const activeFilter = catalogFilterActive();
+  const allPairs = [];
+  for (const system of catalogSystems) {
+    for (const domain of system.domains) {
+      for (const agent of domain.agents) allPairs.push({ agent, system, domain });
+    }
   }
-  const query = String(harborAgentFilter.query || '').trim().toLowerCase();
-  const visibleAgents = agents.filter((agent) => {
-    const member = memberByHarborAgentId.get(agent.id);
-    const parentName = agent.parentAgentId ? agents.find((item) => item.id === agent.parentAgentId)?.name || '' : '';
-    if (harborAgentFilter.level !== 'all' && (agent.hierarchyLevel || 'L2') !== harborAgentFilter.level) return false;
-    if (harborAgentFilter.status !== 'all' && (agent.status || 'draft') !== harborAgentFilter.status) return false;
-    if (harborAgentFilter.squad !== 'all' && (member?.squadId || '') !== harborAgentFilter.squad) return false;
-    if (!query) return true;
-    return `${agent.name || ''} ${agent.role || ''} ${agent.description || ''} ${parentName}`.toLowerCase().includes(query);
-  });
-  const rootAgent = visibleAgents.find((agent) => agent.id === leadHarborAgentId) || null;
-  const groupedAgents = new Map(businessSquads.map((item) => [item.id, []]));
-  const standaloneAgents = [];
-  for (const agent of visibleAgents) {
-    if (agent.id === rootAgent?.id) continue;
-    const member = memberByHarborAgentId.get(agent.id);
-    if (member?.squadId && businessSquadById.has(member.squadId)) groupedAgents.get(member.squadId).push(agent);
-    else standaloneAgents.push(agent);
+  const matchedPairs = allPairs.filter(({ agent, system }) => catalogAgentMatches(agent, system));
+  const filteredSystems = catalogSystems.map((system) => {
+    const domains = system.domains.map((domain) => {
+      const members = domain.agents.filter((agent) => catalogAgentMatches(agent, system));
+      return { ...domain, agents: members, agentCount: members.length };
+    }).filter((domain) => domain.agents.length > 0 || !activeFilter);
+    return { ...system, domains, agentCount: domains.reduce((sum, domain) => sum + domain.agentCount, 0) };
+  }).filter((system) => system.agentCount > 0 || !activeFilter);
+
+  if (els.catalogSummary) {
+    const counts = catalogTree?.counts;
+    els.catalogSummary.innerHTML = counts
+      ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
+      : '';
   }
-  const agentRows = standaloneAgents.map((agent) => renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L1 · 待归属 Agent', parent: '尚未加入业务小队' }));
-  const groupedRows = businessSquads
-    .map((businessSquad) => renderHarborBusinessSquadGroup(businessSquad, groupedAgents.get(businessSquad.id), runtimeById, autonomyLabels, accessLabels));
-  const unassigned = agentRows.length ? `<section class="harbor-agent-unassigned"><div class="harbor-agent-unassigned-head"><i data-lucide="git-branch"></i><span><strong>L1 · 待归属业务小队</strong><small>这些 Agent 尚未建立小队派发关系</small></span><b class="status-pill warn">${agentRows.length} 个待归属</b></div>${agentRows.join('')}</section>` : '';
-  els.harborAgentList.innerHTML = visibleAgents.length ? [renderHarborRootAgent(rootAgent, runtimeById, autonomyLabels, accessLabels), ...groupedRows, unassigned].join('') : harborEmpty('search-x', agents.length ? '没有匹配的 Agent' : '暂无智能体', agents.length ? '请调整层级、状态、小队或关键字筛选' : '新增智能体后可绑定 Runtime 与 Capability');
+
+  if (!catalogTree) {
+    els.harborAgentList.innerHTML = harborEmpty('cloud-off', '目录数据暂不可用', '请刷新页面后重试');
+  } else if (!catalogSystems.length) {
+    els.harborAgentList.innerHTML = harborEmpty('building-2', '暂无系统', '请先在系统登记中配置归属系统');
+  } else if (activeFilter && matchedPairs.length === 0) {
+    els.harborAgentList.innerHTML = harborEmpty('search-x', '没有匹配的智能体', '请调整层级、状态、业务域或关键字筛选');
+  } else if (catalogView === 'hierarchy') {
+    els.harborAgentList.innerHTML = renderCatalogHierarchyView(matchedPairs);
+  } else {
+    els.harborAgentList.innerHTML = filteredSystems
+      .map((system) => renderCatalogSystem(system, activeFilter))
+      .join('');
+  }
 
   const runtimeKinds = {
     'codex-app-server': 'Codex App Server', 'openai-responses': 'OpenAI Responses',
@@ -6143,14 +6190,28 @@ function renderHarbor() {
 
 async function loadHarbor(options = {}) {
   try {
-    const [response, squadResponse] = await Promise.all([
+    const [response, squadResponse, catalogResponse] = await Promise.all([
       fetch('/api/harbor', { headers: { accept: 'application/json' } }),
       fetch('/api/agent-squad', { headers: { accept: 'application/json' } }),
+      fetch('/api/catalog/tree', { headers: { accept: 'application/json' } }),
     ]);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     harbor = data;
     if (squadResponse.ok) squad = await squadResponse.json();
+    if (catalogResponse.ok) {
+      const catalogData = await catalogResponse.json();
+      catalogTree = catalogData.tree || null;
+      if (!catalogExpansionInitialized && catalogTree) {
+        for (const system of catalogTree.systems || []) {
+          if (system.agentCount > 0) expandedCatalogSystems.add(system.id);
+          for (const domain of system.domains || []) expandedCatalogDomains.add(`${system.id}/${domain.id}`);
+        }
+        catalogExpansionInitialized = true;
+      }
+    } else {
+      catalogTree = null;
+    }
     renderHarbor();
     if (!$('#view-squad').classList.contains('hidden')) renderSquad();
   } catch (error) {
@@ -7303,11 +7364,19 @@ els.harborRuntimeList.addEventListener('click', (event) => {
   if (button) verifyHarborRuntime(button.dataset.runtimeId, button);
 });
 els.harborAgentList.addEventListener('click', async (event) => {
-  const groupToggle = event.target.closest('[data-harbor-business-squad-id]');
-  if (groupToggle) {
-    const squadId = groupToggle.dataset.harborBusinessSquadId;
-    if (expandedHarborBusinessSquadIds.has(squadId)) expandedHarborBusinessSquadIds.delete(squadId);
-    else expandedHarborBusinessSquadIds.add(squadId);
+  const systemToggle = event.target.closest('[data-catalog-system-toggle]');
+  if (systemToggle) {
+    const systemId = systemToggle.dataset.catalogSystemToggle;
+    if (expandedCatalogSystems.has(systemId)) expandedCatalogSystems.delete(systemId);
+    else expandedCatalogSystems.add(systemId);
+    renderHarbor();
+    return;
+  }
+  const domainToggle = event.target.closest('[data-catalog-domain-toggle]');
+  if (domainToggle) {
+    const key = domainToggle.dataset.catalogDomainToggle;
+    if (expandedCatalogDomains.has(key)) expandedCatalogDomains.delete(key);
+    else expandedCatalogDomains.add(key);
     renderHarbor();
     return;
   }
@@ -7320,33 +7389,27 @@ els.harborAgentList.addEventListener('click', async (event) => {
   if (deleteButton) {
     try { await deleteHarborAgent(deleteButton.dataset.harborDeleteAgentId); }
     catch (error) { toast(`删除智能体失败：${error.message}`, true); }
-    return;
-  }
-  const button = event.target.closest('.harbor-add-to-squad');
-  if (!button || button.disabled) return;
-  button.disabled = true;
-  try {
-    const member = await postSquad('/api/agent-squad/members', { harborAgentId: button.dataset.harborAgentId, squadId: selectedBusinessSquadId || 'business-squad-orders' });
-    selectedSquadMemberId = member.id;
-    selectedBusinessSquadId = member.squadId || selectedBusinessSquadId;
-    selectedSquadView = 'agent';
-    await loadHarbor({ silent: true });
-    toast(`${member.name} 已加入 Agent 小队`);
-  } catch (error) {
-    toast(`加入 Agent 小队失败：${error.message}`, true);
-  } finally {
-    button.disabled = false;
   }
 });
+$$('[data-catalog-view]').forEach((button) => button.addEventListener('click', () => {
+  catalogView = button.dataset.catalogView === 'hierarchy' ? 'hierarchy' : 'ownership';
+  $$('[data-catalog-view]').forEach((item) => {
+    const active = item === button;
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-pressed', String(active));
+  });
+  renderHarbor();
+}));
 els.harborAgentSearch?.addEventListener('input', () => { harborAgentFilter.query = els.harborAgentSearch.value; renderHarbor(); });
 els.harborAgentLevelFilter?.addEventListener('change', () => { harborAgentFilter.level = els.harborAgentLevelFilter.value; renderHarbor(); });
 els.harborAgentStatusFilter?.addEventListener('change', () => { harborAgentFilter.status = els.harborAgentStatusFilter.value; renderHarbor(); });
-els.harborAgentSquadFilter?.addEventListener('change', () => { harborAgentFilter.squad = els.harborAgentSquadFilter.value; renderHarbor(); });
+els.harborAgentDomainFilter?.addEventListener('change', () => { harborAgentFilter.domain = els.harborAgentDomainFilter.value; renderHarbor(); });
 els.harborAgentFilterClear?.addEventListener('click', () => {
-  harborAgentFilter = { query: '', level: 'all', status: 'all', squad: 'all' };
+  harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
   if (els.harborAgentSearch) els.harborAgentSearch.value = '';
   if (els.harborAgentLevelFilter) els.harborAgentLevelFilter.value = 'all';
   if (els.harborAgentStatusFilter) els.harborAgentStatusFilter.value = 'all';
+  if (els.harborAgentDomainFilter) els.harborAgentDomainFilter.value = 'all';
   renderHarbor();
 });
 els.harborModalClose.addEventListener('click', closeHarborModal);

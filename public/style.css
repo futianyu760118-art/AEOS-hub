@@ -1302,6 +1302,51 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .harbor-agent-group-members .harbor-row { padding-left: 28px; background: linear-gradient(90deg, rgba(47, 111, 190, 0.045) 0 3px, transparent 3px); }
 .harbor-agent-group-members .harbor-row:last-child { border-bottom: 0; }
 .harbor-agent-group-empty { padding: 14px 28px; color: var(--text-3); font-size: 10px; }
+
+/* 统一三级目录：系统 → 业务域 → 智能体 */
+.catalog-summary { display: flex; flex-wrap: wrap; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line-subtle); background: #fcfcfd; color: var(--text-3); font-size: 10px; }
+.catalog-summary span { display: inline-flex; align-items: center; gap: 5px; }
+.catalog-summary svg { width: 12px; height: 12px; }
+.catalog-warning { color: var(--warn); }
+.catalog-hit { color: var(--accent); }
+.catalog-tree { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 14px; background: #fafbfc; }
+.catalog-system, .catalog-domain, .catalog-hierarchy-group { border: 1px solid var(--line-subtle); border-radius: 8px; background: #fff; overflow: hidden; }
+.catalog-system-toggle, .catalog-domain-toggle { width: 100%; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto 16px; align-items: center; gap: 9px; border: 0; background: transparent; padding: 9px 12px; color: var(--text); text-align: left; cursor: pointer; }
+.catalog-system-toggle:hover, .catalog-domain-toggle:hover { background: rgba(47, 111, 190, 0.04); }
+.catalog-node-icon { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: rgba(47, 111, 190, 0.1); color: var(--info); }
+.catalog-node-icon.domain { background: rgba(47, 111, 190, 0.06); }
+.catalog-node-icon svg { width: 13px; height: 13px; }
+.catalog-node-copy { min-width: 0; display: flex; flex-direction: column; }
+.catalog-node-copy strong { font-size: 11px; }
+.catalog-node-copy small { margin-top: 2px; overflow: hidden; color: var(--text-3); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-node-count { color: var(--text-3); font-size: 9px; white-space: nowrap; }
+.catalog-node-chevron { width: 14px; height: 14px; color: var(--text-3); transition: transform 0.16s ease; }
+.catalog-system.is-expanded > .catalog-system-toggle .catalog-node-chevron,
+.catalog-domain.is-expanded > .catalog-domain-toggle .catalog-node-chevron { transform: rotate(90deg); }
+.catalog-system-body { display: none; flex-direction: column; gap: 8px; padding: 8px; border-top: 1px solid var(--line-subtle); background: #fcfcfd; }
+.catalog-system.is-expanded > .catalog-system-body { display: flex; }
+.catalog-domain-body { display: none; border-top: 1px solid var(--line-subtle); }
+.catalog-domain.is-expanded > .catalog-domain-body { display: block; }
+.catalog-empty-node { padding: 12px 14px; color: var(--text-3); font-size: 10px; }
+.catalog-agent-row { display: grid; grid-template-columns: 24px minmax(200px, 1.5fr) minmax(120px, 0.8fr) minmax(150px, 0.9fr) 64px auto; gap: 10px; align-items: center; padding: 9px 12px 9px 34px; border-bottom: 1px solid rgba(18, 18, 24, 0.05); background: #fff; }
+.catalog-agent-row:last-child { border-bottom: 0; }
+.catalog-agent-row:hover { background: rgba(47, 111, 190, 0.025); }
+.catalog-agent-avatar { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--accent-dim); color: var(--accent); }
+.catalog-agent-avatar svg { width: 13px; height: 13px; }
+.catalog-agent-main { min-width: 0; display: flex; flex-direction: column; }
+.catalog-agent-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.catalog-agent-title strong { font-size: 11px; }
+.catalog-agent-main small { margin-top: 2px; overflow: hidden; color: var(--text-3); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-agent-skills { min-width: 0; }
+.catalog-agent-runtime { min-width: 0; display: flex; flex-direction: column; }
+.catalog-agent-runtime strong { font-size: 10px; }
+.catalog-agent-runtime small { overflow: hidden; color: var(--text-3); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-agent-status { justify-self: start; }
+.catalog-agent-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.catalog-hierarchy { display: flex; flex-direction: column; gap: 8px; }
+.catalog-hierarchy-head { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--line-subtle); background: #fcfcfd; }
+.catalog-hierarchy-members .catalog-agent-row:last-child { border-bottom: 0; }
+
 .harbor-agent-unassigned { min-width: 920px; border-bottom: 1px solid rgba(161, 92, 0, 0.18); background: rgba(161, 92, 0, 0.035); }
 .harbor-agent-unassigned-head { min-height: 48px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 14px; color: var(--warning); }
 .harbor-agent-unassigned-head > span { min-width: 0; display: flex; flex-direction: column; }
