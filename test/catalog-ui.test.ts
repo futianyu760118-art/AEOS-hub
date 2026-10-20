@@ -28,6 +28,12 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   assert.match(app, /未登记港湾/);
   assert.match(app, /catalogShowArchived/);
   assert.match(app, /agent\.lifecycle === 'retired' \|\| agent\.status === 'archived'/);
+  assert.match(app, /function catalogUsageHtml\(/);
+  assert.match(app, /function catalogAgentUsageDetail\(/);
+  assert.match(app, /data-open-usage-detail/);
+  assert.match(app, /Token 未上报/);
+  assert.match(css, /\.catalog-agent-detail\s*\{/);
+  assert.match(css, /\.catalog-usage-cards\s*\{/);
   assert.match(app, /name="systemId"/);
   assert.match(app, /name="primaryDomainId"/);
   assert.match(app, /name="domainIds"/);

@@ -11,6 +11,20 @@ import type {
 } from './harbor-store.ts';
 import type { ExecutionAgentAuthMode, ExecutionAgentRecord } from './execution-plane.ts';
 import type { SystemRecord } from './system-registry.ts';
+import type { UsageByAgentRow, UsageBySystemRow } from './usage-ledger-store.ts';
+
+export interface CatalogUsageTotals {
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  events: number;
+  lastAt: string | null;
+}
+
+export interface CatalogUsageSummary {
+  byAgent: UsageByAgentRow[];
+  bySystem: UsageBySystemRow[];
+}
 
 export interface CatalogExecutionState {
   connectionStatus: 'online' | 'offline';
@@ -40,6 +54,7 @@ export interface CatalogAgentNode {
   modelProfileId: string | null;
   registeredInHarbor: boolean;
   execution: CatalogExecutionState | null;
+  usage: CatalogUsageTotals | null;
   skills: string[];
   updatedAt: string;
 }
@@ -58,6 +73,7 @@ export interface CatalogSystemNode {
   status: 'active' | 'disabled' | 'unregistered';
   unregistered: boolean;
   agentCount: number;
+  usage: CatalogUsageTotals | null;
   domains: CatalogDomainNode[];
 }
 
@@ -91,6 +107,8 @@ export interface CatalogSources {
   harbor: HarborSnapshot;
   systems: SystemRecord[];
   executionAgents: ExecutionAgentRecord[];
+  /** 用量聚合；缺省时目录不展示用量。 */
+  usage?: CatalogUsageSummary;
 }
 
 const UNREGISTERED_SYSTEM_ID = 'unregistered';
@@ -134,6 +152,7 @@ function executionNode(record: ExecutionAgentRecord, systemId: string): CatalogA
       authMode: record.authMode,
       currentRunId: record.currentRunId,
     },
+    usage: null,
     skills: record.capabilities.map((capability) => capability.name),
     updatedAt: record.lastSeenAt,
   };
@@ -166,6 +185,7 @@ function harborNode(agent: HarborAgent, execution: ExecutionAgentRecord | null):
       authMode: execution.authMode,
       currentRunId: execution.currentRunId,
     } : null,
+    usage: null,
     skills: [...agent.skills],
     updatedAt: agent.updatedAt,
   };
@@ -178,11 +198,56 @@ function sortAgents(agents: CatalogAgentNode[]): CatalogAgentNode[] {
   });
 }
 
+function emptyUsage(): CatalogUsageTotals {
+  return { tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
+}
+
+function addUsage(target: CatalogUsageTotals, row: { tokensIn: number; tokensOut: number; cost: number; events: number; lastAt: string | null }): void {
+  target.tokensIn += row.tokensIn;
+  target.tokensOut += row.tokensOut;
+  target.cost += row.cost;
+  target.events += row.events;
+  if (row.lastAt && (!target.lastAt || Date.parse(row.lastAt) > Date.parse(target.lastAt))) {
+    target.lastAt = row.lastAt;
+  }
+}
+
+function buildAgentUsage(rows: UsageByAgentRow[] | undefined): Map<string, UsageByAgentRow> {
+  return new Map((rows ?? []).map((row) => [row.agentId, row]));
+}
+
+function usageForAgent(keys: Array<string | null | undefined>, lookup: Map<string, UsageByAgentRow>): CatalogUsageTotals | null {
+  const totals = emptyUsage();
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const row = lookup.get(key);
+    if (row) addUsage(totals, row);
+  }
+  return totals.events > 0 ? totals : null;
+}
+
+function buildSystemUsage(systems: SystemRecord[], rows: UsageBySystemRow[] | undefined): Map<string, CatalogUsageTotals> {
+  const usage = new Map<string, CatalogUsageTotals>();
+  for (const row of rows ?? []) {
+    const system = systems.find((candidate) => candidate.systemId === row.systemId
+      || candidate.sourceSystemAliases.includes(row.systemId));
+    const key = system?.systemId ?? row.systemId;
+    const totals = usage.get(key) ?? emptyUsage();
+    addUsage(totals, row);
+    usage.set(key, totals);
+  }
+  return usage;
+}
+
 export function buildCatalogTree(sources: CatalogSources, now = new Date()): CatalogTree {
   const warnings: string[] = [];
   const knownSystems = new Map(sources.systems.map((system) => [system.systemId, system]));
   const executionByExternalId = new Map<string, ExecutionAgentRecord>();
   for (const record of sources.executionAgents) executionByExternalId.set(record.agentId, record);
+  const agentUsage = buildAgentUsage(sources.usage?.byAgent);
+  const systemUsage = buildSystemUsage(sources.systems, sources.usage?.bySystem);
 
   const claimedExecution = new Set<string>();
   const nodesBySystem = new Map<string, CatalogAgentNode[]>();
@@ -200,7 +265,9 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
     if (!knownSystems.has(agent.systemId)) {
       warnings.push(`${agent.name} 归属的系统 ${agent.systemId} 未在系统登记中`);
     }
-    addNode(agent.systemId, harborNode(agent, execution));
+    const node = harborNode(agent, execution);
+    node.usage = usageForAgent([node.id, node.externalAgentId, node.runtimeId], agentUsage);
+    addNode(agent.systemId, node);
   }
 
   for (const record of sources.executionAgents) {
@@ -210,7 +277,9 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
       || candidate.sourceSystemAliases.includes(record.sourceSystem));
     const systemId = system?.systemId ?? UNREGISTERED_SYSTEM_ID;
     if (!system) warnings.push(`执行面 Agent ${record.name} 的系统「${record.sourceSystem}」未登记，暂归未登记系统`);
-    addNode(systemId, executionNode(record, systemId));
+    const node = executionNode(record, systemId);
+    node.usage = usageForAgent([record.agentId, node.externalAgentId], agentUsage);
+    addNode(systemId, node);
   }
 
   const systemEntries: Array<{ id: string; name: string; owner: string; status: CatalogSystemNode['status']; unregistered: boolean }> = [
@@ -252,6 +321,7 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
     return {
       ...system,
       agentCount: agents.length,
+      usage: systemUsage.get(system.id) ?? null,
       domains,
     };
   });

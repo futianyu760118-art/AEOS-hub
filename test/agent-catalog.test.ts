@@ -102,6 +102,17 @@ function sources(): CatalogSources {
       execution({}),
       execution({ agentId: 'runtime-unknown-agent', name: '未登记执行面 Agent', sourceSystem: '未知系统', local: false }),
     ],
+    usage: {
+      byAgent: [
+        { agentId: 'agent-aeos-hub', tokensIn: 100, tokensOut: 50, cost: 0.01, events: 2, lastAt: NOW },
+        { agentId: 'runtime-control-platform-agent', tokensIn: 0, tokensOut: 0, cost: 0, events: 3, lastAt: '2026-10-19T08:32:04.692Z' },
+        { agentId: 'control-platform-assistant', tokensIn: 200, tokensOut: 20, cost: 1.5, events: 5, lastAt: NOW },
+      ],
+      bySystem: [
+        { systemId: 'aeos-hub', tokensIn: 100, tokensOut: 50, cost: 0.01, events: 2, lastAt: NOW },
+        { systemId: '公司中控平台（本机演示）', tokensIn: 200, tokensOut: 20, cost: 1.5, events: 8, lastAt: NOW },
+      ],
+    },
   };
 }
 
@@ -149,4 +160,28 @@ test('能力目录按 Agent 技能去重聚合', () => {
   const shared = capabilities.find((capability) => capability.name === '订单风险扫描');
   assert.equal(shared?.agentCount, 2);
   assert.deepEqual(shared?.agents.map((agent) => agent.id).sort(), ['agent-exec', 'agent-order']);
+});
+
+test('用量按规范系统与 Agent 落到目录节点', () => {
+  const tree = buildCatalogTree(sources());
+  const hub = tree.systems.find((system) => system.id === 'aeos-hub')!;
+  const hubAgent = hub.domains.flatMap((domain) => domain.agents).find((agent) => agent.id === 'agent-aeos-hub');
+  assert.equal(hub.usage?.cost, 0.01);
+  assert.equal(hub.usage?.events, 2);
+  assert.equal(hubAgent?.usage?.tokensIn, 100);
+
+  const control = tree.systems.find((system) => system.id === 'control-platform')!;
+  assert.equal(control.usage?.cost, 1.5);
+  assert.equal(control.usage?.events, 8);
+  const exec = control.domains.flatMap((domain) => domain.agents).find((agent) => agent.id === 'agent-exec');
+  assert.equal(exec?.usage?.events, 3);
+  assert.equal(exec?.usage?.tokensIn, 0);
+});
+
+test('没有用量聚合时目录节点保持空用量', () => {
+  const withoutUsage = sources();
+  delete withoutUsage.usage;
+  const tree = buildCatalogTree(withoutUsage);
+  assert.equal(tree.systems.every((system) => system.usage === null), true);
+  assert.equal(tree.systems.flatMap((system) => system.domains.flatMap((domain) => domain.agents)).every((agent) => agent.usage === null), true);
 });

@@ -80,6 +80,7 @@ export interface UsageByAgentRow {
   tokensOut: number;
   cost: number;
   events: number;
+  lastAt: string | null;
 }
 
 export interface UsageBySystemRow {
@@ -88,6 +89,7 @@ export interface UsageBySystemRow {
   tokensOut: number;
   cost: number;
   events: number;
+  lastAt: string | null;
 }
 
 export interface UsageByConsumerSystemRow {
@@ -96,6 +98,12 @@ export interface UsageByConsumerSystemRow {
   tokensOut: number;
   cost: number;
   events: number;
+}
+
+function latestTimestamp(current: string | null, candidate: string | null | undefined): string | null {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  return Date.parse(candidate) > Date.parse(current) ? candidate : current;
 }
 
 export class UsageLedgerStoreError extends Error {
@@ -225,11 +233,12 @@ export class UsageLedgerStore {
   aggregateByAgent(): UsageByAgentRow[] {
     const byAgent = new Map<string, UsageByAgentRow>();
     for (const event of this.load().events) {
-      const row = byAgent.get(event.agentId) ?? { agentId: event.agentId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0 };
+      const row = byAgent.get(event.agentId) ?? { agentId: event.agentId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
       row.tokensIn += event.tokensIn;
       row.tokensOut += event.tokensOut;
       row.cost += event.cost;
       row.events += 1;
+      row.lastAt = latestTimestamp(row.lastAt, event.endedAt);
       byAgent.set(event.agentId, row);
     }
     return [...byAgent.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
@@ -238,11 +247,12 @@ export class UsageLedgerStore {
   aggregateBySystem(): UsageBySystemRow[] {
     const bySystem = new Map<string, UsageBySystemRow>();
     for (const event of this.load().events) {
-      const row = bySystem.get(event.systemId) ?? { systemId: event.systemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0 };
+      const row = bySystem.get(event.systemId) ?? { systemId: event.systemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
       row.tokensIn += event.tokensIn;
       row.tokensOut += event.tokensOut;
       row.cost += event.cost;
       row.events += 1;
+      row.lastAt = latestTimestamp(row.lastAt, event.endedAt);
       bySystem.set(event.systemId, row);
     }
     return [...bySystem.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));

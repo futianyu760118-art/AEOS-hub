@@ -169,6 +169,7 @@ let catalogTree = null;
 let catalogView = 'ownership';
 let catalogShowArchived = false;
 let catalogExpansionInitialized = false;
+let catalogExpandedAgentId = null;
 const expandedCatalogSystems = new Set();
 const expandedCatalogDomains = new Set();
 let harborModalType = null;
@@ -6007,6 +6008,35 @@ function catalogAgentMatches(agent, system) {
   return text.includes(query);
 }
 
+function catalogUsageHtml(usage) {
+  if (!usage || usage.events === 0) {
+    return '<span class="catalog-usage empty"><strong>—</strong><small>未产生记账</small></span>';
+  }
+  const tokens = usage.tokensIn + usage.tokensOut;
+  const missing = tokens === 0 && usage.cost === 0;
+  if (missing) {
+    return `<span class="catalog-usage missing"><strong>Token 未上报</strong><small>${usage.events} 次执行</small></span>`;
+  }
+  return `<span class="catalog-usage"><strong>¥${formatUsageCost(usage.cost)}</strong><small>${formatTokenCount(tokens)} tok · ${usage.events} 次</small></span>`;
+}
+
+function catalogAgentUsageDetail(agent, system) {
+  const usage = agent.usage;
+  const tokens = usage ? usage.tokensIn + usage.tokensOut : 0;
+  const missing = Boolean(usage && usage.events > 0 && tokens === 0 && usage.cost === 0);
+  const card = (label, value, note, tone = '') => `<div class="catalog-usage-card"><span>${esc(label)}</span><strong class="${tone}">${esc(value)}</strong><small>${esc(note)}</small></div>`;
+  return `<div class="catalog-agent-detail">
+    <div class="catalog-usage-cards">
+      ${card('已记账成本', usage ? `¥${formatUsageCost(usage.cost)}` : '—', usage ? `${usage.events} 次记账` : '暂无用量')}
+      ${card('Token', usage && tokens > 0 ? formatTokenCount(tokens) : '未上报', missing ? '输入 / 输出均缺失' : '输入 + 输出', missing ? 'missing' : '')}
+      ${card('执行次数', usage ? String(usage.events) : '0', '来自 run_complete')}
+      ${card('最近调用', usage?.lastAt ? formatHarborTime(usage.lastAt) : '—', agent.status === 'archived' ? '已归档' : '该 Agent')}
+    </div>
+    ${missing ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>' : ''}
+    <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看用量明细</button></div>
+  </div>`;
+}
+
 function renderCatalogAgentRow(agent, system) {
   const runtime = agent.runtimeId ? (harbor.runtimes || []).find((item) => item.id === agent.runtimeId) : null;
   const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
@@ -6016,7 +6046,7 @@ function renderCatalogAgentRow(agent, system) {
     ? `${agent.execution.local ? '港湾本机' : '远程执行面'} · ${agent.execution.connectionStatus === 'online' ? '在线' : '离线'}`
     : runtime?.name || '未绑定 Runtime';
   const updated = agent.execution ? formatHarborTime(agent.execution.lastSeenAt) : formatHarborTime(agent.updatedAt);
-  return `<div class="catalog-agent-row" data-catalog-agent-id="${esc(agent.id)}">
+  return `<div class="catalog-agent-row${catalogExpandedAgentId === agent.id ? ' is-expanded' : ''}" data-catalog-agent-id="${esc(agent.id)}">
     <span class="catalog-agent-avatar"><i data-lucide="bot"></i></span>
     <div class="catalog-agent-main">
       <span class="catalog-agent-title"><strong>${esc(agent.name)}</strong><b class="harbor-tier">${esc(agent.hierarchyLevel)} · ${esc(CATALOG_LEVEL_LABELS[agent.hierarchyLevel] || '专项执行')}</b>${isRoot ? '<b class="status-pill ok">根节点</b>' : ''}${agent.registeredInHarbor === false ? '<b class="status-pill warn">未登记港湾</b>' : ''}</span>
@@ -6024,13 +6054,14 @@ function renderCatalogAgentRow(agent, system) {
     </div>
     <span class="catalog-agent-skills">${harborTags(agent.skills, '尚未配置 Skill')}</span>
     <span class="catalog-agent-runtime"><strong>${esc(environment)}</strong><small>${esc(agent.modelProfileId || '未指定模型档')} · ${esc(updated)}</small></span>
+    ${catalogUsageHtml(agent.usage)}
     <span class="catalog-agent-status">${statusPill('agent', agent.status)}</span>
     <span class="catalog-agent-actions">${linkedMember
       ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
       : ''}${agent.registeredInHarbor !== false && !isRoot
       ? `<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`
       : ''}</span>
-  </div>`;
+  </div>${catalogExpandedAgentId === agent.id ? catalogAgentUsageDetail(agent, system) : ''}`;
 }
 
 function renderCatalogDomain(system, domain, forceExpand) {
@@ -6056,6 +6087,7 @@ function renderCatalogSystem(system, forceExpand) {
       <span class="catalog-node-icon system"><i data-lucide="building-2"></i></span>
       <span class="catalog-node-copy"><strong>${esc(system.name)}</strong><small>${system.unregistered ? '未登记系统' : esc(system.owner || '未指定负责人')} · ${system.domains.length} 个业务域</small></span>
       <span class="catalog-node-count">${system.agentCount} 个智能体</span>
+      ${catalogUsageHtml(system.usage)}
       <i class="catalog-node-chevron" data-lucide="chevron-right"></i>
     </button>
     <div class="catalog-system-body">${system.domains.length
@@ -6111,6 +6143,8 @@ function renderHarbor() {
   const matchedPairs = allPairs.filter(({ agent, system }) => catalogAgentMatches(agent, system));
   const archivedTotal = allPairs.filter(({ agent }) => agent.lifecycle === 'retired' || agent.status === 'archived').length;
   if (els.catalogArchivedCount) els.catalogArchivedCount.textContent = String(archivedTotal);
+  const totalCost = catalogSystems.reduce((sum, system) => sum + (system.usage?.cost ?? 0), 0);
+  const hasUsage = catalogSystems.some((system) => system.usage && system.usage.events > 0);
   const filteredSystems = catalogSystems.map((system) => {
     const domains = system.domains.map((domain) => {
       const members = domain.agents.filter((agent) => catalogAgentMatches(agent, system));
@@ -6122,7 +6156,7 @@ function renderHarbor() {
   if (els.catalogSummary) {
     const counts = catalogTree?.counts;
     els.catalogSummary.innerHTML = counts
-      ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体${archivedTotal && !catalogShowArchived ? `（默认隐藏 ${archivedTotal} 个已归档）` : ''}</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
+      ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体${hasUsage ? ` · 累计 ¥${formatUsageCost(totalCost)}` : ''}${archivedTotal && !catalogShowArchived ? `（默认隐藏 ${archivedTotal} 个已归档）` : ''}</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
       : '';
   }
 
@@ -7043,6 +7077,11 @@ els.harborAgentList.addEventListener('click', async (event) => {
     renderHarbor();
     return;
   }
+  const usageButton = event.target.closest('[data-open-usage-detail]');
+  if (usageButton) {
+    showView('usage');
+    return;
+  }
   const conversationButton = event.target.closest('[data-harbor-open-conversation]');
   if (conversationButton) {
     openHarborAgentConversationSpace(conversationButton.dataset.harborOpenConversation);
@@ -7052,6 +7091,13 @@ els.harborAgentList.addEventListener('click', async (event) => {
   if (deleteButton) {
     try { await deleteHarborAgent(deleteButton.dataset.harborDeleteAgentId); }
     catch (error) { toast(`删除智能体失败：${error.message}`, true); }
+    return;
+  }
+  const agentRow = event.target.closest('[data-catalog-agent-id]');
+  if (agentRow && !event.target.closest('button, a, input')) {
+    const agentId = agentRow.dataset.catalogAgentId;
+    catalogExpandedAgentId = catalogExpandedAgentId === agentId ? null : agentId;
+    renderHarbor();
   }
 });
 $$('[data-catalog-view]').forEach((button) => button.addEventListener('click', () => {

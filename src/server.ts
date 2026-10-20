@@ -224,6 +224,7 @@ const catalogApi = new CatalogApi(() => ({
   harbor: loadHarbor(),
   systems: listSystems(),
   executionAgents: executionPlane.list().agents,
+  usage: { byAgent: aggregateUsageByAgent(), bySystem: aggregateUsageBySystem() },
 }));
 const executionEventStore = new ExecutionEventStore();
 const assistantEventStore = new AssistantEventStore();

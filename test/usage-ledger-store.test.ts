@@ -143,8 +143,8 @@ test('aggregateByAgent 按成本降序聚合', (t) => {
   store.append(input({ agentId: 'agent-a', cost: 2, tokensIn: 5, tokensOut: 5 }));
   const rows = store.aggregateByAgent();
   assert.equal(rows.length, 2);
-  assert.deepEqual(rows[0], { agentId: 'agent-b', tokensIn: 0, tokensOut: 20, cost: 5, events: 1 });
-  assert.deepEqual(rows[1], { agentId: 'agent-a', tokensIn: 15, tokensOut: 5, cost: 3, events: 2 });
+  assert.deepEqual(rows[0], { agentId: 'agent-b', tokensIn: 0, tokensOut: 20, cost: 5, events: 1, lastAt: '2026-10-16T08:00:01.000Z' });
+  assert.deepEqual(rows[1], { agentId: 'agent-a', tokensIn: 15, tokensOut: 5, cost: 3, events: 2, lastAt: '2026-10-16T08:00:01.000Z' });
 });
 
 test('aggregateBySystem 按系统聚合', (t) => {
