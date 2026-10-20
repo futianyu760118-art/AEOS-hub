@@ -13,6 +13,8 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { listSystems } from './system-registry.ts';
+import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const assistantEventFile = join(root, 'data', 'assistant-events.jsonl');
@@ -50,6 +52,7 @@ export const AssistantUsageSchema = z.object({
 
 export const AssistantEventSchema = z.object({
   eventId: trimmed(160, 1),
+  tenantId: trimmed(160, 1).default(DEFAULT_TENANT_ID),
   systemId: trimmed(160, 1),
   traceId: trimmed(160, 1),
   event: z.enum(ASSISTANT_EVENT_TYPES),
@@ -181,6 +184,7 @@ export class AssistantEventStore {
     }
     const parsed = AssistantEventSchema.safeParse({
       eventId,
+      tenantId: resolveTenantId(systemId, listSystems()),
       systemId,
       traceId,
       event: input.event,
@@ -208,9 +212,10 @@ export class AssistantEventStore {
     return { accepted: true, duplicate: false, event: parsed.data };
   }
 
-  listEvents(filter: { systemId?: string; traceId?: string; limit?: number } = {}): AssistantEvent[] {
+  listEvents(filter: { systemId?: string; traceId?: string; tenantId?: string; limit?: number } = {}): AssistantEvent[] {
     const limit = Math.max(1, Math.min(Math.trunc(filter.limit ?? 200), 1_000));
     return this.events
+      .filter((event) => !filter.tenantId || event.tenantId === filter.tenantId)
       .filter((event) => !filter.systemId || event.systemId === filter.systemId)
       .filter((event) => !filter.traceId || event.traceId === filter.traceId)
       .slice()
@@ -218,7 +223,7 @@ export class AssistantEventStore {
       .slice(-limit);
   }
 
-  listTraces(filter: { systemId?: string; limit?: number } = {}): Array<{
+  listTraces(filter: { systemId?: string; tenantId?: string; limit?: number } = {}): Array<{
     traceId: string;
     systemId: string;
     count: number;
@@ -231,6 +236,7 @@ export class AssistantEventStore {
       traceId: string; systemId: string; count: number; firstAt: string; lastAt: string; lastSummary: string; hasError: boolean;
     }>();
     for (const event of this.events) {
+      if (filter.tenantId && event.tenantId !== filter.tenantId) continue;
       if (filter.systemId && event.systemId !== filter.systemId) continue;
       const key = `${event.systemId}:${event.traceId}`;
       const at = event.endedAt || event.startedAt || event.receivedAt;
@@ -259,8 +265,9 @@ export class AssistantEventStore {
     return [...byTrace.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
   }
 
-  countEvents(filter: { systemId?: string; traceId?: string } = {}): number {
-    return this.events.filter((event) => (!filter.systemId || event.systemId === filter.systemId)
+  countEvents(filter: { systemId?: string; traceId?: string; tenantId?: string } = {}): number {
+    return this.events.filter((event) => (!filter.tenantId || event.tenantId === filter.tenantId)
+      && (!filter.systemId || event.systemId === filter.systemId)
       && (!filter.traceId || event.traceId === filter.traceId)).length;
   }
 

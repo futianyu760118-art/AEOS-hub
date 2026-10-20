@@ -13,6 +13,8 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { listSystems } from './system-registry.ts';
+import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const executionEventFile = join(root, 'data', 'execution-events.jsonl');
@@ -42,6 +44,7 @@ const trimmed = (max: number, min = 0) => z.string().min(min).max(max)
 
 export const ExecutionEventSchema = z.object({
   eventId: trimmed(160, 1),
+  tenantId: trimmed(160, 1).default(DEFAULT_TENANT_ID),
   runId: trimmed(160, 1),
   agentId: trimmed(160, 1),
   sourceSystem: trimmed(160, 1),
@@ -170,6 +173,7 @@ export class ExecutionEventStore {
 
     const parsed = ExecutionEventSchema.safeParse({
       eventId,
+      tenantId: resolveTenantId(context.sourceSystem, listSystems()),
       runId,
       agentId: context.agentId,
       sourceSystem: context.sourceSystem || 'unknown',
@@ -202,9 +206,9 @@ export class ExecutionEventStore {
     return { accepted: true, duplicate: false, event };
   }
 
-  listByRun(runId: string, limit = MAX_EVENTS_PER_RUN): ExecutionEvent[] {
+  listByRun(runId: string, limit = MAX_EVENTS_PER_RUN, tenantId?: string): ExecutionEvent[] {
     const bounded = Math.max(1, Math.min(Math.trunc(limit), MAX_EVENTS_PER_RUN));
-    const events = this.byRun.get(runId) ?? [];
+    const events = (this.byRun.get(runId) ?? []).filter((event) => !tenantId || event.tenantId === tenantId);
     return events.slice().sort((a, b) => a.seq - b.seq || a.receivedAt.localeCompare(b.receivedAt)).slice(-bounded);
   }
 

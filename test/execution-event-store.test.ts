@@ -42,6 +42,7 @@ test('记录并读取执行步骤', (t) => {
   const events = store.listByRun('run-1');
   assert.equal(events.length, 1);
   assert.equal(events[0].name, '查询订单接口');
+  assert.equal(events[0].tenantId, 'tenant-demo');
   assert.equal(events[0].sourceSystem, '公司中控平台');
   assert.equal(store.countByRun('run-1'), 1);
 });

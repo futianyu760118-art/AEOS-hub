@@ -39,6 +39,7 @@ test('记录并读取助手事件', (t) => {
   const events = store.listEvents({ systemId: '中台' });
   assert.equal(events.length, 1);
   assert.equal(events[0].systemId, '中台');
+  assert.equal(events[0].tenantId, 'tenant-demo');
   assert.equal(events[0].traceId, 'trace-1');
   assert.equal(store.countEvents({ systemId: '中台' }), 1);
 });
