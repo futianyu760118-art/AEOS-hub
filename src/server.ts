@@ -80,7 +80,6 @@ import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
-import { ensureExecutionAgent } from './execution-agent-seed.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
@@ -338,12 +337,8 @@ function syncExecutionHealth(): void {
   }
 }
 
-// 幂等自动注册公司中台执行面智能体（G1 开箱可用）。失败不阻塞启动，可稍后手动跑 scripts/ensure-execution-agent.ts。
-try {
-  ensureExecutionAgent();
-} catch (error) {
-  console.warn('[execution-agent-seed] 自动注册失败:', (error as Error).message);
-}
+// 旧的一体化中台执行面 Agent 已退役；中台现在注册「查询」「推理」两个独立 Agent。
+// 不再自动补种旧 Agent，避免港湾出现离线的重复档案。历史脚本 scripts/ensure-execution-agent.ts 仅保留手工兼容用途。
 
 // 幂等补齐模型目录种子档（data/model-profiles.json）。失败不阻塞启动。
 try {
