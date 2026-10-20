@@ -80,6 +80,7 @@ import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
+import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
@@ -2451,16 +2452,40 @@ executionWss.on('connection', (ws, request) => {
           }
           throw error;
         }
-        const reply = executionPlane.onRegister(
-          {
-            agentId: msg.agentId,
-            name: msg.name,
-            version: msg.version,
-            capabilities: msg.capabilities,
-            sourceSystem: msg.sourceSystem,
-            local: isLoopbackExecutionPeer(peerAddress),
-            simulated: msg.simulated,
-          },
+        const requestedAgentId = typeof msg.agentId === 'string' ? msg.agentId.trim() : '';
+        if (!isExecutionAgentAllowed(identity.systemId, requestedAgentId)) {
+          try {
+            appendEvidence({
+              kind: 'app_event',
+              actor_id: auth.systemId ? `execution-token:system:${auth.systemId}` : 'execution-token:legacy-root',
+              actor_type: 'system',
+              object_ref: 'hub://execution-agent/registration',
+              source_system: auth.systemId ?? identity.sourceSystem,
+              correlation_id: 'execution-register-rejected',
+              summary: 'execution agent registration rejected',
+              payload: {
+                reason: 'AGENT_NOT_ALLOWED',
+                authMode: auth.mode,
+                authenticatedSystemId: auth.systemId,
+                agentId: requestedAgentId.slice(0, 160),
+                reportedSource: typeof msg.sourceSystem === 'string' ? msg.sourceSystem.slice(0, 160) : null,
+              },
+            });
+          } catch {
+            // 审计失败不改变拒绝结果。
+          }
+          send(ws, { type: 'error', code: 'AGENT_NOT_ALLOWED', message: '该执行面 Agent 未在允许列表中，禁止注册' });
+          return;
+        }
+        const reply = executionPlane.onRegister({
+          agentId: msg.agentId,
+          name: msg.name,
+          version: msg.version,
+          capabilities: msg.capabilities,
+          sourceSystem: msg.sourceSystem,
+          local: isLoopbackExecutionPeer(peerAddress),
+          simulated: msg.simulated,
+        },
           (m) => send(ws, m),
           identity,
         );
