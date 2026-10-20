@@ -33,6 +33,15 @@ test('借调内容中文化：能力、结果状态、参数与摘要', () => {
   assert.match(app, /原始 JSON（技术排查用）/);
 });
 
+test('借调详情展示能力版本、schema 锚定与来源', () => {
+  assert.match(app, /能力版本/);
+  assert.match(app, /schema 锚定/);
+  assert.match(app, /order\.capabilityVersion/);
+  assert.match(app, /order\.inputSchemaHash/);
+  assert.match(app, /order\.outputSchemaHash/);
+  assert.match(app, /执行面 ·/);
+});
+
 test('视图注册与懒加载', () => {
   assert.match(app, /view: 'borrow', label: '跨系统借调'/);
   assert.match(app, /if \(view === 'borrow'\) loadBorrowOrders\(\);/);

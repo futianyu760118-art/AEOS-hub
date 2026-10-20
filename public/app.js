@@ -1019,7 +1019,7 @@ function renderBorrowList() {
     return `<button class="harbor-row borrow-row${selected}" type="button" data-borrow-order="${esc(order.orderId)}">
       <span class="mono">${esc(order.orderId.slice(0, 18))}…</span>
       <span>${esc(order.fromSystem)} → ${esc(order.providerSystem || order.toSystem || '待解析')}</span>
-      <span>${esc(borrowCapabilityLabel(order.capability))}</span>
+      <span>${esc(borrowCapabilityLabel(order.capability))}${order.capabilityVersion ? `<small class="subtle"> · v${esc(order.capabilityVersion)}</small>` : ''}</span>
       <span>${borrowStatusPill(order.status)}</span>
       <span class="num">${borrowTime(order.dispatchedAt)}</span>
       <span class="num">${borrowTime(order.endedAt)}</span>
@@ -1195,12 +1195,20 @@ function renderBorrowDetail() {
   const resultBlock = resultTable
     ? `<div class="borrow-detail-block"><h3>结果</h3>${resultMeta}${resultTable}<details class="borrow-raw"><summary>原始 JSON（技术排查用）</summary><pre class="borrow-json">${json(order.result)}</pre></details></div>`
     : `<div class="borrow-detail-block"><h3>结果</h3>${resultMeta}<pre class="borrow-json">${json(order.result)}</pre></div>`;
+  const hashShort = (value) => value ? `${value.slice(0, 12)}…` : '未指定';
+  const schemaAnchor = [
+    `输入 ${hashShort(order.inputSchemaHash)}`,
+    `输出 ${hashShort(order.outputSchemaHash)}`,
+  ].join(' · ');
   root.innerHTML = `<div class="borrow-detail-grid">
       <div><span>借调单</span><strong class="mono">${esc(order.orderId)}</strong></div>
       <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
       <div><span>发起方</span><strong>${esc(order.fromSystem)}${order.fromAgentId ? ` · ${esc(order.fromAgentId)}` : ''}</strong></div>
       <div><span>提供方</span><strong>${esc(order.providerSystem || '—')}${order.providerAgentId ? ` · ${esc(order.providerAgentId)}` : ''}</strong></div>
       <div><span>能力</span><strong>${esc(borrowCapabilityLabel(order.capability))}<br/><small class="mono">${esc(order.capability)}</small></strong></div>
+      <div><span>能力版本</span><strong class="mono">${esc(order.capabilityVersion || '未指定（按能力名匹配）')}</strong></div>
+      <div><span>schema 锚定</span><strong class="mono" title="${esc(`input ${order.inputSchemaHash || '—'} / output ${order.outputSchemaHash || '—'}`)}">${esc(schemaAnchor)}</strong></div>
+      <div><span>来源</span><strong>执行面 · ${esc(order.providerSystem || '—')}</strong></div>
       <div><span>状态</span><strong>${borrowStatusPill(order.status)}</strong></div>
       <div><span>执行 run</span><strong class="mono">${esc(order.runId || '—')}</strong></div>
       <div><span>时间</span><strong>创建 ${borrowTime(order.createdAt)} · 结束 ${borrowTime(order.endedAt)}</strong></div>
