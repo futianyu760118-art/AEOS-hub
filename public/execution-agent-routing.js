@@ -45,3 +45,23 @@ export function attachBusinessObjectRef(request, text) {
     context: { ...(request?.context && typeof request.context === 'object' ? request.context : {}), businessObjectRef: ref },
   };
 }
+
+/** 是否是“今日/当前风险最高的订单”这类需要先查询定位的全局问题。 */
+export function isHighestRiskOrderQuery(text) {
+  return /(风险最高|最高风险|风险最高的订单|今日.*风险|当前.*风险最高)/i.test(String(text || ''));
+}
+
+/** 执行面 Agent 按所属系统分组：systemId 优先，展示名取 sourceSystemName。 */
+export function groupExecutionAgentsBySystem(agents) {
+  const groups = new Map();
+  for (const agent of Array.isArray(agents) ? agents : []) {
+    const key = agent?.systemId || agent?.sourceSystem || agent?.sourceSystemName || 'unregistered';
+    const label = agent?.sourceSystemName || agent?.systemId || agent?.sourceSystem || '未登记系统';
+    const group = groups.get(key) ?? { key, label, agents: [], onlineCount: 0, total: 0 };
+    group.agents.push(agent);
+    group.total += 1;
+    if (agent?.connectionStatus === 'online') group.onlineCount += 1;
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+}

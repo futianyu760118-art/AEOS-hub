@@ -5,7 +5,7 @@ import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery
 import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
-import { attachBusinessObjectRef, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=business-anchor-v1';
+import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrderQuery, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=highest-risk-v1';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
@@ -740,6 +740,7 @@ function syncExecutionRefresh() {
 let executionControlsWired = false;
 let selectedExecutionAgent = null;
 let executionAgents = [];
+const collapsedExecutionSystems = new Set();
 // 每个智能体独立一份聊天窗口（线程）：切换时隐藏当前、显示目标，各自历史与进行中的查询都不丢。
 const executionThreads = new Map();
 
@@ -753,6 +754,14 @@ function wireExecutionControls() {
   });
   $('#execution-chat-input')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') sendExecutionQuery(); });
   $('#execution-agent-list')?.addEventListener('click', (event) => {
+    const systemToggle = event.target.closest('[data-execution-system-toggle]');
+    if (systemToggle) {
+      const key = systemToggle.dataset.executionSystemToggle;
+      if (collapsedExecutionSystems.has(key)) collapsedExecutionSystems.delete(key);
+      else collapsedExecutionSystems.add(key);
+      renderExecutionAgentList(executionAgents);
+      return;
+    }
     const item = event.target.closest('[data-execution-agent]');
     if (item) selectExecutionAgent(item.dataset.executionAgent);
   });
@@ -786,6 +795,21 @@ async function loadExecution() {
   renderExecutionAgentList(executionAgents);
 }
 
+function renderExecutionAgentItem(agent) {
+  const online = agent.connectionStatus === 'online';
+  const selected = selectedExecutionAgent === agent.agentId;
+  const location = agent.local === true ? '本机' : '远程';
+  const sourceText = typeof agent.sourceSystemName === 'string' && agent.sourceSystemName.trim()
+    ? agent.sourceSystemName.trim()
+    : typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
+      ? agent.sourceSystem.trim()
+      : '来源待补充';
+  return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
+    <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span></span>
+    <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
+  </button>`;
+}
+
 function renderExecutionAgentList(agents) {
   const root = $('#execution-agent-list');
   if (!root) return;
@@ -794,19 +818,17 @@ function renderExecutionAgentList(agents) {
     refreshIcons(root);
     return;
   }
-  root.innerHTML = agents.map((agent) => {
-    const online = agent.connectionStatus === 'online';
-    const selected = selectedExecutionAgent === agent.agentId;
-    const location = agent.local === true ? '本机' : '远程';
-    const sourceText = typeof agent.sourceSystemName === 'string' && agent.sourceSystemName.trim()
-      ? agent.sourceSystemName.trim()
-      : typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
-        ? agent.sourceSystem.trim()
-        : '来源待补充';
-    return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span></span>
-      <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
-    </button>`;
+  const groups = groupExecutionAgentsBySystem(agents);
+  root.innerHTML = groups.map((group) => {
+    const collapsed = collapsedExecutionSystems.has(group.key);
+    return `<section class="execution-system-group">
+      <button class="execution-system-head" type="button" data-execution-system-toggle="${esc(group.key)}" aria-expanded="${!collapsed}">
+        <i data-lucide="${collapsed ? 'chevron-right' : 'chevron-down'}"></i>
+        <span class="execution-system-name">${esc(group.label)}</span>
+        <span class="execution-system-count">${group.onlineCount}/${group.total} 在线</span>
+      </button>
+      <div class="execution-system-agents${collapsed ? ' hidden' : ''}">${group.agents.map(renderExecutionAgentItem).join('')}</div>
+    </section>`;
   }).join('');
   refreshIcons(root);
 }
@@ -2020,6 +2042,10 @@ async function sendExecutionQuery() {
   if (isReasoningOnly(selection)) {
     const prepared = prepareReasoningRequest(text, reasonCap);
     if (prepared.error) {
+      if (isHighestRiskOrderQuery(text)) {
+        await dispatchHighestRiskOrderOrchestration(text);
+        return;
+      }
       appendExecutionMessage('agent', prepared.error, null);
       return;
     }
@@ -2033,6 +2059,10 @@ async function sendExecutionQuery() {
     if (remote?.kind === 'reasoning' && reasonCap) {
       const request = attachBusinessObjectRef(remote.request, text);
       if (requiresBusinessObjectRef(selectedAgentCapabilityRecord(reasonCap)) && !request.context?.businessObjectRef) {
+        if (isHighestRiskOrderQuery(text)) {
+          await dispatchHighestRiskOrderOrchestration(text);
+          return;
+        }
         appendExecutionMessage('agent', '该推理智能体需要业务锚点：请在问题中带上订单号/产品编码/批次号。', null);
         return;
       }
@@ -2063,6 +2093,10 @@ async function sendExecutionQuery() {
   if (reasoning && !reasoning.error && reasonCap) {
     const prepared = prepareReasoningRequest(text, reasonCap);
     if (prepared.error) {
+      if (isHighestRiskOrderQuery(text)) {
+        await dispatchHighestRiskOrderOrchestration(text);
+        return;
+      }
       appendExecutionMessage('agent', prepared.error, null);
       return;
     }
@@ -2084,6 +2118,49 @@ async function sendExecutionQuery() {
     return;
   }
   await dispatchExecution(selectedExecutionAgent, queryCap, { path: parsed.path, params: parsed.params }, `正在查询：${describeExecutionQuery(parsed)}…`);
+}
+
+async function dispatchHighestRiskOrderOrchestration(text) {
+  const pending = appendExecutionMessage('agent', '正在查询当前风险最高的订单，并交给推理智能体分析（可能需要 10–30 秒）…', null);
+  try {
+    const response = await fetch('/api/execution/highest-risk-order', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, reasoningAgentId: selectedExecutionAgent }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const suffix = data.requestId ? `（requestId: ${data.requestId}）` : '';
+      if (pending) pending.textEl.textContent = `${data.error || `编排失败（HTTP ${response.status}）`}${suffix}`;
+      return;
+    }
+    const order = data.order || {};
+    const summary = data.result !== undefined ? summarizeReasoningResult(data.result) : '推理完成，但没有返回可解析的结论。';
+    const orderLine = `已定位当前风险最高订单：${order.orderNo || '—'}（风险等级：${order.riskLevel || '未知'}）\n\n`;
+    if (pending) {
+      streamTextInto(pending.textEl, orderLine + summary);
+      const details = document.createElement('details');
+      details.className = 'execution-raw';
+      const summaryEl = document.createElement('summary');
+      summaryEl.textContent = `查看编排详情（查询 run ${data.queryRunId || '—'} · 推理 run ${data.reasoningRunId || '—'}）`;
+      const dataEl = document.createElement('pre');
+      dataEl.className = 'execution-data';
+      dataEl.textContent = JSON.stringify({
+        requestId: data.requestId,
+        order,
+        queryRunId: data.queryRunId,
+        reasoningRunId: data.reasoningRunId,
+        result: data.result,
+      }, null, 2).slice(0, 6000);
+      details.appendChild(summaryEl);
+      details.appendChild(dataEl);
+      pending.inner.appendChild(details);
+      if (data.reasoningRunId) attachExecutionSteps(pending.inner, data.reasoningRunId);
+    }
+    await loadExecution();
+  } catch (error) {
+    if (pending) pending.textEl.textContent = `编排失败：${error?.message || error}`;
+  }
 }
 
 function pollExecutionRun(runId, pending) {

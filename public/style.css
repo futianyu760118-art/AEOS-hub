@@ -2451,6 +2451,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-agent-item:hover:not(:disabled) { border-color: var(--line); background: var(--hover); }
 .execution-agent-item.selected { border-color: var(--accent); }
 .execution-agent-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.execution-system-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.execution-system-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 5px; border: 0; background: transparent; color: var(--text-3); font-size: 0.72rem; font-weight: 600; text-align: left; cursor: pointer; }
+.execution-system-head:hover { color: var(--text-2); }
+.execution-system-head svg { width: 13px; height: 13px; }
+.execution-system-name { color: var(--text-2); }
+.execution-system-count { margin-left: auto; color: var(--text-3); font-size: 0.65rem; font-weight: 400; }
+.execution-system-agents { display: flex; flex-direction: column; gap: 0.4rem; padding-left: 0.35rem; }
 .execution-agent-title { display: flex; align-self: stretch; flex-wrap: wrap; align-items: center; gap: 0.35rem; min-width: 0; max-width: 100%; }
 .execution-agent-name { font-weight: 600; }
 .execution-agent-identities { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; gap: 0.25rem; min-width: 0; max-width: 100%; }

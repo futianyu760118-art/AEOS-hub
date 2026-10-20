@@ -79,6 +79,7 @@ import { AccessControlApi } from './access-control-api.ts';
 import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
+import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { ensureExecutionAgent } from './execution-agent-seed.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
@@ -220,6 +221,7 @@ const executionPlane = new ExecutionPlaneRegistry({
   onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
+const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
 const catalogApi = new CatalogApi(() => ({
   harbor: loadHarbor(),
   systems: listSystems(),
@@ -2066,6 +2068,30 @@ const server = createServer(async (req, res) => {
     return;
   }
   // ---------- 执行面接入 HTTP API（仪表盘读取 + 派单/召回 + LLM 意图解析） ----------
+  if (url.pathname === '/api/execution/highest-risk-order') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const input = await readJsonBody(req, 8 * 1024);
+      const result = await executionOrchestrator.highestRiskOrder({
+        reasoningAgentId: typeof input.reasoningAgentId === 'string' ? input.reasoningAgentId : '',
+        text: typeof input.text === 'string' ? input.text : '',
+      });
+      sendJson(res, 200, result);
+    } catch (error) {
+      if (error instanceof ExecutionOrchestrationError) {
+        sendJson(res, error.status, {
+          error: error.message,
+          code: error.code,
+          requestId: error.requestId,
+          queryRunId: error.queryRunId,
+          reasoningRunId: error.reasoningRunId,
+        });
+      } else {
+        sendJson(res, 500, { error: (error as Error).message || '编排失败' });
+      }
+    }
+    return;
+  }
   const executionParseIntentMatch = url.pathname.match(/^\/api\/execution\/parse-intent$/);
   if (executionParseIntentMatch) {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
