@@ -1198,9 +1198,6 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .harbor-search input { width: 100%; padding-left: 28px; }
 .harbor-search input:focus, .harbor-directory-toolbar select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .harbor-directory-toolbar .btn { white-space: nowrap; }
-.catalog-archived-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); font-size: 10px; white-space: nowrap; cursor: pointer; }
-.catalog-archived-toggle input { width: 13px; height: 13px; accent-color: var(--accent); }
-.catalog-archived-toggle b { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--surface-soft); color: var(--text-3); font-size: 9px; text-align: center; }
 .catalog-domain-filter { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .catalog-domain-label { margin-right: 2px; color: var(--text-3); font-size: 10px; white-space: nowrap; }
 .catalog-domain-chip { height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 13px; background: #fff; color: var(--text-2); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { archiveHubL1Agents } from '../src/hub-agent-archive.ts';
+import { archiveHubL1Agents, restoreHubL1Agents } from '../src/hub-agent-archive.ts';
 import { HarborSnapshotSchema, type HarborSnapshot } from '../src/harbor-store.ts';
 
 const NOW = '2026-10-20T08:00:00.000Z';
@@ -58,4 +58,28 @@ test('重复归档幂等，不再增加 revision', () => {
   assert.equal(second.report.archivedNow, 0);
   assert.equal(second.report.alreadyArchived, 2);
   assert.equal(second.snapshot.revision, first.snapshot.revision);
+});
+
+test('撤销归档恢复 Hub L1 为 active/idle，其他 Agent 不动', () => {
+  const archived = archiveHubL1Agents(fixture());
+  const restored = restoreHubL1Agents(archived.snapshot);
+  assert.equal(restored.changed, true);
+  assert.equal(restored.report.restoredNow, 2);
+  assert.equal(restored.snapshot.revision, archived.snapshot.revision + 1);
+
+  const byId = new Map(restored.snapshot.agents.map((agent) => [agent.id, agent]));
+  assert.equal(byId.get('agent-order')?.registration.lifecycle, 'active');
+  assert.equal(byId.get('agent-order')?.status, 'idle');
+  assert.equal(byId.get('agent-quality')?.status, 'idle');
+  assert.equal(byId.get('agent-aeos-hub')?.status, 'idle');
+  assert.equal(byId.get('agent-control')?.status, 'idle');
+  assert.doesNotThrow(() => HarborSnapshotSchema.parse(restored.snapshot));
+});
+
+test('未归档数据上执行撤销是幂等的', () => {
+  const { changed, report, snapshot } = restoreHubL1Agents(fixture());
+  assert.equal(changed, false);
+  assert.equal(report.restoredNow, 0);
+  assert.equal(report.alreadyActive, 2);
+  assert.equal(snapshot.revision, 3);
 });

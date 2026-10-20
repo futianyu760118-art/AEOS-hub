@@ -62,3 +62,66 @@ export function archiveHubL1Agents(
     },
   };
 }
+
+export interface RestoredAgentSummary {
+  id: string;
+  name: string;
+  primaryDomainId: string;
+  alreadyActive: boolean;
+}
+
+export interface HubAgentRestoreReport {
+  candidates: number;
+  restoredNow: number;
+  alreadyActive: number;
+  agents: RestoredAgentSummary[];
+}
+
+/** 撤销归档：只恢复 retired/archived 的 Hub L1，回到 active/idle。 */
+export function restoreHubL1Agents(
+  snapshot: HarborSnapshot,
+  now = new Date().toISOString(),
+): { snapshot: HarborSnapshot; report: HubAgentRestoreReport; changed: boolean } {
+  const candidates = snapshot.agents.filter((agent) => agent.systemId === 'aeos-hub' && agent.registration.type === 'master');
+  let restoredNow = 0;
+  let alreadyActive = 0;
+  const agents = snapshot.agents.map((agent) => {
+    if (!candidates.some((candidate) => candidate.id === agent.id)) return agent;
+    const archived = agent.registration.lifecycle === 'retired' || agent.status === 'archived';
+    if (!archived) {
+      alreadyActive += 1;
+      return agent;
+    }
+    restoredNow += 1;
+    const updatedAt = Date.parse(now) < Date.parse(agent.createdAt) ? agent.createdAt : now;
+    return {
+      ...agent,
+      status: 'idle' as const,
+      registration: { ...agent.registration, lifecycle: 'active' as const },
+      updatedAt,
+    };
+  });
+
+  const changed = restoredNow > 0;
+  const next = HarborSnapshotSchema.parse({
+    ...snapshot,
+    revision: changed ? snapshot.revision + 1 : snapshot.revision,
+    agents,
+  });
+
+  return {
+    snapshot: next,
+    changed,
+    report: {
+      candidates: candidates.length,
+      restoredNow,
+      alreadyActive,
+      agents: candidates.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        primaryDomainId: agent.primaryDomainId,
+        alreadyActive: agent.registration.lifecycle !== 'retired' && agent.status !== 'archived',
+      })),
+    },
+  };
+}
