@@ -24,7 +24,7 @@ function agent(overrides: Record<string, unknown>): ExecutionAgentRecord {
 const QUERY_AGENT = agent({
   agentId: 'query-agent',
   name: '查询智能体',
-  capabilities: [{ name: 'query_control_platform', description: '', inputSchema: { type: 'object', properties: { path: { type: 'string', enum: ['/external/orders/list'] } } } }],
+  capabilities: [{ name: 'query_control_platform', description: '', inputSchema: { type: 'object', properties: { path: { type: 'string', enum: ['/external/orders/list', '/external/material-kitting/results'] } } } }],
 });
 const REASON_AGENT = agent({
   agentId: 'reason-agent',
@@ -51,9 +51,9 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
             run.state = 'completed';
             run.result = options.emptyOrders ? { items: [] } : {
               items: [
-                { order_no: 'SO-GREEN', risk_level: 'green', order_amount: 999 },
-                { order_no: 'SO-RED-SMALL', risk_level: 'red', order_amount: 5 },
-                { order_no: 'SO-RED-BIG', risk_level: 'red', order_amount: 100, promised_date: '2026-10-25' },
+                { demand_no: 'HJ-GREEN', risk_level: 'green', affected_order_amount: 999 },
+                { demand_no: 'HJ-RED-SMALL', risk_level: 'red', affected_order_amount: 5 },
+                { demand_no: 'HJ-RED-BIG', risk_level: 'red', affected_order_amount: 100, required_date: '2026-10-25' },
               ],
             };
           }
@@ -80,9 +80,9 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
 test('订单排序：红色优先，同等级金额降序', () => {
   const orders = rankOrdersFromResult({
     data: { items: [
-      { order_no: 'O-1', risk_level: 'green', order_amount: 999 },
-      { order_no: 'O-2', risk_level: 'red', order_amount: 5 },
-      { order_no: 'O-3', risk_level: 'red', order_amount: 100 },
+      { demand_no: 'O-1', risk_level: 'green', affected_order_amount: 999 },
+      { demand_no: 'O-2', risk_level: 'red', affected_order_amount: 5 },
+      { demand_no: 'O-3', risk_level: 'red', affected_order_amount: 100 },
     ] },
   });
   assert.deepEqual(orders.map((order) => order.orderNo), ['O-3', 'O-2', 'O-1']);
@@ -94,13 +94,13 @@ test('最高风险订单编排：查询后自动带 businessObjectRef 调推理'
   const result = await orchestrator.highestRiskOrder({ reasoningAgentId: 'reason-agent', text: '分析今日风险最高的订单' });
 
   assert.equal(result.requestId, 'orch-test');
-  assert.equal(result.order.orderNo, 'SO-RED-BIG');
-  assert.equal(result.order.businessObjectRef, 'business://order/SO-RED-BIG');
+  assert.equal(result.order.orderNo, 'HJ-RED-BIG');
+  assert.equal(result.order.businessObjectRef, 'business://order/HJ-RED-BIG');
   assert.equal(result.queryRunId, 'run-1');
   assert.equal(result.reasoningRunId, 'run-2');
   assert.deepEqual(result.result, { summary: '推理完成', conclusions: [] });
   assert.equal(audits.length, 1);
-  assert.equal((audits[0]?.payload as Record<string, unknown>).orderNo, 'SO-RED-BIG');
+  assert.equal((audits[0]?.payload as Record<string, unknown>).orderNo, 'HJ-RED-BIG');
 });
 
 test('查询失败时不派推理', async () => {
@@ -139,7 +139,7 @@ test('推理失败时带回两条 runId 并尝试召回', async () => {
 });
 
 test('构造推理请求时写入订单锚点与只读约束', () => {
-  const [order] = rankOrdersFromResult([{ order_no: 'SO-1', risk_level: 'red', order_amount: 12 }]);
+  const [order] = rankOrdersFromResult([{ demand_no: 'SO-1', risk_level: 'red', affected_order_amount: 12 }]);
   const request = buildHighestRiskReasoningRequest('分析今日风险最高的订单', order!, 'orch-1');
   assert.equal(request.task_type, 'order_delivery_analysis');
   assert.equal(request.request_id, 'orch-1');

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { ExecutionAgentRecord, ExecutionPlaneRegistry, ExecutionRunRecord } from './execution-plane.ts';
 import type { EvidenceInput } from './evidence.ts';
 
-const ORDERS_PATH = '/external/orders/list';
+const KITTING_RESULTS_PATH = '/external/material-kitting/results';
 const DEFAULT_QUERY_TIMEOUT_MS = 15_000;
 const DEFAULT_REASONING_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
@@ -103,11 +103,11 @@ function riskRank(value: string): number {
 /** 从查询结果里提取订单并按“风险等级 → 金额降序 → 交期升序”排序。 */
 export function rankOrdersFromResult(result: unknown): HighestRiskOrder[] {
   const orders = rowsFromResult(result).flatMap((row): HighestRiskOrder[] => {
-    const orderNo = textOf(row, ['order_no', 'orderNo', 'order_id', 'orderId', 'sales_order_no']);
+    const orderNo = textOf(row, ['demand_no', 'order_no', 'orderNo', 'order_id', 'orderId', 'sales_order_no']);
     if (!orderNo) return [];
     const riskLevel = textOf(row, ['risk_level', 'riskLevel', 'risk']);
-    const amount = numberOf(row, ['order_amount', 'orderAmount', 'amount']);
-    const promisedDate = textOf(row, ['promised_date', 'promisedDate', 'delivery_date', 'due_date']) || null;
+    const amount = numberOf(row, ['affected_order_amount', 'order_amount', 'orderAmount', 'shortage_amount', 'amount']);
+    const promisedDate = textOf(row, ['required_date', 'promised_date', 'promisedDate', 'delivery_date', 'due_date']) || null;
     return [{
       orderNo,
       riskLevel,
@@ -133,10 +133,10 @@ export function buildHighestRiskReasoningRequest(text: string, order: HighestRis
   const details = [
     `订单号：${order.orderNo}`,
     `风险等级：${order.riskLevel || '未知'}`,
-    order.amount !== null ? `订单金额：${order.amount}` : '',
-    order.promisedDate ? `承诺交期：${order.promisedDate}` : '',
+    order.amount !== null ? `影响金额：${order.amount}` : '',
+    order.promisedDate ? `需求日期：${order.promisedDate}` : '',
   ].filter(Boolean).join('；');
-  const prompt = `${text}\n\n已定位当前风险最高的订单：${details}。请仅基于该订单做只读交付风险分析，结论必须引用 evidence_refs；数据缺失或过期时明确说明数据置信度不足。`;
+  const prompt = `${text}\n\n已从物料齐套红色风险中定位影响最大的订单：${details}。请仅基于该订单做只读交付风险分析，结论必须引用 evidence_refs；数据缺失或过期时明确说明数据置信度不足。`;
   return {
     prompt: prompt.slice(0, 2000),
     task_type: 'order_delivery_analysis',
@@ -150,10 +150,10 @@ function capabilityName(agent: ExecutionAgentRecord, prefix: 'query' | 'reason')
   return agent.capabilities.find((capability) => typeof capability.name === 'string' && capability.name.startsWith(prefix))?.name ?? null;
 }
 
-function supportsOrdersPath(agent: ExecutionAgentRecord, capability: string): boolean {
+function supportsQueryPath(agent: ExecutionAgentRecord, capability: string, path: string): boolean {
   const cap = agent.capabilities.find((item) => item.name === capability);
   const allowed = cap?.inputSchema?.properties?.path?.enum;
-  return !Array.isArray(allowed) || allowed.includes(ORDERS_PATH);
+  return !Array.isArray(allowed) || allowed.includes(path);
 }
 
 export interface ExecutionOrchestratorOptions {
@@ -212,8 +212,8 @@ export class ExecutionOrchestrator {
       throw new ExecutionOrchestrationError('QUERY_AGENT_UNAVAILABLE', '同系统内没有可用的查询智能体', { status: 409 });
     }
     const queryCapability = capabilityName(queryer, 'query')!;
-    if (!supportsOrdersPath(queryer, queryCapability)) {
-      throw new ExecutionOrchestrationError('QUERY_PATH_UNSUPPORTED', '查询智能体未开放订单查询路径', { status: 409 });
+    if (!supportsQueryPath(queryer, queryCapability, KITTING_RESULTS_PATH)) {
+      throw new ExecutionOrchestrationError('QUERY_PATH_UNSUPPORTED', '查询智能体未开放物料齐套查询路径', { status: 409 });
     }
 
     const requestId = `orch-${this.idFactory()}`;
@@ -221,8 +221,8 @@ export class ExecutionOrchestrator {
     let reasoningRunId: string | null = null;
     try {
       const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
-        path: ORDERS_PATH,
-        params: { page: 1, page_size: 50, risk_level: 'red' },
+        path: KITTING_RESULTS_PATH,
+        params: { page: 1, page_size: 200, risk_level: 'red' },
       });
       queryRunId = queryDispatch.runId;
       const queryRun = await this.waitForRun(queryRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
