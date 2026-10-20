@@ -241,6 +241,7 @@ const catalogApi = new CatalogApi((tenantId) => {
     },
     systems,
     executionAgents,
+    mcp: (() => { try { return loadMcpRegistry(); } catch { return null; } })(),
     usage: {
       byAgent: aggregateUsageByAgent(tenantId),
       bySystem: aggregateUsageBySystem(tenantId),

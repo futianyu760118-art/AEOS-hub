@@ -45,7 +45,7 @@ function api(): CatalogApi {
       agentId: 'mes-agent',
       name: 'MES 查询 Agent',
       version: '1.0.0',
-      capabilities: [{ name: 'orders_list', description: '订单查询' }],
+      capabilities: [{ name: 'orders_list', description: '订单查询', constraints: { readOnly: true } }],
       connectionStatus: 'online',
       runtimeStatus: 'idle',
       lastSeenAt: NOW,
@@ -75,8 +75,11 @@ test('GET /api/catalog/systems 与 capabilities', () => {
 
   const capabilities = api().handle({ method: 'GET', pathname: '/api/catalog/capabilities' });
   assert.equal(capabilities?.status, 200);
-  const list = capabilities?.body.capabilities as Array<{ name: string; agentCount: number }>;
-  assert.deepEqual(list.map((item) => [item.name, item.agentCount]), [['orders_list', 1]]);
+  const list = capabilities?.body.capabilities as Array<{ name: string; source: string; providerAgentId: string; readOnly: boolean }>;
+  const orders = list.find((item) => item.name === 'orders_list');
+  assert.equal(orders?.source, 'execution');
+  assert.equal(orders?.providerAgentId, 'mes-agent');
+  assert.equal(orders?.readOnly, true);
 });
 
 test('GET /api/catalog/agents/:id 支持 URL 编码与 404', () => {

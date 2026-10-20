@@ -1,11 +1,14 @@
 // 统一目录只读 API：/api/catalog/tree|systems|agents/:id|capabilities。
 // 仅 GET；数据来自 AI 港湾、系统登记与执行面注册表的内存读模型。
 import {
-  buildCapabilityCatalog,
   buildCatalogTree,
   getCatalogAgent,
   type CatalogSources,
 } from './agent-catalog.ts';
+import { buildUnifiedCapabilityCatalog } from './capability-catalog.ts';
+import type { McpRegistry } from './mcp-registry.ts';
+
+export type CatalogApiSources = CatalogSources & { mcp?: McpRegistry | null };
 
 export type CatalogApiRequest = {
   method?: string;
@@ -18,9 +21,9 @@ export type CatalogApiResponse = { status: number; body: Record<string, unknown>
 const PATH_PREFIX = '/api/catalog';
 
 export class CatalogApi {
-  private readonly loadSources: (tenantId?: string) => CatalogSources;
+  private readonly loadSources: (tenantId?: string) => CatalogApiSources;
 
-  constructor(loadSources: (tenantId?: string) => CatalogSources) {
+  constructor(loadSources: (tenantId?: string) => CatalogApiSources) {
     this.loadSources = loadSources;
   }
 
@@ -39,8 +42,18 @@ export class CatalogApi {
         return { status: 200, body: { systems: tree.systems, counts: tree.counts, warnings: tree.warnings } };
       }
       if (request.pathname === `${PATH_PREFIX}/capabilities`) {
-        const tree = buildCatalogTree(this.loadSources(request.tenantId));
-        return { status: 200, body: { capabilities: buildCapabilityCatalog(tree) } };
+        const sources = this.loadSources(request.tenantId);
+        return {
+          status: 200,
+          body: {
+            capabilities: buildUnifiedCapabilityCatalog({
+              executionAgents: sources.executionAgents,
+              harborAgents: sources.harbor.agents,
+              systems: sources.systems,
+              mcp: sources.mcp,
+            }, { tenantId: request.tenantId }),
+          },
+        };
       }
       const agentMatch = request.pathname.match(/^\/api\/catalog\/agents\/([^/]+)$/);
       if (agentMatch) {
