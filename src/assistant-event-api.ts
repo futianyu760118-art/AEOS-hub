@@ -118,6 +118,7 @@ export class AssistantEventApi {
       : 0);
     try {
       this.recordUsage({
+        // 系统级助手用量桶：assistant-events 只有 systemId/traceId，不对应真实 Agent。
         agentId: 'control-platform-assistant',
         systemId: event.systemId,
         modelId: usage.modelId,

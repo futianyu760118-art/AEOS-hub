@@ -844,14 +844,14 @@ function usageTableHtml(rows, key, emptyText) {
 
 const USAGE_AGENT_LABELS = {
   'agent-aeos-hub': 'AEOS 中枢 Agent',
-  'control-platform-assistant': '中台智能助手',
+  'control-platform-assistant': '中台系统助手（用量汇总，无 Agent 实体）',
   'runtime-control-platform-agent': '中台执行面智能体',
   'runtime-execution-query': '恒剑 PLM 执行面智能体',
   'usage-probe-agent': '用量探针（临时）',
 };
 const USAGE_SYSTEM_LABELS = {
   'aeos-hub': 'AEOS Hub',
-  'control-platform': '中台智能助手',
+  'control-platform': '公司中控平台',
   'demo-usage-probe': '用量探针（临时）',
 };
 let usageAgentNames = new Map();

@@ -8,7 +8,8 @@ const app = readFileSync(join(process.cwd(), 'public', 'app.js'), 'utf8');
 test('用量台账的 Agent 与系统名称支持中文映射', () => {
   assert.match(app, /USAGE_AGENT_LABELS/);
   assert.match(app, /'agent-aeos-hub': 'AEOS 中枢 Agent'/);
-  assert.match(app, /'control-platform-assistant': '中台智能助手'/);
+  assert.match(app, /'control-platform-assistant': '中台系统助手（用量汇总，无 Agent 实体）'/);
+  assert.match(app, /'control-platform': '公司中控平台'/);
   assert.match(app, /USAGE_SYSTEM_LABELS/);
   assert.match(app, /function usageAgentLabel/);
   assert.match(app, /function usageSystemLabel/);
