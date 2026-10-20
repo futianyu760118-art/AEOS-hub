@@ -12,9 +12,9 @@ export interface BusinessDomain {
 export const BUSINESS_DOMAINS: readonly BusinessDomain[] = [
   { domainId: 'order', name: '订单交付', squadId: 'business-squad-orders' },
   { domainId: 'kitting', name: '物料齐套', squadId: 'business-squad-material-kitting' },
-  { domainId: 'quality', name: '异常与质量', squadId: 'business-squad-quality' },
-  { domainId: 'production', name: '生产协同', squadId: 'business-squad-production' },
-  { domainId: 'cross-domain', name: '跨域/中枢', squadId: null },
+  { domainId: 'quality', name: '质量异常', squadId: 'business-squad-quality' },
+  { domainId: 'production', name: '生产进度', squadId: 'business-squad-production' },
+  { domainId: 'cross-domain', name: '跨系统协同', squadId: null },
 ];
 
 const DOMAIN_BY_ID = new Map<string, BusinessDomain>(BUSINESS_DOMAINS.map((domain) => [domain.domainId, domain]));

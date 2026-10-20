@@ -11,7 +11,7 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   const css = readFileSync(join(root, 'public', 'style.css'), 'utf8');
 
   assert.match(html, /id="harbor-panel-agents"[\s\S]*统一智能体目录/);
-  assert.match(html, /id="harbor-agent-domain-filter"[\s\S]*订单交付[\s\S]*物料齐套[\s\S]*异常与质量[\s\S]*生产协同[\s\S]*跨域\/中枢/);
+  assert.match(html, /id="harbor-agent-domain-filter"[\s\S]*订单交付[\s\S]*物料齐套[\s\S]*质量异常[\s\S]*生产进度[\s\S]*跨系统协同/);
   assert.match(html, /data-catalog-view="ownership"[\s\S]*data-catalog-view="hierarchy"/);
   assert.match(html, /id="harbor-agent-list" class="catalog-tree"/);
   assert.match(html, /id="catalog-summary"/);

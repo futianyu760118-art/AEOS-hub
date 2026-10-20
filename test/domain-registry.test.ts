@@ -12,7 +12,7 @@ import {
 test('业务域包含四个一等域与跨域', () => {
   assert.deepEqual(BUSINESS_DOMAINS.map((domain) => domain.domainId), ['order', 'kitting', 'quality', 'production', 'cross-domain']);
   assert.equal(getDomain('order')?.name, '订单交付');
-  assert.equal(getDomain('cross-domain')?.name, '跨域/中枢');
+  assert.equal(getDomain('cross-domain')?.name, '跨系统协同');
   assert.equal(getDomain('unknown'), null);
 });
 

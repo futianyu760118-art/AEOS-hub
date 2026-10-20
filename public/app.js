@@ -296,7 +296,7 @@ const commands = [
 // Local experience review: keep the operating-center implementation intact
 // while temporarily removing its routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘', 'usage': '用量台账', 'route': '模型选型' };
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘', 'usage': '用量明细', 'route': '模型选型' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -5978,7 +5978,7 @@ function harborAgentActivity(agent) {
 }
 
 const CATALOG_LEVEL_LABELS = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
-const CATALOG_DOMAIN_LABELS = { order: '订单交付', kitting: '物料齐套', quality: '异常与质量', production: '生产协同', 'cross-domain': '跨域/中枢' };
+const CATALOG_DOMAIN_LABELS = { order: '订单交付', kitting: '物料齐套', quality: '质量异常', production: '生产进度', 'cross-domain': '跨系统协同' };
 
 function catalogFilterActive() {
   return Boolean(String(harborAgentFilter.query || '').trim())
@@ -6342,7 +6342,7 @@ function openHarborModal(type) {
         <label><span>Agent 类型</span><select name="type"><option value="master">系统主 Agent</option><option value="specialist" selected>专业 Agent</option><option value="tool">工具 Agent</option></select><small class="field-note">${agentTypeLabels.master}负责系统入口；专业与工具 Agent 只能归属对应上级。</small></label>
         <label><span>所属组织</span><input name="ownerOrg" maxlength="120" required placeholder="例如：供应链中心" /></label>
         <label><span>归属系统</span><select name="systemId">${((catalogTree?.systems || []).filter((system) => !system.unregistered).map((system) => `<option value="${esc(system.id)}">${esc(system.name)}</option>`).join('')) || '<option value="aeos-hub">AEOS Hub</option>'}</select><small class="field-note">目录树第一层；决定这个 Agent 归属哪个系统。</small></label>
-        <label><span>主属业务域</span><select name="primaryDomainId">${Object.entries(CATALOG_DOMAIN_LABELS).map(([id, name]) => `<option value="${esc(id)}"${id === 'cross-domain' ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select><small class="field-note">目录树按主属域分组；跨域 Agent 选“跨域/中枢”。</small></label>
+        <label><span>主属业务域</span><select name="primaryDomainId">${Object.entries(CATALOG_DOMAIN_LABELS).map(([id, name]) => `<option value="${esc(id)}"${id === 'cross-domain' ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select><small class="field-note">目录树按主属域分组；共享能力选“跨系统协同”。</small></label>
         <label><span>服务业务域</span><input name="domainIds" placeholder="逗号分隔，例如：order,kitting" /><small class="field-note">派单与筛选按服务域匹配；留空时自动包含主属域。</small></label>
         <label><span>业务域</span><input name="domain" maxlength="120" required placeholder="例如：order-risk" /></label>
         <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" /></label>

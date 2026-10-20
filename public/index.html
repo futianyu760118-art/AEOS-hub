@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=squad-retired-20261020" />
+  <link rel="stylesheet" href="/style.css?v=usage-catalog-20261020" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -127,7 +127,7 @@
         <div class="nav-group">
           <span class="nav-label">AI 资源协作</span>
           <button class="nav-item" type="button" data-view="harbor" data-title="AI 港湾"><i data-lucide="waypoints"></i><span>AI 港湾</span></button>
-          <button class="nav-item" type="button" data-view="usage" data-title="用量台账"><i data-lucide="book-open"></i><span>用量台账</span></button>
+          <button class="nav-item" type="button" data-view="usage" data-title="用量明细"><i data-lucide="book-open"></i><span>用量明细</span></button>
           <button class="nav-item" type="button" data-view="route" data-title="模型选型"><i data-lucide="route"></i><span>模型选型</span></button>
         </div>
         <div class="nav-group">
@@ -463,7 +463,7 @@
               <div class="harbor-search"><i data-lucide="search"></i><input id="harbor-agent-search" type="search" placeholder="搜索 Agent 名称、职责、系统或技能" /></div>
               <select id="harbor-agent-level-filter" aria-label="筛选 Agent 层级"><option value="all">全部层级</option><option value="L0">L0 · 中枢</option><option value="L1">L1 · 编队</option><option value="L2">L2 · 专项</option><option value="L3">L3 · 任务</option></select>
               <select id="harbor-agent-status-filter" aria-label="筛选 Agent 状态"><option value="all">全部状态</option><option value="idle">可调度</option><option value="working">执行中</option><option value="offline">离线</option><option value="draft">草稿</option><option value="archived">已归档</option></select>
-              <select id="harbor-agent-domain-filter" aria-label="按服务业务域筛选"><option value="all">全部业务域</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">异常与质量</option><option value="production">生产协同</option><option value="cross-domain">跨域/中枢</option></select>
+              <select id="harbor-agent-domain-filter" aria-label="按服务业务域筛选"><option value="all">全部业务域</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">质量异常</option><option value="production">生产进度</option><option value="cross-domain">跨系统协同</option></select>
               <div class="segmented catalog-view-toggle" role="group" aria-label="目录视图">
                 <button class="active" type="button" data-catalog-view="ownership" aria-pressed="true">归属视图</button>
                 <button type="button" data-catalog-view="hierarchy" aria-pressed="false">功能层级</button>
@@ -671,7 +671,7 @@
 
         <section id="view-usage" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">AI 资源协作</span><h1>用量台账</h1><p>每次模型调用的 Token 与成本，按 Agent / 系统聚合</p></div>
+            <div><span class="page-module">AI 资源协作</span><h1>用量明细</h1><p>逐条模型调用的 Token 与成本明细，按 Agent / 系统对账；聚合统计已展示在 AI 港湾</p></div>
             <div class="page-actions"><button id="btn-usage-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
@@ -877,6 +877,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=squad-retired-20261020"></script>
+  <script type="module" src="/app.js?v=usage-catalog-20261020"></script>
 </body>
 </html>
