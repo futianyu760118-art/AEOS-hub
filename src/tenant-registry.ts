@@ -1,7 +1,7 @@
 // 租户解析：系统登记的 tenantId 是权威来源；找不到时回落到试点默认租户。
 import type { SystemRecord } from './system-registry.ts';
 
-export const DEFAULT_TENANT_ID = 'pilot-default';
+export const DEFAULT_TENANT_ID = 'tenant-demo';
 
 export function resolveTenantId(
   systemId: string,

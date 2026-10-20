@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ResultContractSchema, type ResultContract } from './result-contract.ts';
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 import { atomicWrite } from './atomic-file.ts';
 import type { DashboardRisk } from './dashboard.ts';
 
@@ -122,7 +123,7 @@ export class OperatingCenterStore {
       const base: ResultContract = {
         result_id: `result-${randomUUID()}`,
         result_type: resultType,
-        tenant_id: tenantId || process.env.AEOS_TENANT_ID?.trim() || 'pilot-default',
+        tenant_id: tenantId || process.env.AEOS_TENANT_ID?.trim() || DEFAULT_TENANT_ID,
         object_ref: `business://${item.source}/${encodeURIComponent(item.entityId)}`,
         owner: item.ownerRole,
         created_by: createdBy,

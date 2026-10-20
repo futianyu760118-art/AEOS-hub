@@ -1,5 +1,5 @@
 // 回填用量台账 tenantId：默认干跑，--apply 写盘（需先停 Hub）。
-// 旧事件按 systemId/别名解析系统租户；解析不到时回落 pilot-default。
+// 旧事件按 systemId/别名解析系统租户；解析不到时回落 tenant-demo。
 import { existsSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
@@ -58,7 +58,7 @@ const next = UsageLedgerSnapshotSchema.parse({
 
 console.log(`用量台账：${file}`);
 console.log(`事件总数：${events.length}；本次回填 tenantId：${filled}`);
-for (const event of events.filter((item) => item.tenantId !== 'pilot-default')) {
+for (const event of events.filter((item) => item.tenantId !== 'tenant-demo')) {
   console.log(`- ${String(event.id)} → ${String(event.tenantId)}`);
 }
 

@@ -9,6 +9,7 @@ import {
   type ExecutionRunStateEvent,
 } from './execution-plane.ts';
 import { isBorrowCapabilityAllowed } from './borrow-policy.ts';
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 import {
   BorrowOrderStore,
   BorrowOrderStoreError,
@@ -20,7 +21,7 @@ import {
 import type { EvidenceInput } from './evidence.ts';
 import type { UsageEventAppendInput } from './usage-ledger-store.ts';
 
-const DEFAULT_TENANT = 'pilot-default';
+const DEFAULT_TENANT = DEFAULT_TENANT_ID;
 const DEFAULT_OPEN_ORDER_LIMIT = 50;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
 const ALLOWED_CREATE_FIELDS = new Set(['requestId', 'capability', 'input', 'toSystem', 'toAgent', 'fromAgentId']);

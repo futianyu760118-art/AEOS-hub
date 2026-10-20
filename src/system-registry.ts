@@ -76,7 +76,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
   {
     systemId: 'aeos-hub',
     name: 'AEOS Hub',
-    tenantId: 'pilot-default',
+    tenantId: 'tenant-demo',
     owner: '平台团队',
     description: 'Hub 自身与中枢 Agent',
     status: 'active',
@@ -85,7 +85,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
   {
     systemId: 'control-platform',
     name: '公司中控平台',
-    tenantId: 'pilot-default',
+    tenantId: 'tenant-demo',
     owner: '中台团队',
     description: '中台执行面与智能助手',
     status: 'active',
@@ -94,7 +94,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
   {
     systemId: 'hengjian-plm',
     name: '恒剑 PLM',
-    tenantId: 'pilot-default',
+    tenantId: 'tenant-demo',
     owner: 'PLM 团队',
     description: '恒剑 PLM 执行面',
     status: 'active',

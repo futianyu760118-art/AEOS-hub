@@ -112,7 +112,7 @@ export function ensureControlPlatformExecutionAgents(
           businessOwner: '中台团队',
           technicalOwner: '中台团队',
           supportedTaskTypes: ['operating-case-analysis'],
-          tenantIds: ['pilot-default'],
+          tenantIds: ['tenant-demo'],
           inputSchemaVersion: '1.0.0',
           outputSchemaVersion: '1.0.0',
           accessMode: 'read_only',

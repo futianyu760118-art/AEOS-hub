@@ -156,7 +156,7 @@ Hub 启动时对非终态借调单执行对账：
 
 - `sourceSystem` 由执行面自报（共享根令牌），自借调排除是协作式约束；
 - 能力是否可被外部借用由 `src/borrow-policy.ts` 的允许列表决定；默认只允许中台查询/推理、PLM 查询/推理，`query_local_files` 与写能力拒绝；
-- 系统令牌不带租户，借调单统一归 Hub 配置租户（`AEOS_TENANT_ID || pilot-default`）；
+- 系统令牌不带租户，借调单统一归 Hub 配置租户（`AEOS_TENANT_ID || tenant-demo`）；
 - 浏览器视图对所有已登录运营角色可见；
 - 本期不做：提供方审批、回调推送、TTL 自动过期、失败重试、取消端点、链式借调、跨系统写入。
 

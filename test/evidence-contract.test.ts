@@ -92,7 +92,7 @@ test('uses a Hub runtime reference for system evidence without fabricating a bus
     payload: { status: 'healthy' },
   }, file);
 
-  assert.equal(entry.tenant_id, 'pilot-default');
+  assert.equal(entry.tenant_id, 'tenant-demo');
   assert.equal(entry.object_ref, 'hub://runtime/thread-1001');
   assert.equal(entry.source_system, 'aeos-hub');
   assert.equal(entry.correlation_id, 'thread-1001');
@@ -111,7 +111,7 @@ test('normalizes a legacy JSONL entry while preserving its payload and identifie
 
   const recent = await readRecentEvidence(1, file);
   assert.equal(recent.rows[0]?.event_id, legacy.event_id);
-  assert.equal(recent.rows[0]?.tenant_id, 'pilot-default');
+  assert.equal(recent.rows[0]?.tenant_id, 'tenant-demo');
   assert.equal(recent.rows[0]?.object_ref, 'hub://runtime/legacy-thread');
   assert.match(recent.rows[0]?.payload_hash ?? '', /^[a-f0-9]{64}$/);
 });

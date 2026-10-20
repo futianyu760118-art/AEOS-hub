@@ -6,6 +6,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateEvidenceEntry, type EvidenceEntryContract } from './evidence-contract.ts';
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const dataDir = join(here, '..', 'data');
@@ -30,7 +31,7 @@ export function ensureDataDir(): void {
 }
 
 function tenantId(): string {
-  return process.env.AEOS_TENANT_ID?.trim() || 'pilot-default';
+  return process.env.AEOS_TENANT_ID?.trim() || DEFAULT_TENANT_ID;
 }
 
 function hubRuntimeObjectRef(partial: EvidenceInput): string {

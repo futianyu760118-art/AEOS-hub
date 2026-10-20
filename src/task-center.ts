@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { atomicWrite } from './atomic-file.ts';
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const taskCenterFile = join(root, 'data', 'task-center.json');
@@ -299,7 +300,7 @@ export class TaskCenterStore {
     this.file = options.file ?? taskCenterFile;
     this.clock = options.clock ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
-    this.tenantId = options.tenantId?.trim() || process.env.AEOS_TENANT_ID?.trim() || 'pilot-default';
+    this.tenantId = options.tenantId?.trim() || process.env.AEOS_TENANT_ID?.trim() || DEFAULT_TENANT_ID;
   }
 
   load(): TaskCenterSnapshot {
