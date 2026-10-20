@@ -24,3 +24,13 @@ test('最高风险订单编排接到推理页面与服务端路由', () => {
   assert.match(server, /\/api\/execution\/highest-risk-order/);
   assert.match(server, /executionOrchestrator\.highestRiskOrder/);
 });
+
+test('中枢对话窄路由与 assistant_reply 渲染已接线', () => {
+  const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
+  const server = readFileSync(join(root, 'src', 'server.ts'), 'utf8');
+  assert.match(server, /routeHubExecutionTurn/);
+  assert.match(server, /selectHubReasoningAgent/);
+  assert.match(server, /type: 'assistant_reply'/);
+  assert.match(app, /case 'assistant_reply'/);
+  assert.match(app, /中枢 Agent · 执行面/);
+});

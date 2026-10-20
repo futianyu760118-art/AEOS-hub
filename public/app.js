@@ -6793,6 +6793,18 @@ function connect() {
       case 'user_message':
         if (message.convId === curConvId) appendLocalUser(message.text);
         break;
+      case 'assistant_reply': {
+        if (message.convId !== curConvId) break;
+        const wrap = appendMsg('agent', '');
+        const bubble = $('.bubble', wrap);
+        if (bubble) bubble.innerHTML = md(message.text);
+        wrap.appendChild(msgMeta(`${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} · 中枢 Agent · 执行面`));
+        els.empty.classList.add('hidden');
+        finishThinking();
+        setBusy(false);
+        els.messages.scrollTop = els.messages.scrollHeight;
+        break;
+      }
       case 'evt':
         handleEvt(message.method, message.params, message);
         break;

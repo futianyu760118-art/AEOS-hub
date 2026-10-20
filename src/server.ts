@@ -81,6 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } 
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
+import { formatHighestRiskAnswer, isHighestRiskOrderQuestion, selectHubReasoningAgent } from './hub-execution-routing.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
@@ -1040,6 +1041,56 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
     if (turnStartLocks.get(convId) === lock) turnStartLocks.delete(convId);
     release();
   }
+}
+
+/**
+ * 中枢对话的窄自动路由：识别“最高风险订单”后直接走执行面编排。
+ * 返回 true 表示已由执行面处理，不再进入 Codex；返回 false 时保持原中枢对话。
+ */
+async function routeHubExecutionTurn(convId: string, text: string): Promise<boolean> {
+  const conv = getConv(convId);
+  if ((conv?.scope ?? 'hub') !== 'hub') return false;
+  if (!isHighestRiskOrderQuestion(text)) return false;
+  const reasoningAgent = selectHubReasoningAgent(executionPlane.list().agents);
+  if (!reasoningAgent) return false;
+
+  const sessionId = conv?.threadId || 'hub-execution-orchestrator';
+  const runId = `hub-orch-${randomUUID()}`;
+  const envelope = { type: 'evt', convId, sessionId, runId, runtimeInstanceId: 'hub-execution-orchestrator' };
+  pushConv(convId, {
+    ...envelope,
+    method: 'turn/started',
+    params: { threadId: sessionId, turn: { id: runId, threadId: sessionId } },
+  });
+  pushConv(convId, {
+    ...envelope,
+    method: 'item/reasoning/textDelta',
+    params: { itemId: `reasoning:${runId}`, delta: '正在查询当前风险最高的订单，并交给系统推理智能体…' },
+  });
+
+  try {
+    const result = await executionOrchestrator.highestRiskOrder({ reasoningAgentId: reasoningAgent.agentId, text });
+    const answer = formatHighestRiskAnswer(result);
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
+    pushConv(convId, {
+      type: 'assistant_reply',
+      convId,
+      text: answer,
+      meta: {
+        requestId: result.requestId,
+        queryRunId: result.queryRunId,
+        reasoningRunId: result.reasoningRunId,
+        orderNo: result.order.orderNo,
+      },
+    });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
+  } catch (error) {
+    const message = `执行面编排失败：${(error as Error).message}`;
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: message });
+    pushConv(convId, { type: 'assistant_reply', convId, text: message });
+    pushConv(convId, { type: 'turn_end', convId, status: 'failed', runId, sessionId, message, occurredAt: new Date().toISOString() });
+  }
+  return true;
 }
 
 // ---------- HTTP ----------
@@ -2701,6 +2752,7 @@ wss.on('connection', (ws, request) => {
           : requestedChoice;
         appendConversationMessage(convId, { id: `user-${randomUUID()}`, role: 'user', text });
         pushConv(convId, { type: 'user_message', convId, text });
+        if (await routeHubExecutionTurn(convId, text)) return;
         await startTurn(convId, text, choice, dispatch);
       } else if (type === 'interrupt') {
         const convId = String(msg.conversationId ?? '');
