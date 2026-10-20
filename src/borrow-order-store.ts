@@ -50,6 +50,9 @@ export const BorrowOrderRecordSchema = z.object({
   fromSystem: identifierSchema,
   fromAgentId: optionalIdentifierSchema,
   capability: trimmedString(100, 1),
+  capabilityVersion: trimmedString(40).nullable().default(null),
+  inputSchemaHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
+  outputSchemaHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
   input: z.unknown(),
   toSystem: optionalIdentifierSchema,
   toAgent: optionalIdentifierSchema,
@@ -85,6 +88,9 @@ export interface CreateBorrowOrderRecordInput {
   fromSystem: string;
   fromAgentId: string | null;
   capability: string;
+  capabilityVersion?: string | null;
+  inputSchemaHash?: string | null;
+  outputSchemaHash?: string | null;
   input: unknown;
   toSystem: string | null;
   toAgent: string | null;
@@ -204,6 +210,9 @@ export class BorrowOrderStore {
       fromSystem: input.fromSystem,
       fromAgentId: input.fromAgentId,
       capability: input.capability,
+      capabilityVersion: input.capabilityVersion ?? null,
+      inputSchemaHash: input.inputSchemaHash ?? null,
+      outputSchemaHash: input.outputSchemaHash ?? null,
       input: input.input ?? null,
       toSystem: input.toSystem,
       toAgent: input.toAgent,

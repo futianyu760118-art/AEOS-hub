@@ -57,6 +57,9 @@ node scripts/mint-system-token.ts erp
 {
   "requestId": "purchase-20261019-0001",
   "capability": "query_control_platform",
+  "capabilityVersion": "1.0.0",
+  "inputSchemaHash": "<64 位 sha256>",
+  "outputSchemaHash": "<64 位 sha256>",
   "input": { "path": "/external/orders/list", "params": { "page": 1, "page_size": 5 } },
   "toSystem": "公司中控平台（本机演示）",
   "toAgent": "runtime-control-platform-agent",
@@ -66,6 +69,7 @@ node scripts/mint-system-token.ts erp
 
 - `requestId`：必填，请求方生成的幂等键，同一系统内唯一；
 - `capability`：必填；
+- `capabilityVersion` / `inputSchemaHash` / `outputSchemaHash`：可选；提供后只匹配完全一致的提供方能力，不兼容时明确拒绝，不回退旧版本；
 - `input`：可选，JSON 对象，最大 64 KiB；
 - `toSystem` / `toAgent`：可选；指定则只在指定范围解析，不允许回退；
 - `fromAgentId`：可选，仅作展示与计费归属，不参与鉴权。
@@ -119,6 +123,8 @@ pending → dispatched → running → completed
 | 404 | `ORDER_NOT_FOUND` | 借调单不存在或无权查看 |
 | 409 | `REQUEST_CONFLICT` | 同一 requestId 对应不同内容 |
 | 409 | `NO_PROVIDER` | 无其他系统在线只读提供方 |
+| 409 | `VERSION_MISMATCH` | 没有提供方支持请求的能力版本 |
+| 409 | `SCHEMA_MISMATCH` | 提供方输入/输出 schema 与请求不兼容 |
 | 409 | `TARGET_NOT_ELIGIBLE` | 指定目标不可用 |
 | 409 | `DISPATCH_AGENT_OFFLINE` | 派单瞬间提供方离线 |
 | 409 | `DISPATCH_CAPABILITY_UNSUPPORTED` | 派单瞬间能力发生变化 |

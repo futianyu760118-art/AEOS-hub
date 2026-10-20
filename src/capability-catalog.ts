@@ -47,7 +47,7 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-function hashSchema(value: unknown): string | null {
+export function hashCapabilitySchema(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   return createHash('sha256').update(stableStringify(value)).digest('hex');
 }
@@ -97,8 +97,8 @@ export function buildUnifiedCapabilityCatalog(
         providerAgentName: agent.name,
         readOnly: capability.constraints?.readOnly === true,
         version: capability.version ?? null,
-        inputSchemaHash: hashSchema(capability.inputSchema),
-        outputSchemaHash: hashSchema(capability.outputSchema),
+        inputSchemaHash: hashCapabilitySchema(capability.inputSchema),
+        outputSchemaHash: hashCapabilitySchema(capability.outputSchema),
         status: executionStatus(agent),
         source: 'execution',
         tenantId,

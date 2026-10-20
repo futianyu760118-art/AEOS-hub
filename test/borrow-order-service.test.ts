@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { ExecutionPlaneError, type ExecutionAgentRecord, type ExecutionRunRecord } from '../src/execution-plane.ts';
 import { BorrowOrderStore, type BorrowOrderRecord } from '../src/borrow-order-store.ts';
 import { BorrowOrderService, BorrowOrderServiceError } from '../src/borrow-order-service.ts';
+import { hashCapabilitySchema } from '../src/capability-catalog.ts';
 
 function agent(overrides: Partial<ExecutionAgentRecord> = {}): ExecutionAgentRecord {
   return {
@@ -152,6 +153,34 @@ test('敏感或未授权能力不允许跨系统借调，且不出现在能力�
     expectCode('CAPABILITY_NOT_ALLOWED'),
   );
   assert.deepEqual(service.capabilityDirectory('erp'), []);
+});
+
+test('能力版本 / schema 不兼容时明确拒绝，不回退旧版本', (t) => {
+  const inputSchema = { type: 'object', properties: { keyword: { type: 'string' } } };
+  const provider = agent({
+    capabilities: [{
+      name: 'query_control_platform', description: '只读查询', version: '2.0.0',
+      inputSchema, constraints: { readOnly: true },
+    }],
+  });
+  const { service } = fixture(t, [provider]);
+  const schemaHash = hashCapabilitySchema(inputSchema)!;
+
+  assert.throws(
+    () => service.create({ fromSystem: 'erp', body: body({ requestId: 'v-1', capabilityVersion: '1.0.0' }) }),
+    expectCode('VERSION_MISMATCH'),
+  );
+  assert.throws(
+    () => service.create({ fromSystem: 'erp', body: body({ requestId: 's-1', inputSchemaHash: 'a'.repeat(64) }) }),
+    expectCode('SCHEMA_MISMATCH'),
+  );
+  const matched = service.create({
+    fromSystem: 'erp',
+    body: body({ requestId: 'ok-1', capabilityVersion: '2.0.0', inputSchemaHash: schemaHash }),
+  });
+  assert.equal(matched.order.status, 'dispatched');
+  assert.equal(matched.order.capabilityVersion, '2.0.0');
+  assert.equal(matched.order.inputSchemaHash, schemaHash);
 });
 
 test('幂等重放不重复派单，不同内容报冲突', (t) => {
