@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=catalog-usage-v3-20261020" />
+  <link rel="stylesheet" href="/style.css?v=catalog-usage-v4-20261020" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -463,15 +463,7 @@
               <div class="harbor-search"><i data-lucide="search"></i><input id="harbor-agent-search" type="search" placeholder="搜索 Agent 名称、职责、系统或技能" /></div>
               <select id="harbor-agent-level-filter" aria-label="筛选 Agent 层级"><option value="all">全部层级</option><option value="L0">L0 · 中枢</option><option value="L1">L1 · 编队</option><option value="L2">L2 · 专项</option><option value="L3">L3 · 任务</option></select>
               <select id="harbor-agent-status-filter" aria-label="筛选 Agent 状态"><option value="all">全部状态</option><option value="idle">可调度</option><option value="working">执行中</option><option value="offline">离线</option><option value="draft">草稿</option><option value="archived">已归档</option></select>
-              <div id="harbor-agent-domain-filter" class="catalog-domain-filter" role="group" aria-label="按业务域查看">
-                <span class="catalog-domain-label">业务域</span>
-                <button class="catalog-domain-chip active" type="button" data-catalog-domain-filter="all">全部 <b data-domain-count="all">0</b></button>
-                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="order">订单交付 <b data-domain-count="order">0</b></button>
-                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="kitting">物料齐套 <b data-domain-count="kitting">0</b></button>
-                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="quality">质量异常 <b data-domain-count="quality">0</b></button>
-                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="production">生产进度 <b data-domain-count="production">0</b></button>
-                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="cross-domain">跨系统协同 <b data-domain-count="cross-domain">0</b></button>
-              </div>
+              <select id="harbor-agent-domain-filter" aria-label="按业务域筛选"><option value="all">全部业务域</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">质量异常</option><option value="production">生产进度</option><option value="cross-domain">跨系统协同</option></select>
               <div class="segmented catalog-view-toggle" role="group" aria-label="目录视图">
                 <button class="active" type="button" data-catalog-view="ownership" aria-pressed="true">归属视图</button>
                 <button type="button" data-catalog-view="hierarchy" aria-pressed="false">功能层级</button>
@@ -892,6 +884,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=catalog-usage-v3-20261020"></script>
+  <script type="module" src="/app.js?v=catalog-usage-v4-20261020"></script>
 </body>
 </html>
