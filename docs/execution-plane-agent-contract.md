@@ -164,13 +164,14 @@
 {
   "prompt": "分析订单 HJY20260903-261 的交付风险",
   "task_type": "order_delivery_analysis",
-  "context": {},
+  "context": { "businessObjectRef": "business://order/HJY20260903-261" },
   "constraints": { "read_only": true, "require_evidence": true }
 }
 ```
 
 - `prompt`：分析问题（由管理面从任务派生或按受控入口下发，最长 2000 字符）。
 - `task_type`：任务类型（`order_delivery_analysis` / `material_kitting_analysis` / `quality_analysis` / `production_analysis` 等）。
+- `context.businessObjectRef`：**必填业务锚点**，格式 `business://<order|product|batch>/<键>`。推理智能体只分析具体对象；没有锚点的全局问题（如“今日风险最高的订单”）需先用查询能力定位对象，再发起推理。
 - `constraints.read_only` 必须为 `true`；`require_evidence` 要求结论必须带证据。
 
 **`run_complete.result` 结构**：
