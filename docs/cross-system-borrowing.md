@@ -86,10 +86,11 @@ node scripts/mint-system-token.ts erp
 
 1. 能力不存在 → `CAPABILITY_NOT_FOUND`；
 2. 能力存在但无人声明只读 → `NO_PROVIDER`；
-3. `toSystem === fromSystem` 或指定本系统 Agent → `SELF_BORROW_FORBIDDEN`；
-4. 候选必须：在线、未注销、声明该能力且 `readOnly=true`、`sourceSystem !== fromSystem`；
-5. 排序：空闲优先 → `lastSeenAt` 降序 → `registeredAt` 升序 → `agentId` 升序；
-6. 指定目标不可用 → `TARGET_NOT_ELIGIBLE`，附 `reasons`（`offline`/`deregistered`/`capability_missing`/`not_read_only`/`same_system`/`target_system_mismatch`）。
+3. 能力不在提供方系统的借调允许列表中 → `CAPABILITY_NOT_ALLOWED`（默认允许中台查询/推理、PLM 查询/推理；`query_local_files` 与写能力默认拒绝）；
+4. `toSystem === fromSystem` 或指定本系统 Agent → `SELF_BORROW_FORBIDDEN`；
+5. 候选必须：在线、未注销、声明该能力且 `readOnly=true`、`sourceSystem !== fromSystem`、能力在允许列表中；
+6. 排序：空闲优先 → `lastSeenAt` 降序 → `registeredAt` 升序 → `agentId` 升序；
+7. 指定目标不可用 → `TARGET_NOT_ELIGIBLE`，附 `reasons`（`offline`/`deregistered`/`capability_missing`/`not_read_only`/`same_system`/`target_system_mismatch`/`capability_not_allowed_for_borrow`）。
 
 ### 3.3 状态机
 
@@ -113,6 +114,7 @@ pending → dispatched → running → completed
 | 401 | `AUTH_REQUIRED` | 令牌缺失或不匹配 |
 | 403 | `SELF_BORROW_FORBIDDEN` | 向本系统借调 |
 | 403 | `WRITE_FORBIDDEN` | 能力非只读 |
+| 403 | `CAPABILITY_NOT_ALLOWED` | 能力不在提供方系统的借调允许列表中 |
 | 404 | `CAPABILITY_NOT_FOUND` | 无人声明该能力 |
 | 404 | `ORDER_NOT_FOUND` | 借调单不存在或无权查看 |
 | 409 | `REQUEST_CONFLICT` | 同一 requestId 对应不同内容 |
@@ -153,6 +155,7 @@ Hub 启动时对非终态借调单执行对账：
 ## 7. 限制（试点期）
 
 - `sourceSystem` 由执行面自报（共享根令牌），自借调排除是协作式约束；
+- 能力是否可被外部借用由 `src/borrow-policy.ts` 的允许列表决定；默认只允许中台查询/推理、PLM 查询/推理，`query_local_files` 与写能力拒绝；
 - 系统令牌不带租户，借调单统一归 Hub 配置租户（`AEOS_TENANT_ID || pilot-default`）；
 - 浏览器视图对所有已登录运营角色可见；
 - 本期不做：提供方审批、回调推送、TTL 自动过期、失败重试、取消端点、链式借调、跨系统写入。

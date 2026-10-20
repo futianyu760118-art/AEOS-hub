@@ -8,6 +8,7 @@ import {
   type ExecutionPlaneRegistry,
   type ExecutionRunStateEvent,
 } from './execution-plane.ts';
+import { isBorrowCapabilityAllowed } from './borrow-policy.ts';
 import {
   BorrowOrderStore,
   BorrowOrderStoreError,
@@ -112,6 +113,7 @@ function isEligible(agent: ExecutionAgentRecord, capability: string, fromSystem:
   return agent.connectionStatus === 'online'
     && !agent.deregisteredAt
     && agent.sourceSystem !== fromSystem
+    && isBorrowCapabilityAllowed(agent.sourceSystem, capability)
     && agentHasReadOnlyCapability(agent, capability);
 }
 
@@ -122,6 +124,7 @@ function eligibilityReasons(agent: ExecutionAgentRecord, capability: string, fro
   if (agent.connectionStatus !== 'online') reasons.push('offline');
   if (!agentHasCapability(agent, capability)) reasons.push('capability_missing');
   else if (!agentHasReadOnlyCapability(agent, capability)) reasons.push('not_read_only');
+  if (!isBorrowCapabilityAllowed(agent.sourceSystem, capability)) reasons.push('capability_not_allowed_for_borrow');
   return reasons;
 }
 
@@ -197,6 +200,11 @@ export class BorrowOrderService {
     }
     if (!agents.some((agent) => agentHasReadOnlyCapability(agent, capability))) {
       throw new BorrowOrderServiceError('NO_PROVIDER', 409, '该能力存在，但没有系统声明只读版本，试点不可借调', { reason: 'no_read_only_provider' });
+    }
+    const externalAgents = agents.filter((agent) => agent.sourceSystem !== fromSystem);
+    if (externalAgents.some((agent) => agentHasReadOnlyCapability(agent, capability))
+      && !externalAgents.some((agent) => isBorrowCapabilityAllowed(agent.sourceSystem, capability) && agentHasReadOnlyCapability(agent, capability))) {
+      throw new BorrowOrderServiceError('CAPABILITY_NOT_ALLOWED', 403, `能力 ${capability} 不允许跨系统借调`, { reason: 'capability_not_allowed' });
     }
     if (toSystem && toSystem === fromSystem) {
       throw new BorrowOrderServiceError('SELF_BORROW_FORBIDDEN', 403, '不允许向本系统借调');
@@ -360,6 +368,7 @@ export class BorrowOrderService {
       if (agent.deregisteredAt || agent.sourceSystem === systemId) continue;
       for (const cap of agent.capabilities) {
         if (cap.constraints?.readOnly !== true) continue;
+        if (!isBorrowCapabilityAllowed(agent.sourceSystem, cap.name)) continue;
         const entry = byName.get(cap.name) ?? { name: cap.name, description: cap.description, providers: [] };
         entry.providers.push({
           systemId: agent.sourceSystem,

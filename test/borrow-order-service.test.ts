@@ -112,10 +112,10 @@ test('同能力多个候选：空闲优先，再按最近在线时间', (t) => {
 test('指定 toSystem / toAgent 生效', (t) => {
   const agents = [
     agent({ agentId: 'a-1', sourceSystem: '中控' }),
-    agent({ agentId: 'b-1', sourceSystem: 'PLM' }),
+    agent({ agentId: 'b-1', sourceSystem: 'PLM', capabilities: [{ name: 'query_plm', description: 'PLM 只读查询', constraints: { readOnly: true } }] }),
   ];
   const { service } = fixture(t, agents);
-  assert.equal(service.create({ fromSystem: 'erp', body: body({ toSystem: 'PLM' }) }).order.providerAgentId, 'b-1');
+  assert.equal(service.create({ fromSystem: 'erp', body: body({ capability: 'query_plm', toSystem: 'PLM' }) }).order.providerAgentId, 'b-1');
   assert.equal(service.create({ fromSystem: 'erp', body: body({ requestId: 'req-2', toAgent: 'a-1' }) }).order.providerAgentId, 'a-1');
 });
 
@@ -138,6 +138,20 @@ test('能力不存在 / 只有非只读版本', (t) => {
   assert.throws(() => missing.service.create({ fromSystem: 'erp', body: body() }), expectCode('CAPABILITY_NOT_FOUND'));
   const writeOnly = fixture(t, [agent({ capabilities: [{ name: 'query_control_platform', description: '', constraints: { readOnly: false } }] })]);
   assert.throws(() => writeOnly.service.create({ fromSystem: 'erp', body: body() }), expectCode('NO_PROVIDER'));
+});
+
+test('敏感或未授权能力不允许跨系统借调，且不出现在能力目录', (t) => {
+  const localFiles = agent({
+    agentId: 'plm-files',
+    sourceSystem: '恒剑PLM',
+    capabilities: [{ name: 'query_local_files', description: '本机文件只读', constraints: { readOnly: true } }],
+  });
+  const { service } = fixture(t, [localFiles]);
+  assert.throws(
+    () => service.create({ fromSystem: 'erp', body: body({ capability: 'query_local_files', input: { action: 'info' } }) }),
+    expectCode('CAPABILITY_NOT_ALLOWED'),
+  );
+  assert.deepEqual(service.capabilityDirectory('erp'), []);
 });
 
 test('幂等重放不重复派单，不同内容报冲突', (t) => {
