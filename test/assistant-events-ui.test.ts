@@ -75,5 +75,6 @@ test('样式与版本号', () => {
   assert.match(css, /\.assistant-trace-select/);
   assert.match(css, /\.assistant-failure-item/);
   assert.match(css, /\.assistant-latest-reply/);
-  assert.match(html, /timeline-labels-20261019/);
+  assert.match(html, /href="\/style\.css\?v=[^"]+"/);
+  assert.match(html, /src="\/app\.js\?v=[^"]+"/);
 });

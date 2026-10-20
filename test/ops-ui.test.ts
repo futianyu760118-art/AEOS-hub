@@ -39,7 +39,8 @@ test('监控样式存在', () => {
 });
 
 test('资源版本号已更新', () => {
-  assert.match(html, /timeline-labels-20261019/);
+  assert.match(html, /href="\/style\.css\?v=[^"]+"/);
+  assert.match(html, /src="\/app\.js\?v=[^"]+"/);
 });
 
 test('模型解析失败会提示用户', () => {
