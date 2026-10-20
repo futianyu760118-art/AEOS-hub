@@ -161,6 +161,36 @@ test('governs Agent task service profiles while keeping unconfigured records non
   }), /任务类型不能重复/);
 });
 
+test('records attribution axes and normalizes service domains', (t) => {
+  const { store } = fixture(t);
+  const root = store.load().agents[0]!;
+
+  const agent = store.createAgent({
+    name: '订单风险 Agent', role: '订单风险分析', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, code: 'order-risk-master', type: 'master', ownerOrg: '运营中心', domain: 'order-risk',
+    systemId: 'control-platform', primaryDomainId: 'order', domainIds: ['kitting', 'order', 'unknown'],
+  });
+
+  assert.equal(agent.systemId, 'control-platform');
+  assert.equal(agent.primaryDomainId, 'order');
+  assert.deepEqual(agent.domainIds, ['order', 'kitting']);
+  assert.equal(agent.externalAgentId, null);
+
+  const defaulted = store.createAgent({
+    name: '默认归属 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, code: 'default-attribution-master', type: 'master', ownerOrg: '运营中心', domain: 'unclassified',
+  });
+  assert.equal(defaulted.systemId, 'aeos-hub');
+  assert.equal(defaulted.primaryDomainId, 'cross-domain');
+  assert.deepEqual(defaulted.domainIds, ['cross-domain']);
+
+  assert.throws(() => store.createAgent({
+    name: '非法归属 Agent', role: '测试', provider: 'openai', runtimeId: root.runtimeId,
+    parentAgentId: root.id, code: 'invalid-domain-master', type: 'master', ownerOrg: '运营中心', domain: 'unclassified',
+    primaryDomainId: 'unknown-domain',
+  }), /primaryDomainId/);
+});
+
 test('creates related runtime, agent, project, and run in locked revisions', (t) => {
   const { store } = fixture(t);
   store.load();

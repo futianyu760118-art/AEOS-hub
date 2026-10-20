@@ -1,15 +1,21 @@
 // 业务域注册表：归属轴的第二层（系统 → 业务域 → 智能体）。
 // 四个一等业务域与现有 Agent 小队 ID 的迁移映射；不读写任何数据。
-export const BUSINESS_DOMAINS = [
+export const DOMAIN_IDS = ['order', 'kitting', 'quality', 'production', 'cross-domain'] as const;
+export type DomainId = (typeof DOMAIN_IDS)[number];
+
+export interface BusinessDomain {
+  domainId: DomainId;
+  name: string;
+  squadId: string | null;
+}
+
+export const BUSINESS_DOMAINS: readonly BusinessDomain[] = [
   { domainId: 'order', name: '订单交付', squadId: 'business-squad-orders' },
   { domainId: 'kitting', name: '物料齐套', squadId: 'business-squad-material-kitting' },
   { domainId: 'quality', name: '异常与质量', squadId: 'business-squad-quality' },
   { domainId: 'production', name: '生产协同', squadId: 'business-squad-production' },
   { domainId: 'cross-domain', name: '跨域/中枢', squadId: null },
-] as const;
-
-export type BusinessDomain = (typeof BUSINESS_DOMAINS)[number];
-export type DomainId = BusinessDomain['domainId'];
+];
 
 const DOMAIN_BY_ID = new Map<string, BusinessDomain>(BUSINESS_DOMAINS.map((domain) => [domain.domainId, domain]));
 const DOMAIN_BY_SQUAD = new Map<string, BusinessDomain>(
