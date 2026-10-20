@@ -39,7 +39,7 @@
     "test:evidence-contract": "node --test test/evidence-contract.test.ts",
     "test:result-contract": "node --test test/result-contract.test.ts",
     "test:collaboration": "node --test test/task-center.test.ts test/task-authorization.test.ts test/task-api.test.ts test/project-api.test.ts test/task-center-ui.test.ts test/project-center-ui.test.ts test/task-center-navigation.test.ts test/chinese-copy.test.ts",
-    "test:execution": "node --test test/schema-validation.test.ts test/execution-identity.test.ts test/execution-agent-policy.test.ts test/execution-plane.test.ts test/execution-plane-runtime-adapter.test.ts test/execution-capabilities.test.ts test/execution-agent-identity.test.ts test/execution-agent-routing.test.ts test/execution-orchestrator.test.ts test/hub-execution-routing.test.ts test/execution-orchestration-ui.test.ts test/execution-query-intent.test.ts test/execution-query-summary.test.ts test/execution-intent-llm.test.ts",
+    "test:execution": "node --test test/schema-validation.test.ts test/execution-identity.test.ts test/execution-agent-policy.test.ts test/execution-plane.test.ts test/execution-plane-runtime-adapter.test.ts test/execution-capabilities.test.ts test/execution-agent-identity.test.ts test/execution-agent-routing.test.ts test/execution-orchestrator.test.ts test/hub-execution-routing.test.ts test/hub-intent-router.test.ts test/execution-orchestration-ui.test.ts test/execution-query-intent.test.ts test/execution-query-summary.test.ts test/execution-intent-llm.test.ts",
     "smoke:protocol": "node scripts/smoke-protocol.mjs",
     "check:types": "tsc --noEmit",
     "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",

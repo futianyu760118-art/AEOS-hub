@@ -81,7 +81,8 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } 
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
-import { formatHighestRiskAnswer, isHighestRiskOrderQuestion, selectHubReasoningAgent } from './hub-execution-routing.ts';
+import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
+import { formatIntentRoutingReply, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
@@ -1044,17 +1045,35 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
 }
 
 /**
- * 中枢对话的窄自动路由：识别“最高风险订单”后直接走执行面编排。
- * 返回 true 表示已由执行面处理，不再进入 Codex；返回 false 时保持原中枢对话。
+ * 中枢对话的通用意图路由：识别业务域与动作；最高风险订单走编排，
+ * 其他已识别意图返回可用 Agent 与补充信息提示；无法识别时交给 Codex。
  */
 async function routeHubExecutionTurn(convId: string, text: string): Promise<boolean> {
   const conv = getConv(convId);
   if ((conv?.scope ?? 'hub') !== 'hub') return false;
-  if (!isHighestRiskOrderQuestion(text)) return false;
-  const reasoningAgent = selectHubReasoningAgent(executionPlane.list().agents);
-  if (!reasoningAgent) return false;
+  const intent = recognizeHubIntent(text);
+  if (intent.action === 'chat') return false;
 
+  const agents = executionPlane.list().agents;
+  const selection = selectAgentForIntent(intent, agents);
   const sessionId = conv?.threadId || 'hub-execution-orchestrator';
+
+  if (intent.action !== 'highest-risk') {
+    const reply = formatIntentRoutingReply(intent, selection);
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: reply });
+    pushConv(convId, { type: 'assistant_reply', convId, text: reply });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `hub-route-${randomUUID()}`, sessionId, occurredAt: new Date().toISOString() });
+    return true;
+  }
+
+  if (!selection) {
+    const reply = formatIntentRoutingReply(intent, null);
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: reply });
+    pushConv(convId, { type: 'assistant_reply', convId, text: reply });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `hub-route-${randomUUID()}`, sessionId, occurredAt: new Date().toISOString() });
+    return true;
+  }
+
   const runId = `hub-orch-${randomUUID()}`;
   const envelope = { type: 'evt', convId, sessionId, runId, runtimeInstanceId: 'hub-execution-orchestrator' };
   pushConv(convId, {
@@ -1069,7 +1088,7 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
   });
 
   try {
-    const result = await executionOrchestrator.highestRiskOrder({ reasoningAgentId: reasoningAgent.agentId, text });
+    const result = await executionOrchestrator.highestRiskOrder({ reasoningAgentId: selection.agentId, text });
     const answer = formatHighestRiskAnswer(result);
     appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
     pushConv(convId, {
