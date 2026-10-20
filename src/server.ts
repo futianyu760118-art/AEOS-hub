@@ -2362,6 +2362,8 @@ function authenticateExecutionPlane(req: IncomingMessage): ExecutionPlaneConnect
     rootSecret: EXECUTION_PLANE_TOKEN,
     verifySystemToken: (systemId, token) => verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token),
     getSystem: toRegisteredSystem,
+    // 兼容期默认允许旧根令牌；设置 EXECUTION_LEGACY_ROOT_ENABLED=0 后只接受每系统令牌。
+    allowLegacyRoot: process.env.EXECUTION_LEGACY_ROOT_ENABLED !== '0',
   });
   executionPlaneAuthByRequest.set(req, auth);
   return auth;

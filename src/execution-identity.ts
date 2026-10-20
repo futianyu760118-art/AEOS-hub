@@ -39,6 +39,8 @@ export interface ExecutionAuthDependencies {
   rootSecret: string;
   verifySystemToken: (systemId: string, token: string) => boolean;
   getSystem: (systemId: string) => RegisteredSystem | null;
+  /** 兼容期开关：false 时拒绝 legacy 根令牌（建议 2 周后关闭）。默认允许。 */
+  allowLegacyRoot?: boolean;
 }
 
 export interface RegistrationIdentityDependencies {
@@ -85,7 +87,7 @@ export function resolveExecutionPlaneAuth(
   }
 
   const legacyToken = text(headers.legacyToken);
-  if (legacyToken && dependencies.rootSecret && safeEqual(legacyToken, dependencies.rootSecret)) {
+  if (dependencies.allowLegacyRoot !== false && legacyToken && dependencies.rootSecret && safeEqual(legacyToken, dependencies.rootSecret)) {
     return { mode: 'legacy-root', systemId: null, systemName: null };
   }
   return null;

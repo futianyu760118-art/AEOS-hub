@@ -51,6 +51,15 @@ test('legacy 根令牌仍可连接，错误根令牌拒绝', () => {
   assert.equal(resolveExecutionPlaneAuth({ legacyToken: 'other' }, authDeps()), null);
 });
 
+test('兼容期开关关闭后拒绝 legacy 根令牌，系统令牌不受影响', () => {
+  const deps = { ...authDeps(), allowLegacyRoot: false };
+  assert.equal(resolveExecutionPlaneAuth({ legacyToken: 'root-secret' }, deps), null);
+  assert.deepEqual(
+    resolveExecutionPlaneAuth({ systemId: 'control-platform', systemToken: 'token-control-platform' }, deps),
+    { mode: 'system-token', systemId: 'control-platform', systemName: '公司中控平台' },
+  );
+});
+
 test('系统令牌注册：忽略自报值并使用令牌系统', () => {
   const identity = resolveRegistrationIdentity(
     { mode: 'system-token', systemId: 'control-platform', systemName: '公司中控平台' },
