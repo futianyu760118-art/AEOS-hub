@@ -91,6 +91,7 @@ import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.t
 import { CatalogApi } from './catalog-api.ts';
 import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
 import { verifySystemToken } from './system-token.ts';
+import { resolveTenantId } from './tenant-registry.ts';
 import {
   ExecutionIdentityError,
   resolveExecutionPlaneAuth,
@@ -203,7 +204,7 @@ const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: ne
 // ---------- 用量台账记账（中枢自身 LLM + 执行面用量上报，两条数据源共用） ----------
 function recordUsageEvent(event: UsageEventAppendInput): void {
   try {
-    appendUsageEvent(event);
+    appendUsageEvent({ ...event, tenantId: resolveTenantId(event.systemId, listSystems()) });
   } catch (error) {
     console.warn('[usage-ledger] 记账失败:', (error as Error).message);
   }

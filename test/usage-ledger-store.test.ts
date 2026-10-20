@@ -157,6 +157,21 @@ test('aggregateBySystem 按系统聚合', (t) => {
   assert.equal(rows[1].systemId, 'sys-a');
 });
 
+test('用量事件默认归属试点租户，并可按租户过滤', (t) => {
+  const { store } = fixture(t);
+  const defaultEvent = store.append(input({ agentId: 'agent-a', cost: 1, tokensIn: 10, tokensOut: 1 }));
+  assert.equal(defaultEvent.tenantId, 'pilot-default');
+  store.append(input({ agentId: 'agent-a', tenantId: 'tenant-b', cost: 2, tokensIn: 20, tokensOut: 2 }));
+
+  assert.equal(store.aggregateByAgent().length, 1);
+  const defaultRows = store.aggregateByAgent('pilot-default');
+  assert.equal(defaultRows[0]?.cost, 1);
+  const tenantBRows = store.aggregateByAgent('tenant-b');
+  assert.equal(tenantBRows[0]?.cost, 2);
+  assert.equal(store.list(10, 'pilot-default').length, 1);
+  assert.equal(store.list(10, 'tenant-b').length, 1);
+});
+
 test('损坏文件被隔离为 corrupt-*.json 并回退空账本', (t) => {
   const { dir, file, store } = fixture(t);
   store.append(input());

@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const usageLedgerFile = join(root, 'data', 'usage-ledger.json');
 
@@ -29,6 +31,7 @@ const METERING_SOURCES = ['direct', 'gateway', 'app-server', 'reported', 'missin
 
 export const UsageEventSchema = z.object({
   id: identifierSchema,
+  tenantId: identifierSchema.default(DEFAULT_TENANT_ID),
   agentId: identifierSchema,
   systemId: identifierSchema,
   modelId: identifierSchema.nullable(),
@@ -60,6 +63,7 @@ export type UsageLedgerSnapshot = z.infer<typeof UsageLedgerSnapshotSchema>;
 export interface UsageEventAppendInput {
   agentId: string;
   systemId: string;
+  tenantId?: string;
   modelId: string | null;
   runId: string | null;
   consumerSystemId?: string | null;
@@ -199,6 +203,7 @@ export class UsageLedgerStore {
   append(input: UsageEventAppendInput): UsageEvent {
     const parsed = UsageEventSchema.safeParse({
       id: `usage-${this.idFactory()}`,
+      tenantId: typeof input.tenantId === 'string' && input.tenantId.trim() ? input.tenantId.trim() : DEFAULT_TENANT_ID,
       agentId: input.agentId,
       systemId: input.systemId,
       modelId: input.modelId,
@@ -230,9 +235,15 @@ export class UsageLedgerStore {
     return event;
   }
 
-  aggregateByAgent(): UsageByAgentRow[] {
+  private eventsForTenant(tenantId?: string): UsageEvent[] {
+    const events = this.load().events;
+    const scope = typeof tenantId === 'string' ? tenantId.trim() : '';
+    return scope ? events.filter((event) => event.tenantId === scope) : events;
+  }
+
+  aggregateByAgent(tenantId?: string): UsageByAgentRow[] {
     const byAgent = new Map<string, UsageByAgentRow>();
-    for (const event of this.load().events) {
+    for (const event of this.eventsForTenant(tenantId)) {
       const row = byAgent.get(event.agentId) ?? { agentId: event.agentId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
       row.tokensIn += event.tokensIn;
       row.tokensOut += event.tokensOut;
@@ -244,9 +255,9 @@ export class UsageLedgerStore {
     return [...byAgent.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
   }
 
-  aggregateBySystem(): UsageBySystemRow[] {
+  aggregateBySystem(tenantId?: string): UsageBySystemRow[] {
     const bySystem = new Map<string, UsageBySystemRow>();
-    for (const event of this.load().events) {
+    for (const event of this.eventsForTenant(tenantId)) {
       const row = bySystem.get(event.systemId) ?? { systemId: event.systemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
       row.tokensIn += event.tokensIn;
       row.tokensOut += event.tokensOut;
@@ -259,9 +270,9 @@ export class UsageLedgerStore {
   }
 
   /** 按借调请求方聚合（仅统计带 consumerSystemId 的事件）。 */
-  aggregateByConsumerSystem(): UsageByConsumerSystemRow[] {
+  aggregateByConsumerSystem(tenantId?: string): UsageByConsumerSystemRow[] {
     const byConsumer = new Map<string, UsageByConsumerSystemRow>();
-    for (const event of this.load().events) {
+    for (const event of this.eventsForTenant(tenantId)) {
       if (!event.consumerSystemId) continue;
       const row = byConsumer.get(event.consumerSystemId)
         ?? { consumerSystemId: event.consumerSystemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0 };
@@ -274,8 +285,8 @@ export class UsageLedgerStore {
     return [...byConsumer.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
   }
 
-  list(limit = 200): UsageEvent[] {
-    const events = [...this.load().events].reverse();
+  list(limit = 200, tenantId?: string): UsageEvent[] {
+    const events = [...this.eventsForTenant(tenantId)].reverse();
     const bounded = Math.max(0, Math.min(Math.trunc(limit), 1000));
     return events.slice(0, bounded);
   }
@@ -291,18 +302,18 @@ export function appendUsageEvent(input: UsageEventAppendInput): UsageEvent {
   return defaultStore.append(input);
 }
 
-export function aggregateUsageByAgent(): UsageByAgentRow[] {
-  return defaultStore.aggregateByAgent();
+export function aggregateUsageByAgent(tenantId?: string): UsageByAgentRow[] {
+  return defaultStore.aggregateByAgent(tenantId);
 }
 
-export function aggregateUsageBySystem(): UsageBySystemRow[] {
-  return defaultStore.aggregateBySystem();
+export function aggregateUsageBySystem(tenantId?: string): UsageBySystemRow[] {
+  return defaultStore.aggregateBySystem(tenantId);
 }
 
-export function aggregateUsageByConsumerSystem(): UsageByConsumerSystemRow[] {
-  return defaultStore.aggregateByConsumerSystem();
+export function aggregateUsageByConsumerSystem(tenantId?: string): UsageByConsumerSystemRow[] {
+  return defaultStore.aggregateByConsumerSystem(tenantId);
 }
 
-export function listUsageEvents(limit = 200): UsageEvent[] {
-  return defaultStore.list(limit);
+export function listUsageEvents(limit = 200, tenantId?: string): UsageEvent[] {
+  return defaultStore.list(limit, tenantId);
 }

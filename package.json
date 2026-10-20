@@ -21,7 +21,7 @@
     "test:usage": "node --test test/usage-ledger-store.test.ts test/codex-usage-baseline-store.test.ts test/usage-ui.test.ts",
     "test:router": "node --test test/model-router.test.ts",
     "test:pricing": "node --test test/model-pricing.test.ts",
-    "test:systems": "node --test test/system-registry.test.ts",
+    "test:systems": "node --test test/system-registry.test.ts test/tenant-registry.test.ts",
     "test:domains": "node --test test/domain-registry.test.ts",
     "test:catalog": "node --test test/agent-catalog-migration.test.ts test/agent-catalog.test.ts test/catalog-api.test.ts test/catalog-ui.test.ts test/hub-agent-archive.test.ts test/control-platform-execution-agents.test.ts",
     "test:borrow": "node --test test/borrow-policy.test.ts test/borrow-order-store.test.ts test/borrow-order-service.test.ts test/borrow-order-api.test.ts test/borrow-order-ui.test.ts test/execution-plane-callbacks.test.ts",
