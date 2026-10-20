@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=usage-catalog-20261020" />
+  <link rel="stylesheet" href="/style.css?v=archive-l1-20261020" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -469,6 +469,7 @@
                 <button type="button" data-catalog-view="hierarchy" aria-pressed="false">功能层级</button>
               </div>
               <button id="harbor-agent-filter-clear" class="btn ghost compact" type="button">清除筛选</button>
+              <label class="catalog-archived-toggle"><input id="harbor-show-archived" type="checkbox" />显示已归档 <b id="catalog-archived-count">0</b></label>
             </div>
             <div id="catalog-summary" class="catalog-summary"></div>
             <div id="harbor-agent-list" class="catalog-tree"></div>
@@ -877,6 +878,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=usage-catalog-20261020"></script>
+  <script type="module" src="/app.js?v=archive-l1-20261020"></script>
 </body>
 </html>

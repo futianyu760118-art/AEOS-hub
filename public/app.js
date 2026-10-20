@@ -137,7 +137,7 @@ const els = {
   harborRunCount: $('#harbor-run-count'), harborRunActive: $('#harbor-run-active'),
   harborRuntimeBoundaryStatus: $('#harbor-runtime-boundary-status'), harborUpdated: $('#harbor-updated'),
   harborAgentList: $('#harbor-agent-list'), harborRuntimeList: $('#harbor-runtime-list'), harborProjectList: $('#harbor-project-list'),
-  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentDomainFilter: $('#harbor-agent-domain-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'), catalogSummary: $('#catalog-summary'),
+  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentDomainFilter: $('#harbor-agent-domain-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'), catalogSummary: $('#catalog-summary'), harborShowArchived: $('#harbor-show-archived'), catalogArchivedCount: $('#catalog-archived-count'),
   btnAddAgent: $('#btn-add-agent'), btnAddRuntime: $('#btn-add-runtime'),
   harborModal: $('#harbor-modal'), harborModalKicker: $('#harbor-modal-kicker'), harborModalTitle: $('#harbor-modal-title'),
   harborModalDesc: $('#harbor-modal-desc'), harborModalClose: $('#harbor-modal-close'), harborForm: $('#harbor-form'),
@@ -167,6 +167,7 @@ let harbor = { version: 1, agents: [], runtimes: [], projects: [], runs: [] };
 let harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
 let catalogTree = null;
 let catalogView = 'ownership';
+let catalogShowArchived = false;
 let catalogExpansionInitialized = false;
 const expandedCatalogSystems = new Set();
 const expandedCatalogDomains = new Set();
@@ -3860,9 +3861,12 @@ async function dispatchDashboardRiskToAgent() {
   els.dashboardRiskModalStatus.textContent = `正在定位${profile.label}…`;
   try {
     await Promise.all([loadSquad({ silent: true }), loadHarbor({ silent: true })]);
-    const harborAgent = (harbor.agents || []).find((agent) => profile.pattern.test(`${agent.name || ''} ${agent.role || ''}`));
-    if (!harborAgent) throw new Error(`${profile.label}尚未在 AI 港湾登记，无法派发`);
     const taskType = isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order';
+    const activeAgents = (harbor.agents || []).filter((agent) => agent.registration?.lifecycle !== 'retired' && agent.status !== 'archived');
+    // 优先按专业角色匹配；匹配不到时，退回服务域覆盖该任务的在线 Agent（如中台执行面）。
+    const harborAgent = activeAgents.find((agent) => profile.pattern.test(`${agent.name || ''} ${agent.role || ''}`))
+      || activeAgents.find((agent) => (agent.domainIds || []).includes(taskType));
+    if (!harborAgent) throw new Error(`${profile.label}尚未在 AI 港湾登记，无法派发`);
     if (!(harborAgent.domainIds || []).includes(taskType)) {
       throw new Error(`${profile.label}的服务业务域未包含${taskType}，无法派发`);
     }
@@ -5988,6 +5992,8 @@ function catalogFilterActive() {
 }
 
 function catalogAgentMatches(agent, system) {
+  const archived = agent.lifecycle === 'retired' || agent.status === 'archived';
+  if (archived && !catalogShowArchived) return false;
   if (harborAgentFilter.level !== 'all' && agent.hierarchyLevel !== harborAgentFilter.level) return false;
   if (harborAgentFilter.status !== 'all' && agent.status !== harborAgentFilter.status) return false;
   if (harborAgentFilter.domain !== 'all' && !(agent.domainIds || []).includes(harborAgentFilter.domain)) return false;
@@ -6103,6 +6109,8 @@ function renderHarbor() {
     }
   }
   const matchedPairs = allPairs.filter(({ agent, system }) => catalogAgentMatches(agent, system));
+  const archivedTotal = allPairs.filter(({ agent }) => agent.lifecycle === 'retired' || agent.status === 'archived').length;
+  if (els.catalogArchivedCount) els.catalogArchivedCount.textContent = String(archivedTotal);
   const filteredSystems = catalogSystems.map((system) => {
     const domains = system.domains.map((domain) => {
       const members = domain.agents.filter((agent) => catalogAgentMatches(agent, system));
@@ -6114,7 +6122,7 @@ function renderHarbor() {
   if (els.catalogSummary) {
     const counts = catalogTree?.counts;
     els.catalogSummary.innerHTML = counts
-      ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
+      ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体${archivedTotal && !catalogShowArchived ? `（默认隐藏 ${archivedTotal} 个已归档）` : ''}</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
       : '';
   }
 
@@ -7059,6 +7067,7 @@ els.harborAgentSearch?.addEventListener('input', () => { harborAgentFilter.query
 els.harborAgentLevelFilter?.addEventListener('change', () => { harborAgentFilter.level = els.harborAgentLevelFilter.value; renderHarbor(); });
 els.harborAgentStatusFilter?.addEventListener('change', () => { harborAgentFilter.status = els.harborAgentStatusFilter.value; renderHarbor(); });
 els.harborAgentDomainFilter?.addEventListener('change', () => { harborAgentFilter.domain = els.harborAgentDomainFilter.value; renderHarbor(); });
+els.harborShowArchived?.addEventListener('change', () => { catalogShowArchived = els.harborShowArchived.checked; renderHarbor(); });
 els.harborAgentFilterClear?.addEventListener('click', () => {
   harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
   if (els.harborAgentSearch) els.harborAgentSearch.value = '';
