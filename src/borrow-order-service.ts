@@ -9,8 +9,9 @@ import {
   type ExecutionRunStateEvent,
 } from './execution-plane.ts';
 import { isBorrowCapabilityAllowed } from './borrow-policy.ts';
-import { hashCapabilitySchema } from './capability-catalog.ts';
+import { buildUnifiedCapabilityCatalog, type UnifiedCapability } from './capability-catalog.ts';
 import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
+import { listSystems } from './system-registry.ts';
 import {
   BorrowOrderStore,
   BorrowOrderStoreError,
@@ -60,6 +61,7 @@ export interface CreateBorrowOrderResult {
 export interface CapabilityDirectoryEntry {
   name: string;
   description: string;
+  kind: 'query' | 'reason' | 'tool';
   providers: Array<{
     systemId: string;
     agentId: string;
@@ -67,6 +69,8 @@ export interface CapabilityDirectoryEntry {
     online: boolean;
     busy: boolean;
     lastSeenAt: string;
+    version: string | null;
+    inputSchemaHash: string | null;
   }>;
 }
 
@@ -131,20 +135,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function agentHasCapability(agent: ExecutionAgentRecord, capability: string): boolean {
-  return agent.capabilities.some((cap) => cap.name === capability);
-}
-
-function agentHasReadOnlyCapability(agent: ExecutionAgentRecord, capability: string): boolean {
-  return agent.capabilities.some((cap) => cap.name === capability && cap.constraints?.readOnly === true);
-}
-
-function capabilitySelectorsMatch(agent: ExecutionAgentRecord, capability: string, selectors: CapabilitySelectors): boolean {
-  const cap = agent.capabilities.find((item) => item.name === capability);
-  if (!cap) return false;
-  if (selectors.version && (cap.version ?? null) !== selectors.version) return false;
-  if (selectors.inputSchemaHash && hashCapabilitySchema(cap.inputSchema) !== selectors.inputSchemaHash) return false;
-  if (selectors.outputSchemaHash && hashCapabilitySchema(cap.outputSchema) !== selectors.outputSchemaHash) return false;
+function entrySelectorsMatch(entry: UnifiedCapability, selectors: CapabilitySelectors): boolean {
+  if (selectors.version && entry.version !== selectors.version) return false;
+  if (selectors.inputSchemaHash && entry.inputSchemaHash !== selectors.inputSchemaHash) return false;
+  if (selectors.outputSchemaHash && entry.outputSchemaHash !== selectors.outputSchemaHash) return false;
   return true;
 }
 
@@ -152,44 +146,45 @@ function hasSelectors(selectors: CapabilitySelectors): boolean {
   return Boolean(selectors.version || selectors.inputSchemaHash || selectors.outputSchemaHash);
 }
 
-function selectorMismatch(agents: ExecutionAgentRecord[], capability: string, selectors: CapabilitySelectors): { code: string; message: string; reason: string } | null {
+function selectorMismatch(entries: UnifiedCapability[], selectors: CapabilitySelectors): { code: string; message: string; reason: string } | null {
   if (!hasSelectors(selectors)) return null;
-  const providers = agents.filter((agent) => !agent.deregisteredAt && agentHasCapability(agent, capability));
-  if (!providers.length) return null;
-  if (selectors.version && !providers.some((agent) => capabilitySelectorsMatch(agent, capability, { ...selectors, inputSchemaHash: null, outputSchemaHash: null }))) {
+  if (!entries.length) return null;
+  if (selectors.version && !entries.some((entry) => entry.version === selectors.version)) {
     return { code: 'VERSION_MISMATCH', message: `没有提供方支持能力版本 ${selectors.version}`, reason: 'version_mismatch' };
   }
   if ((selectors.inputSchemaHash || selectors.outputSchemaHash)
-    && !providers.some((agent) => capabilitySelectorsMatch(agent, capability, { version: selectors.version, inputSchemaHash: selectors.inputSchemaHash, outputSchemaHash: selectors.outputSchemaHash }))) {
+    && !entries.some((entry) => entrySelectorsMatch(entry, selectors))) {
     return { code: 'SCHEMA_MISMATCH', message: '提供方能力的输入/输出 schema 与请求不兼容', reason: 'schema_mismatch' };
   }
   return null;
 }
 
-function isEligible(agent: ExecutionAgentRecord, capability: string, fromSystem: string, selectors: CapabilitySelectors): boolean {
-  return agent.connectionStatus === 'online'
-    && !agent.deregisteredAt
-    && agent.sourceSystem !== fromSystem
-    && isBorrowCapabilityAllowed(agent.sourceSystem, capability)
-    && agentHasReadOnlyCapability(agent, capability)
-    && capabilitySelectorsMatch(agent, capability, selectors);
+function isEligible(entry: UnifiedCapability, fromSystem: string, selectors: CapabilitySelectors): boolean {
+  return entry.status === 'available'
+    && entry.readOnly
+    && entry.providerSystemId !== fromSystem
+    && isBorrowCapabilityAllowed(entry.providerSystemId, entry.name)
+    && entrySelectorsMatch(entry, selectors);
 }
 
-function eligibilityReasons(agent: ExecutionAgentRecord, capability: string, fromSystem: string, selectors: CapabilitySelectors): string[] {
+function eligibilityReasons(entry: UnifiedCapability, fromSystem: string, selectors: CapabilitySelectors): string[] {
   const reasons: string[] = [];
-  if (agent.sourceSystem === fromSystem) reasons.push('same_system');
-  if (agent.deregisteredAt) reasons.push('deregistered');
-  if (agent.connectionStatus !== 'online') reasons.push('offline');
-  if (!agentHasCapability(agent, capability)) reasons.push('capability_missing');
-  else if (!agentHasReadOnlyCapability(agent, capability)) reasons.push('not_read_only');
-  if (!isBorrowCapabilityAllowed(agent.sourceSystem, capability)) reasons.push('capability_not_allowed_for_borrow');
-  if (agentHasCapability(agent, capability) && !capabilitySelectorsMatch(agent, capability, selectors)) {
-    const cap = agent.capabilities.find((item) => item.name === capability);
-    if (selectors.version && (cap?.version ?? null) !== selectors.version) reasons.push('version_mismatch');
-    if (selectors.inputSchemaHash && hashCapabilitySchema(cap?.inputSchema) !== selectors.inputSchemaHash) reasons.push('input_schema_mismatch');
-    if (selectors.outputSchemaHash && hashCapabilitySchema(cap?.outputSchema) !== selectors.outputSchemaHash) reasons.push('output_schema_mismatch');
-  }
+  if (entry.providerSystemId === fromSystem) reasons.push('same_system');
+  if (entry.status === 'disabled') reasons.push('deregistered');
+  if (entry.status === 'offline') reasons.push('offline');
+  if (!entry.readOnly) reasons.push('not_read_only');
+  if (!isBorrowCapabilityAllowed(entry.providerSystemId, entry.name)) reasons.push('capability_not_allowed_for_borrow');
+  if (selectors.version && entry.version !== selectors.version) reasons.push('version_mismatch');
+  if (selectors.inputSchemaHash && entry.inputSchemaHash !== selectors.inputSchemaHash) reasons.push('input_schema_mismatch');
+  if (selectors.outputSchemaHash && entry.outputSchemaHash !== selectors.outputSchemaHash) reasons.push('output_schema_mismatch');
   return reasons;
+}
+
+function canonicalSystemId(systemId: string): string {
+  const value = systemId.trim();
+  const system = listSystems().find((candidate) => candidate.systemId === value
+    || candidate.sourceSystemAliases.includes(value));
+  return system?.systemId ?? value;
 }
 
 function compareCandidates(a: ExecutionAgentRecord, b: ExecutionAgentRecord): number {
@@ -263,60 +258,82 @@ export class BorrowOrderService {
     toSystem: string | null,
     toAgent: string | null,
     selectors: CapabilitySelectors,
-  ): ExecutionAgentRecord {
+  ): { agent: ExecutionAgentRecord; providerSystem: string } {
     const agents = this.executionPlane.list().agents;
-    if (!agents.some((agent) => agentHasCapability(agent, capability))) {
+    const agentById = new Map(agents.map((agent) => [agent.agentId, agent]));
+    const catalog = buildUnifiedCapabilityCatalog({
+      executionAgents: agents,
+      harborAgents: [],
+      systems: listSystems(),
+      mcp: null,
+    });
+    const entries = catalog.filter((entry) => entry.source === 'execution' && entry.name === capability);
+    if (!entries.length) {
       throw new BorrowOrderServiceError('CAPABILITY_NOT_FOUND', 404, `没有任何系统声明能力 ${capability}`);
     }
-    if (!agents.some((agent) => agentHasReadOnlyCapability(agent, capability))) {
+    if (!entries.some((entry) => entry.readOnly)) {
       throw new BorrowOrderServiceError('NO_PROVIDER', 409, '该能力存在，但没有系统声明只读版本，试点不可借调', { reason: 'no_read_only_provider' });
     }
-    const externalAgents = agents.filter((agent) => agent.sourceSystem !== fromSystem);
-    if (externalAgents.some((agent) => agentHasReadOnlyCapability(agent, capability))
-      && !externalAgents.some((agent) => isBorrowCapabilityAllowed(agent.sourceSystem, capability) && agentHasReadOnlyCapability(agent, capability))) {
+    const externalEntries = entries.filter((entry) => entry.providerSystemId !== fromSystem);
+    if (externalEntries.some((entry) => entry.readOnly)
+      && !externalEntries.some((entry) => entry.readOnly && isBorrowCapabilityAllowed(entry.providerSystemId, capability))) {
       throw new BorrowOrderServiceError('CAPABILITY_NOT_ALLOWED', 403, `能力 ${capability} 不允许跨系统借调`, { reason: 'capability_not_allowed' });
     }
     if (toSystem && toSystem === fromSystem) {
       throw new BorrowOrderServiceError('SELF_BORROW_FORBIDDEN', 403, '不允许向本系统借调');
     }
 
-    let targetPool: ExecutionAgentRecord[];
+    let targetPool: UnifiedCapability[];
     if (toAgent) {
-      const target = agents.find((agent) => agent.agentId === toAgent);
-      if (!target) {
+      const targetAgent = agentById.get(toAgent);
+      if (!targetAgent) {
         throw new BorrowOrderServiceError('TARGET_NOT_ELIGIBLE', 409, `指定目标不存在：${toAgent}`, { reasons: ['agent_not_found'] });
       }
-      if (target.sourceSystem === fromSystem) {
+      if (targetAgent.sourceSystem === fromSystem) {
         throw new BorrowOrderServiceError('SELF_BORROW_FORBIDDEN', 403, '不允许向本系统的 Agent 借调');
       }
-      if (toSystem && target.sourceSystem !== toSystem) {
+      targetPool = entries.filter((entry) => entry.providerAgentId === toAgent);
+      if (!targetPool.length) {
+        throw new BorrowOrderServiceError('TARGET_NOT_ELIGIBLE', 409, '指定目标未声明该能力', { reasons: ['capability_missing'] });
+      }
+      if (toSystem && targetPool[0]?.providerSystemId !== toSystem) {
         throw new BorrowOrderServiceError('TARGET_NOT_ELIGIBLE', 409, '指定的 Agent 不属于指定系统', { reasons: ['target_system_mismatch'] });
       }
-      targetPool = [target];
     } else if (toSystem) {
-      targetPool = agents.filter((agent) => agent.sourceSystem === toSystem);
+      targetPool = entries.filter((entry) => entry.providerSystemId === toSystem);
     } else {
-      targetPool = agents;
+      targetPool = entries;
     }
 
-    const eligible = targetPool.filter((agent) => isEligible(agent, capability, fromSystem, selectors));
+    const eligible = targetPool.filter((entry) => isEligible(entry, fromSystem, selectors));
     if (!eligible.length) {
-      const mismatch = selectorMismatch(agents, capability, selectors);
+      const mismatch = selectorMismatch(targetPool, selectors);
       if (mismatch) throw new BorrowOrderServiceError(mismatch.code, 409, mismatch.message, { reason: mismatch.reason });
       if (toAgent || toSystem) {
-        const reasons = targetPool.flatMap((agent) => eligibilityReasons(agent, capability, fromSystem, selectors));
+        const reasons = targetPool.flatMap((entry) => eligibilityReasons(entry, fromSystem, selectors));
         throw new BorrowOrderServiceError('TARGET_NOT_ELIGIBLE', 409, '指定目标当前不可用', {
           reasons: [...new Set(reasons)],
           candidateCount: targetPool.length,
         });
       }
-      const readOnlyProviders = agents.filter((agent) => !agent.deregisteredAt && agentHasReadOnlyCapability(agent, capability));
-      const onlySameSystem = readOnlyProviders.length > 0 && readOnlyProviders.every((agent) => agent.sourceSystem === fromSystem);
+      const readOnlyProviders = entries.filter((entry) => entry.readOnly && entry.status !== 'disabled');
+      const onlySameSystem = readOnlyProviders.length > 0 && readOnlyProviders.every((entry) => entry.providerSystemId === fromSystem);
       throw new BorrowOrderServiceError('NO_PROVIDER', 409, onlySameSystem
         ? '该能力只有本系统提供，无法跨系统借调'
         : '没有其他系统的在线只读提供方', { reason: onlySameSystem ? 'only_same_system' : 'no_online_read_only_provider' });
     }
-    return eligible.slice().sort(compareCandidates)[0];
+
+    const chosen = eligible.slice().sort((left, right) => {
+      const leftAgent = agentById.get(left.providerAgentId);
+      const rightAgent = agentById.get(right.providerAgentId);
+      if (!leftAgent || !rightAgent) return left.providerAgentId.localeCompare(right.providerAgentId);
+      return compareCandidates(leftAgent, rightAgent);
+    })[0]!;
+    const agent = agentById.get(chosen.providerAgentId);
+    if (!agent) {
+      throw new BorrowOrderServiceError('TARGET_NOT_ELIGIBLE', 409, '提供方 Agent 已不在执行面', { reasons: ['agent_not_found'] });
+    }
+    return { agent, providerSystem: chosen.providerSystemId };
   }
 
   create(input: {
@@ -365,7 +382,7 @@ export class BorrowOrderService {
       throw new BorrowOrderServiceError('TOO_MANY_OPEN_ORDERS', 429, `未完成借调单过多（上限 ${this.openOrderLimit}）`);
     }
 
-    const provider = this.resolveProvider(fromSystem, capability, toSystem, toAgent, selectors);
+    const { agent: provider, providerSystem } = this.resolveProvider(fromSystem, capability, toSystem, toAgent, selectors);
     const order = this.store.create({
       tenantId: this.tenantId,
       requestId,
@@ -379,7 +396,7 @@ export class BorrowOrderService {
       input: rawInput,
       toSystem,
       toAgent,
-      providerSystem: provider.sourceSystem,
+      providerSystem,
       providerAgentId: provider.agentId,
     });
     const createdAudit = this.audit('created', order);
@@ -425,14 +442,16 @@ export class BorrowOrderService {
   } {
     const direction = filter.direction ?? 'outgoing';
     const limit = filter.limit ?? 100;
-    const outgoing = direction === 'incoming' ? [] : this.store.list({ fromSystem: systemId, status: filter.status, limit });
-    const incoming = direction === 'outgoing' ? [] : this.store.list({ providerSystem: systemId, status: filter.status, limit });
+    const scope = canonicalSystemId(systemId);
+    const outgoing = direction === 'incoming' ? [] : this.store.list({ fromSystem: scope, status: filter.status, limit });
+    const incoming = direction === 'outgoing' ? [] : this.store.list({ providerSystem: scope, status: filter.status, limit });
     return { outgoing, incoming };
   }
 
   getForSystem(systemId: string, orderId: string): BorrowOrderRecord {
     const order = this.store.get(orderId);
-    if (!order || (order.fromSystem !== systemId && order.providerSystem !== systemId)) {
+    const scope = canonicalSystemId(systemId);
+    if (!order || (order.fromSystem !== scope && order.providerSystem !== scope)) {
       throw new BorrowOrderServiceError('ORDER_NOT_FOUND', 404, '借调单不存在或无权查看');
     }
     return order;
@@ -443,23 +462,41 @@ export class BorrowOrderService {
   }
 
   capabilityDirectory(systemId: string): CapabilityDirectoryEntry[] {
+    const scope = canonicalSystemId(systemId);
+    const agents = this.executionPlane.list().agents;
+    const agentById = new Map(agents.map((agent) => [agent.agentId, agent]));
+    const catalog = buildUnifiedCapabilityCatalog({
+      executionAgents: agents,
+      harborAgents: [],
+      systems: listSystems(),
+      mcp: null,
+    });
     const byName = new Map<string, CapabilityDirectoryEntry>();
-    for (const agent of this.executionPlane.list().agents) {
-      if (agent.deregisteredAt || agent.sourceSystem === systemId) continue;
-      for (const cap of agent.capabilities) {
-        if (cap.constraints?.readOnly !== true) continue;
-        if (!isBorrowCapabilityAllowed(agent.sourceSystem, cap.name)) continue;
-        const entry = byName.get(cap.name) ?? { name: cap.name, description: cap.description, providers: [] };
-        entry.providers.push({
-          systemId: agent.sourceSystem,
-          agentId: agent.agentId,
-          agentName: agent.name,
-          online: agent.connectionStatus === 'online',
-          busy: agent.runtimeStatus === 'working' || agent.currentRunId !== null,
-          lastSeenAt: agent.lastSeenAt,
-        });
-        byName.set(cap.name, entry);
-      }
+    for (const capability of catalog) {
+      if (capability.source !== 'execution'
+        || !capability.readOnly
+        || capability.status === 'disabled'
+        || capability.providerSystemId === scope
+        || !isBorrowCapabilityAllowed(capability.providerSystemId, capability.name)) continue;
+      const agent = agentById.get(capability.providerAgentId);
+      if (!agent) continue;
+      const entry = byName.get(capability.name) ?? {
+        name: capability.name,
+        description: capability.description,
+        kind: capability.kind as CapabilityDirectoryEntry['kind'],
+        providers: [],
+      };
+      entry.providers.push({
+        systemId: capability.providerSystemId,
+        agentId: agent.agentId,
+        agentName: agent.name,
+        online: capability.status === 'available',
+        busy: agent.runtimeStatus === 'working' || agent.currentRunId !== null,
+        lastSeenAt: agent.lastSeenAt,
+        version: capability.version,
+        inputSchemaHash: capability.inputSchemaHash,
+      });
+      byName.set(capability.name, entry);
     }
     return [...byName.values()]
       .map((entry) => ({ ...entry, providers: entry.providers.slice().sort((a, b) => a.agentId.localeCompare(b.agentId)) }))

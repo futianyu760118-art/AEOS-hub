@@ -248,13 +248,13 @@ test('用量归属：补请求方与借调单号，非借调事件不变', (t) =
   const { service } = fixture(t);
   const created = service.create({ fromSystem: 'erp', body: body() });
   const attributed = service.attributeUsage({
-    agentId: 'agent-1', systemId: '公司中控平台', modelId: null, runId: created.order.runId, tokensIn: 1, tokensOut: 2, cost: 0,
+    agentId: 'agent-1', systemId: 'control-platform', modelId: null, runId: created.order.runId, tokensIn: 1, tokensOut: 2, cost: 0,
     startedAt: '', endedAt: '',
   });
   assert.equal(attributed.consumerSystemId, 'erp');
   assert.equal(attributed.consumerAgentId, 'purchase-assistant');
   assert.equal(attributed.borrowOrderId, created.order.orderId);
-  assert.equal(attributed.systemId, '公司中控平台');
+  assert.equal(attributed.systemId, 'control-platform');
   const untouched = service.attributeUsage({
     agentId: 'x', systemId: 'y', modelId: null, runId: 'unknown', tokensIn: 1, tokensOut: 1, cost: 0, startedAt: '', endedAt: '',
   });

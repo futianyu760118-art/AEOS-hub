@@ -115,7 +115,7 @@ test('能力目录只返回只读且排除本系统', (t) => {
   assert.equal(result?.status, 200);
   const capabilities = result?.body.capabilities as Array<{ name: string; providers: Array<{ systemId: string }> }>;
   assert.equal(capabilities.length, 1);
-  assert.equal(capabilities[0].providers[0].systemId, '公司中控平台');
+  assert.equal(capabilities[0].providers[0].systemId, 'control-platform');
   const own = api.handle({ method: 'GET', pathname: '/api/system/borrow-orders/capabilities', systemId: '公司中控平台', token: token('公司中控平台') });
   assert.deepEqual((own?.body.capabilities as unknown[]), []);
 });

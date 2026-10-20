@@ -88,6 +88,8 @@ node scripts/mint-system-token.ts erp
 
 ### 3.2 目标解析
 
+能力解析来自统一能力目录（执行面 read-only 能力；港湾 skills 与 MCP 工具不参与借调）。`providerSystem` 使用系统登记中的规范 `systemId`；请求方传显示名时按别名归一。
+
 1. 能力不存在 → `CAPABILITY_NOT_FOUND`；
 2. 能力存在但无人声明只读 → `NO_PROVIDER`；
 3. 能力不在提供方系统的借调允许列表中 → `CAPABILITY_NOT_ALLOWED`（默认允许中台查询/推理、PLM 查询/推理；`query_local_files` 与写能力默认拒绝）；
