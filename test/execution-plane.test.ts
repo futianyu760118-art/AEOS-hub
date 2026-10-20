@@ -113,7 +113,7 @@ test('回环连接地址会被识别为本机执行面', () => {
 
 test('执行面注册仅信任连接对端地址判定本机身份', () => {
   const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-  assert.match(server, /executionWss\.on\('connection', \(ws, request\) => \{\s+const peerAddress = request\.socket\.remoteAddress;/);
+  assert.match(server, /executionWss\.on\('connection', \(ws, request\) => \{[\s\S]{0,400}?const peerAddress = request\.socket\.remoteAddress;/);
   assert.match(server, /local: isLoopbackExecutionPeer\(peerAddress\),/);
   assert.doesNotMatch(server, /local:\s*msg\.local/);
 });
@@ -212,6 +212,54 @@ test('run_complete 携带 usage 时经 onUsageEvent 记账', (t) => {
   assert.equal(usageEvents[0].tokensIn, 120);
   assert.equal(usageEvents[0].tokensOut, 30);
   assert.equal(usageEvents[0].cost, 0.00018);
+});
+
+test('注册身份来自认证上下文：规范 systemId 覆盖自报值并进入用量归属', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-identity-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const usageEvents: UsageEventAppendInput[] = [];
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => { let n = 0; return () => `id-${++n}`; })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-identity',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '冒用其他系统',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+    {
+      authMode: 'system-token',
+      systemId: 'control-platform',
+      sourceSystem: 'control-platform',
+      sourceSystemName: '公司中控平台',
+      legacyUnresolved: false,
+    },
+  );
+
+  const agent = registry.list().agents.find((item) => item.agentId === 'agent-query-identity');
+  assert.equal(agent?.systemId, 'control-platform');
+  assert.equal(agent?.sourceSystem, 'control-platform');
+  assert.equal(agent?.sourceSystemName, '公司中控平台');
+  assert.equal(agent?.authMode, 'system-token');
+
+  const { runId } = registry.dispatch('agent-query-identity', 'query_control_platform', { path: '/external/orders/list', params: {} });
+  registry.onRunComplete('agent-query-identity', { runId, result: { rows: [] } });
+  assert.equal(usageEvents[0]?.systemId, 'control-platform');
+});
+
+test('未提供认证上下文时保持 legacy 自报口径', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const agent = h.registry.list().agents[0];
+  assert.equal(agent?.systemId, null);
+  assert.equal(agent?.authMode, 'legacy-root');
+  assert.equal(agent?.sourceSystemName, '公司中控平台');
 });
 
 test('失败回传：run_failed 记录错误', (t) => {

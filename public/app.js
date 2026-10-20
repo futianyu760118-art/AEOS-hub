@@ -796,11 +796,13 @@ function renderExecutionAgentList(agents) {
     const online = agent.connectionStatus === 'online';
     const selected = selectedExecutionAgent === agent.agentId;
     const location = agent.local === true ? '本机' : '远程';
-    const sourceSystem = typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
-      ? agent.sourceSystem.trim()
-      : '来源待补充';
+    const sourceText = typeof agent.sourceSystemName === 'string' && agent.sourceSystemName.trim()
+      ? agent.sourceSystemName.trim()
+      : typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
+        ? agent.sourceSystem.trim()
+        : '来源待补充';
     return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceSystem)}">来源：${esc(sourceSystem)}</span></span></span>
+      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span></span></span>
       <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
     </button>`;
   }).join('');

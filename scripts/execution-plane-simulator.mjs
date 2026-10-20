@@ -2,6 +2,7 @@
 // 职责：连 /ws/agent → register → 周期 heartbeat → 收到 dispatch 时真查 company-control（复用 Python upstream_client）→ 回报结果 → 收到 recall 时中止查询。
 // 真实执行面按 docs/execution-plane-agent-contract.md 实现；本脚本仅用于 Hub 侧端到端验证。
 import WebSocket from 'ws';
+import { createHmac } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,13 @@ const token = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const wsUrl = process.env.EXECUTION_WS_URL ?? 'ws://127.0.0.1:8788/execution-agent';
 const agentId = process.env.EXECUTION_AGENT_ID ?? 'runtime-control-platform-agent';
 const sourceSystem = process.env.EXECUTION_SOURCE_SYSTEM ?? '公司中控平台（本机演示）';
+// P1：默认用「系统令牌」连接；EXECUTION_USE_LEGACY_TOKEN=1 可回退旧根令牌做兼容验证。
+const systemId = (process.env.EXECUTION_SYSTEM_ID ?? 'control-platform').trim();
+const useLegacyToken = process.env.EXECUTION_USE_LEGACY_TOKEN === '1';
+const systemToken = createHmac('sha256', token).update(`aeos-system-token:${systemId}`).digest('hex');
+const connectionHeaders = useLegacyToken
+  ? { 'x-aeos-execution-token': token }
+  : { 'x-aeos-system-id': systemId, 'x-aeos-system-token': systemToken };
 
 if (!token) {
   console.error('[simulator] 缺少 EXECUTION_PLANE_TOKEN 环境变量（需与管理面一致）');
@@ -239,9 +247,9 @@ async function handleDispatch(msg) {
 }
 
 function connect() {
-  ws = new WebSocket(wsUrl, { headers: { 'x-aeos-execution-token': token } });
+  ws = new WebSocket(wsUrl, { headers: connectionHeaders });
   ws.on('open', () => {
-    console.log('[simulator] 已连接管理面，发送 register');
+    console.log(`[simulator] 已连接管理面（${useLegacyToken ? 'legacy 根令牌' : `系统令牌 ${systemId}`}），发送 register`);
     send({ type: 'register', agentId, name: '公司中台执行面智能体', version: '1.0.0', sourceSystem, capabilities });
   });
   ws.on('message', (raw) => {

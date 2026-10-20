@@ -7,6 +7,7 @@ import { dirname } from 'node:path';
 import { validateAgainstSchema, type Schema } from './schema-validation.ts';
 import { type QueryIntent } from './execution-intent-types.ts';
 import type { UsageEventAppendInput } from './usage-ledger-store.ts';
+import type { ExecutionRegistrationIdentity } from './execution-identity.ts';
 
 export type ExecutionAgentRuntimeStatus = 'idle' | 'working' | 'error';
 export type ExecutionAgentConnectionStatus = 'online' | 'offline';
@@ -24,6 +25,8 @@ export interface ExecutionAgentCapability {
   intent?: QueryIntent;
 }
 
+export type ExecutionAgentAuthMode = 'system-token' | 'legacy-root' | 'control-plane' | 'unknown';
+
 export interface ExecutionAgentRecord {
   agentId: string;
   name: string;
@@ -36,8 +39,14 @@ export interface ExecutionAgentRecord {
   registeredAt: string;
   /** 是否从本机回环地址（127.0.0.1/::1）连接：本地执行面 vs 远程目标系统。 */
   local: boolean;
-  /** 执行智能体所属的业务系统，由注册方声明。 */
+  /** 规范系统 ID（system-token 认证或 legacy 解析成功）；无法解析时为 null。 */
+  systemId: string | null;
+  /** 执行面记录的业务系统键：优先规范 systemId，否则保留 legacy 自报值。 */
   sourceSystem: string;
+  /** 系统显示名，供页面展示；历史记录可能为 null。 */
+  sourceSystemName: string | null;
+  /** 身份来源：系统令牌 / legacy 根令牌 / 控制面声明 / 历史未知。 */
+  authMode: ExecutionAgentAuthMode;
   /** 软删除时间戳：系统自助注销后保留画像/用量台账，仅强制离线、不再派单。 */
   deregisteredAt?: string | null;
 }
@@ -253,14 +262,22 @@ export class ExecutionPlaneRegistry {
       const raw = JSON.parse(readFileSync(this.file, 'utf8'));
       if (raw && Array.isArray(raw.agents)) {
         for (const record of raw.agents as ExecutionAgentRecord[]) {
+          const sourceSystem = typeof record.sourceSystem === 'string' && record.sourceSystem.trim()
+            ? record.sourceSystem.trim()
+            : '历史记录（来源待补充）';
           // 重启后没有活跃连接：一律视为离线，仅保留最近一次画像供仪表盘展示。
           this.agents.set(record.agentId, {
             record: {
               ...record,
               local: record.local === true,
-              sourceSystem: typeof record.sourceSystem === 'string' && record.sourceSystem.trim()
-                ? record.sourceSystem.trim()
-                : '历史记录（来源待补充）',
+              systemId: typeof record.systemId === 'string' && record.systemId.trim() ? record.systemId.trim() : null,
+              sourceSystem,
+              sourceSystemName: typeof record.sourceSystemName === 'string' && record.sourceSystemName.trim()
+                ? record.sourceSystemName.trim()
+                : null,
+              authMode: record.authMode === 'system-token' || record.authMode === 'legacy-root' || record.authMode === 'control-plane'
+                ? record.authMode
+                : 'unknown',
               connectionStatus: 'offline',
               runtimeStatus: 'idle',
               currentRunId: null,
@@ -328,6 +345,7 @@ export class ExecutionPlaneRegistry {
   onRegister(
     input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown },
     send: SendFn,
+    identity?: ExecutionRegistrationIdentity,
   ): { agentId: string; heartbeatIntervalMs: number } {
     const agentId = requireString(input.agentId, 'agentId', 160);
     const name = requireString(input.name, 'name', 160);
@@ -340,7 +358,7 @@ export class ExecutionPlaneRegistry {
     }
     const capabilities = parseCapabilities(input.capabilities);
     const local = input.local === true;
-    const sourceSystem = requireString(input.sourceSystem, 'sourceSystem', 160);
+    const sourceSystem = identity?.sourceSystem ?? requireString(input.sourceSystem, 'sourceSystem', 160);
 
     const now = this.nowIso();
     const existing = this.agents.get(agentId);
@@ -355,7 +373,10 @@ export class ExecutionPlaneRegistry {
       currentRunId: existing?.record.currentRunId ?? null,
       registeredAt: existing?.record.registeredAt ?? now,
       local,
+      systemId: identity?.systemId ?? null,
       sourceSystem,
+      sourceSystemName: identity?.sourceSystemName ?? sourceSystem,
+      authMode: identity?.authMode ?? 'legacy-root',
       deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send });
@@ -411,7 +432,7 @@ export class ExecutionPlaneRegistry {
     const hasUsage = usage.modelId !== null || usage.tokensIn > 0 || usage.tokensOut > 0 || usage.cost > 0;
     this.onUsageEvent?.({
       agentId,
-      systemId: entry.record.sourceSystem.trim() ? entry.record.sourceSystem.trim() : 'unknown',
+      systemId: entry.record.systemId ?? (entry.record.sourceSystem.trim() ? entry.record.sourceSystem.trim() : 'unknown'),
       modelId: usage.modelId,
       runId: run.runId,
       tokensIn: usage.tokensIn,
@@ -558,7 +579,10 @@ export class ExecutionPlaneRegistry {
       currentRunId: existing?.record.currentRunId ?? null,
       registeredAt: existing?.record.registeredAt ?? now,
       local: existing?.record.local ?? false,
+      systemId: ownedSourceSystem,
       sourceSystem: ownedSourceSystem,
+      sourceSystemName: existing?.record.sourceSystemName ?? null,
+      authMode: 'control-plane',
       deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send: existing?.send ?? (() => {}) });

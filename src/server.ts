@@ -86,7 +86,16 @@ import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
 import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
 import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.ts';
 import { CatalogApi } from './catalog-api.ts';
-import { ensureSystems, listSystems } from './system-registry.ts';
+import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
+import { verifySystemToken } from './system-token.ts';
+import {
+  ExecutionIdentityError,
+  resolveExecutionPlaneAuth,
+  resolveRegistrationIdentity,
+  type ExecutionPlaneConnectionAuth,
+  type ExecutionRegistrationIdentity,
+  type RegisteredSystem,
+} from './execution-identity.ts';
 import { BorrowOrderApi } from './borrow-order-api.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
 import { OpsMonitor } from './ops-monitor.ts';
@@ -2328,18 +2337,60 @@ const executionServer = createServer((_req, res) => {
   res.writeHead(404);
   res.end('execution plane control channel (WebSocket only)');
 });
+
+// P1：连接鉴权结果缓存到 IncomingMessage，供 verifyClient 与 connection 复用。
+const executionPlaneAuthByRequest = new WeakMap<IncomingMessage, ExecutionPlaneConnectionAuth | null>();
+
+function executionHeader(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') return '';
+  try { return decodeURIComponent(raw).trim(); } catch { return raw.trim(); }
+}
+
+function toRegisteredSystem(systemId: string): RegisteredSystem | null {
+  const system = getSystem(systemId);
+  return system ? { systemId: system.systemId, name: system.name, status: system.status } : null;
+}
+
+function authenticateExecutionPlane(req: IncomingMessage): ExecutionPlaneConnectionAuth | null {
+  if (executionPlaneAuthByRequest.has(req)) return executionPlaneAuthByRequest.get(req) ?? null;
+  const auth = resolveExecutionPlaneAuth({
+    systemId: executionHeader(req.headers['x-aeos-system-id']),
+    systemToken: executionHeader(req.headers['x-aeos-system-token']),
+    legacyToken: executionHeader(req.headers['x-aeos-execution-token']),
+  }, {
+    rootSecret: EXECUTION_PLANE_TOKEN,
+    verifySystemToken: (systemId, token) => verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token),
+    getSystem: toRegisteredSystem,
+  });
+  executionPlaneAuthByRequest.set(req, auth);
+  return auth;
+}
+
+function executionRegistrationIdentity(
+  auth: ExecutionPlaneConnectionAuth,
+  reportedSource: unknown,
+): ExecutionRegistrationIdentity {
+  return resolveRegistrationIdentity(auth, reportedSource, {
+    findBySourceSystem: (sourceSystem) => {
+      const system = findSystemBySourceSystem(sourceSystem);
+      return system ? { systemId: system.systemId, name: system.name, status: system.status } : null;
+    },
+  });
+}
 const executionWss = new WebSocketServer({
   server: executionServer,
   path: '/execution-agent',
   maxPayload: 1024 * 1024,
-  verifyClient: (info: { req: IncomingMessage }) => {
-    if (!EXECUTION_PLANE_TOKEN) return false;
-    const token = info.req.headers['x-aeos-execution-token'];
-    return typeof token === 'string' && token === EXECUTION_PLANE_TOKEN;
-  },
+  verifyClient: (info: { req: IncomingMessage }) => Boolean(authenticateExecutionPlane(info.req)),
 });
 const executionWsAgent = new Map<WebSocket, string>(); // ws -> agentId（register 后建立）
 executionWss.on('connection', (ws, request) => {
+  const auth = executionPlaneAuthByRequest.get(request) ?? null;
+  if (!auth) {
+    ws.close(1008, 'Authentication required');
+    return;
+  }
   const peerAddress = request.socket.remoteAddress;
   ws.on('message', (raw) => {
     let msg: Record<string, unknown>;
@@ -2347,6 +2398,35 @@ executionWss.on('connection', (ws, request) => {
     const type = msg.type as string;
     try {
       if (type === 'register') {
+        let identity: ExecutionRegistrationIdentity;
+        try {
+          identity = executionRegistrationIdentity(auth, msg.sourceSystem);
+        } catch (error) {
+          if (error instanceof ExecutionIdentityError) {
+            try {
+              appendEvidence({
+                kind: 'app_event',
+                actor_id: auth.systemId ? `execution-token:system:${auth.systemId}` : 'execution-token:legacy-root',
+                actor_type: 'system',
+                object_ref: 'hub://execution-agent/registration',
+                source_system: auth.systemId ?? 'legacy-root',
+                correlation_id: 'execution-register-rejected',
+                summary: 'execution agent registration rejected',
+                payload: {
+                  reason: error.code,
+                  authMode: auth.mode,
+                  authenticatedSystemId: auth.systemId,
+                  reportedSource: typeof msg.sourceSystem === 'string' ? msg.sourceSystem.slice(0, 160) : null,
+                },
+              });
+            } catch {
+              // 审计失败不改变拒绝结果。
+            }
+            send(ws, { type: 'error', code: error.code, message: error.message });
+            return;
+          }
+          throw error;
+        }
         const reply = executionPlane.onRegister(
           {
             agentId: msg.agentId,
@@ -2357,9 +2437,32 @@ executionWss.on('connection', (ws, request) => {
             local: isLoopbackExecutionPeer(peerAddress),
           },
           (m) => send(ws, m),
+          identity,
         );
         executionWsAgent.set(ws, reply.agentId);
-        send(ws, { type: 'registered', ...reply });
+        send(ws, { type: 'registered', ...reply, authMode: identity.authMode });
+        if (identity.authMode === 'legacy-root') {
+          try {
+            appendEvidence({
+              kind: 'app_event',
+              actor_id: 'execution-token:legacy-root',
+              actor_type: 'system',
+              object_ref: `hub://execution-agent/${reply.agentId}`,
+              source_system: identity.systemId ?? identity.sourceSystem,
+              correlation_id: 'execution-register-legacy',
+              summary: 'legacy execution agent registered',
+              payload: {
+                agentId: reply.agentId,
+                authMode: identity.authMode,
+                reportedSource: typeof msg.sourceSystem === 'string' ? msg.sourceSystem.slice(0, 160) : null,
+                resolvedSystemId: identity.systemId,
+                unresolved: identity.legacyUnresolved,
+              },
+            });
+          } catch {
+            // 审计失败不影响注册。
+          }
+        }
       } else if (type === 'heartbeat') {
         const agentId = executionWsAgent.get(ws);
         if (agentId) executionPlane.onHeartbeat(agentId, { status: msg.status, currentRunId: msg.currentRunId });

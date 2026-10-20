@@ -9,7 +9,7 @@ import type {
   HarborAgentStatus,
   HarborSnapshot,
 } from './harbor-store.ts';
-import type { ExecutionAgentRecord } from './execution-plane.ts';
+import type { ExecutionAgentAuthMode, ExecutionAgentRecord } from './execution-plane.ts';
 import type { SystemRecord } from './system-registry.ts';
 
 export interface CatalogExecutionState {
@@ -18,6 +18,8 @@ export interface CatalogExecutionState {
   lastSeenAt: string;
   local: boolean;
   sourceSystem: string;
+  sourceSystemName: string | null;
+  authMode: ExecutionAgentAuthMode;
   currentRunId: string | null;
 }
 
@@ -109,7 +111,7 @@ function executionNode(record: ExecutionAgentRecord, systemId: string): CatalogA
   return {
     id: executionNodeId(record.agentId),
     name: record.name,
-    role: record.sourceSystem,
+    role: record.sourceSystemName ?? record.sourceSystem,
     type: 'execution',
     hierarchyLevel: 'L1',
     lifecycle: record.deregisteredAt ? 'retired' : record.connectionStatus === 'online' ? 'active' : 'suspended',
@@ -128,6 +130,8 @@ function executionNode(record: ExecutionAgentRecord, systemId: string): CatalogA
       lastSeenAt: record.lastSeenAt,
       local: record.local,
       sourceSystem: record.sourceSystem,
+      sourceSystemName: record.sourceSystemName ?? null,
+      authMode: record.authMode,
       currentRunId: record.currentRunId,
     },
     skills: record.capabilities.map((capability) => capability.name),
@@ -158,6 +162,8 @@ function harborNode(agent: HarborAgent, execution: ExecutionAgentRecord | null):
       lastSeenAt: execution.lastSeenAt,
       local: execution.local,
       sourceSystem: execution.sourceSystem,
+      sourceSystemName: execution.sourceSystemName ?? null,
+      authMode: execution.authMode,
       currentRunId: execution.currentRunId,
     } : null,
     skills: [...agent.skills],
@@ -199,7 +205,9 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
 
   for (const record of sources.executionAgents) {
     if (claimedExecution.has(record.agentId)) continue;
-    const system = sources.systems.find((candidate) => candidate.sourceSystemAliases.includes(record.sourceSystem));
+    const system = sources.systems.find((candidate) => candidate.systemId === record.systemId
+      || candidate.systemId === record.sourceSystem
+      || candidate.sourceSystemAliases.includes(record.sourceSystem));
     const systemId = system?.systemId ?? UNREGISTERED_SYSTEM_ID;
     if (!system) warnings.push(`执行面 Agent ${record.name} 的系统「${record.sourceSystem}」未登记，暂归未登记系统`);
     addNode(systemId, executionNode(record, systemId));
