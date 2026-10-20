@@ -28,7 +28,7 @@ const AGENT_PARENT_TYPE_BY_TYPE: Partial<Record<(typeof AGENT_TYPES)[number], (t
 };
 const AGENT_STATUSES = ['draft', 'idle', 'working', 'offline', 'archived'] as const;
 const RUNTIME_STATUSES = ['ready', 'online', 'busy', 'offline', 'unstable'] as const;
-const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli', 'remote-execution-agent'] as const;
+const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli', 'remote-execution-agent', 'system-assistant'] as const;
 const RUNTIME_VERIFICATION_STATUSES = ['healthy', 'degraded', 'unhealthy', 'stopped', 'starting', 'unverified'] as const;
 const PROJECT_STATUSES = ['planned', 'in_progress', 'paused', 'completed', 'cancelled'] as const;
 const PROJECT_PRIORITIES = ['urgent', 'high', 'medium', 'low', 'none'] as const;

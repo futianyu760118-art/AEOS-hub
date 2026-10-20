@@ -89,7 +89,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
     owner: '中台团队',
     description: '中台执行面与智能助手',
     status: 'active',
-    sourceSystemAliases: ['公司中控平台', '公司中控平台（本机演示）'],
+    sourceSystemAliases: ['公司中控平台', '公司中控平台（本机演示）', '公司中控平台（UAT）'],
   },
   {
     systemId: 'hengjian-plm',
