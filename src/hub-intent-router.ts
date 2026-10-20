@@ -11,6 +11,8 @@ export interface HubIntent {
   action: HubIntentAction;
   confidence: HubIntentConfidence;
   matchedKeywords: string[];
+  /** 问题里是否已经带有订单号/需求号/异常号等业务标识。 */
+  hasIdentifier: boolean;
 }
 
 export interface HubAgentSelection {
@@ -32,6 +34,7 @@ const DOMAIN_KEYWORDS: Array<{ domain: Exclude<HubIntentDomain, 'general'>; keyw
 const REASONING_KEYWORDS = ['分析', '评估', '判断', '建议', '预测', '影响', '为什么', '怎么办', '是否', '风险'];
 const QUERY_KEYWORDS = ['查询', '查一下', '查查', '看看', '列出', '多少', '有哪些', '状态', '情况', '进度'];
 const HIGHEST_RISK_PATTERN = /(风险最高|最高风险|风险最高的订单|今日.*风险|当前.*风险最高)/i;
+const IDENTIFIER_PATTERN = /business:\/\/(?:order|product|batch)\/[^\s，。；,;]+|\b(?:HJY\d{8}-\d+|SO-\d{4,}-\d+|MO-\d{4,}|WO-\d{4,}|QC-\d{4,}|[A-Z]{2,}[-_]\d{2,})\b/i;
 
 export const DOMAIN_LABELS: Record<HubIntentDomain, string> = {
   order: '订单交付',
@@ -57,7 +60,8 @@ function countMatches(text: string, keywords: string[]): string[] {
 
 export function recognizeHubIntent(text: string): HubIntent {
   const value = String(text || '').trim();
-  if (!value) return { domain: 'general', action: 'chat', confidence: 'low', matchedKeywords: [] };
+  const hasIdentifier = IDENTIFIER_PATTERN.test(value);
+  if (!value) return { domain: 'general', action: 'chat', confidence: 'low', matchedKeywords: [], hasIdentifier: false };
 
   const highestRisk = HIGHEST_RISK_PATTERN.test(value);
   const reasoning = countMatches(value, REASONING_KEYWORDS);
@@ -83,7 +87,7 @@ export function recognizeHubIntent(text: string): HubIntent {
   else if (domain !== 'general') action = 'query';
 
   if (domain === 'general' && action !== 'chat') {
-    return { domain: 'general', action: 'chat', confidence: 'low', matchedKeywords: [...reasoning, ...query] };
+    return { domain: 'general', action: 'chat', confidence: 'low', matchedKeywords: [...reasoning, ...query], hasIdentifier };
   }
 
   const actionHits = action === 'reasoning' ? reasoning : action === 'query' ? query : highestRisk ? ['风险最高'] : [];
@@ -98,6 +102,7 @@ export function recognizeHubIntent(text: string): HubIntent {
     action,
     confidence,
     matchedKeywords: [...new Set([...matched, ...actionHits])],
+    hasIdentifier,
   };
 }
 
@@ -124,8 +129,12 @@ export function formatIntentRoutingReply(intent: HubIntent, selection: HubAgentS
   const lines = [`已识别：${domain} · ${action}（置信度：${intent.confidence === 'high' ? '高' : intent.confidence === 'medium' ? '中' : '低'}${hits}）。`];
   if (selection) {
     lines.push('', `可用智能体：${selection.name}（${selection.agentId} · ${selection.capability}）。`);
-    if (intent.action === 'query') lines.push('请补充订单号/需求编号/异常编号等具体标识，我会按该标识发起只读查询。');
-    if (intent.action === 'reasoning') lines.push('请补充订单号/产品编码/批次号等业务锚点，我会带锚点发起只读分析。');
+    if (intent.hasIdentifier) {
+      lines.push('已识别到问题中的业务标识；当前为意图识别结果，完整派单能力按系统接入情况逐步开放。');
+    } else {
+      if (intent.action === 'query') lines.push('请补充订单号/需求编号/异常编号等具体标识，我会按该标识发起只读查询。');
+      if (intent.action === 'reasoning') lines.push('请补充订单号/产品编码/批次号等业务锚点，我会带锚点发起只读分析。');
+    }
   } else {
     lines.push('', `当前没有在线的${domain}${action}智能体。意图已识别，等对应系统接入后即可自动路由。`);
   }

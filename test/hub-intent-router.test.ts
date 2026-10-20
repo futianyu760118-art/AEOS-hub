@@ -54,12 +54,23 @@ test('按意图选择在线 Agent；缺失时返回 null', () => {
   assert.equal(selectAgentForIntent(reasoningIntent, [agent({ ...QUERY, connectionStatus: 'offline' })]), null);
 });
 
+test('识别问题中是否已带业务标识', () => {
+  assert.equal(recognizeHubIntent('分析订单 SO-2609-001 的交付风险').hasIdentifier, true);
+  assert.equal(recognizeHubIntent('分析订单交付风险').hasIdentifier, false);
+  assert.equal(recognizeHubIntent('看看 business://order/SO-1 的齐套').hasIdentifier, true);
+});
+
 test('有 Agent 时提示补充业务锚点，无 Agent 时说明意图已识别但暂不可路由', () => {
   const intent = recognizeHubIntent('分析订单交期风险');
   const withAgent = formatIntentRoutingReply(intent, selectAgentForIntent(intent, [QUERY, REASON]));
   assert.match(withAgent, /订单交付 · 分析\/推理/);
   assert.match(withAgent, /可用智能体：中台推理智能体/);
   assert.match(withAgent, /业务锚点/);
+
+  const anchored = recognizeHubIntent('分析订单 SO-2609-001 的交付风险');
+  const anchoredReply = formatIntentRoutingReply(anchored, selectAgentForIntent(anchored, [QUERY, REASON]));
+  assert.doesNotMatch(anchoredReply, /请补充订单号/);
+  assert.match(anchoredReply, /已识别到问题中的业务标识/);
 
   const withoutAgent = formatIntentRoutingReply(intent, null);
   assert.match(withoutAgent, /当前没有在线的订单交付分析\/推理智能体/);
