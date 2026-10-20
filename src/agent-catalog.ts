@@ -293,7 +293,7 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
     const execution = (agent.externalAgentId ? executionByExternalId.get(agent.externalAgentId) : undefined)
       ?? (agent.runtimeId ? executionByExternalId.get(agent.runtimeId) : undefined)
       ?? null;
-    const realExecution = execution && !execution.simulated ? execution : null;
+    const realExecution = execution && !execution.simulated && !execution.deregisteredAt ? execution : null;
     if (realExecution) claimedExecution.add(realExecution.agentId);
     if (!knownSystems.has(agent.systemId)) {
       warnings.push(`${agent.name} 归属的系统 ${agent.systemId} 未在系统登记中`);
@@ -304,7 +304,7 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
   }
 
   for (const record of sources.executionAgents) {
-    if (record.simulated || claimedExecution.has(record.agentId)) continue;
+    if (record.simulated || record.deregisteredAt || claimedExecution.has(record.agentId)) continue;
     const resolvedSystemId = resolveRecordSystemId(record, sources.systems);
     const systemId = resolvedSystemId ?? UNREGISTERED_SYSTEM_ID;
     if (!resolvedSystemId) warnings.push(`执行面 Agent ${record.name} 的系统「${record.sourceSystem}」未登记，暂归未登记系统`);
@@ -364,7 +364,7 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
       systems: systems.length,
       domains: domainCount,
       agents: agentCount,
-      unregisteredInHarbor: sources.executionAgents.filter((record) => !record.simulated && !claimedExecution.has(record.agentId)).length,
+      unregisteredInHarbor: sources.executionAgents.filter((record) => !record.simulated && !record.deregisteredAt && !claimedExecution.has(record.agentId)).length,
     },
     warnings,
   };

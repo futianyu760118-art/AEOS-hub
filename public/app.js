@@ -782,7 +782,7 @@ async function loadExecution() {
     if (!response.ok) return;
     data = await response.json();
   } catch { return; }
-  executionAgents = Array.isArray(data?.agents) ? data.agents : [];
+  executionAgents = Array.isArray(data?.agents) ? data.agents.filter((agent) => !agent.deregisteredAt) : [];
   renderExecutionAgentList(executionAgents);
 }
 

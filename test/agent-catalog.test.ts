@@ -103,6 +103,7 @@ function sources(): CatalogSources {
       execution({}),
       execution({ agentId: 'runtime-unknown-agent', name: '未登记执行面 Agent', sourceSystem: '未知系统', local: false }),
       execution({ agentId: 'runtime-simulated-agent', name: '模拟执行面', sourceSystem: '公司中控平台（本机演示）', simulated: true }),
+      execution({ agentId: 'runtime-deregistered-agent', name: '已退场执行面', sourceSystem: '公司中控平台（本机演示）', deregisteredAt: NOW }),
     ],
     usage: {
       byAgent: [
@@ -178,6 +179,7 @@ test('用量按规范系统与 Agent 落到目录节点', () => {
   assert.equal(control.usage?.events, 8);
   const allAgents = tree.systems.flatMap((system) => system.domains.flatMap((domain) => domain.agents));
   assert.equal(allAgents.some((agent) => agent.id.includes('simulated')), false);
+  assert.equal(allAgents.some((agent) => agent.id.includes('deregistered')), false);
   assert.equal(allAgents.some((agent) => agent.execution?.sourceSystem === '公司中控平台（本机演示）'), true);
   const exec = control.domains.flatMap((domain) => domain.agents).find((agent) => agent.id === 'agent-exec');
   assert.equal(exec?.usage?.events, 3);
