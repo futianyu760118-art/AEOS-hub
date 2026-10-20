@@ -39,6 +39,14 @@ test('number enum 校验', () => {
   assert.match(validateAgainstSchema('2', schema)!, /期望 number/);
 });
 
+test('integer 类型校验', () => {
+  const schema: Schema = { type: 'integer', enum: [0, 1, 2] };
+  assert.equal(validateAgainstSchema(2, schema), null);
+  assert.match(validateAgainstSchema(2.5, schema)!, /期望 integer/);
+  assert.match(validateAgainstSchema('2', schema)!, /期望 integer/);
+  assert.match(validateAgainstSchema(5, schema)!, /不在允许范围/);
+});
+
 test('boolean 类型校验', () => {
   assert.equal(validateAgainstSchema(true, { type: 'boolean' }), null);
   assert.match(validateAgainstSchema(1, { type: 'boolean' })!, /期望 boolean/);

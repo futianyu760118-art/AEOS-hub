@@ -1,7 +1,7 @@
 // 轻量 schema 校验（JSON Schema 的一个极小子集），供执行面能力自描述后做通用输入/结果结构校验。
-// 覆盖：type(object/array/string/number/boolean)、properties、items、required、enum、maxLength、minItems。
+// 覆盖：type(object/array/string/number/integer/boolean)、properties、items、required、enum、maxLength、minItems。
 // 约定：不校验未知字段（additionalProperties 默认放行），保证 Agent 增加字段向前兼容。
-export type SchemaType = 'object' | 'array' | 'string' | 'number' | 'boolean';
+export type SchemaType = 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean';
 
 export interface Schema {
   type: SchemaType;
@@ -68,6 +68,12 @@ export function validateAgainstSchema(value: unknown, schema: Schema): string | 
 
   if (type === 'number') {
     if (typeof value !== 'number') return `期望 number，实际为 ${typeName(value)}`;
+    if (schema.enum && !schema.enum.includes(value)) return `值 ${value} 不在允许范围`;
+    return null;
+  }
+
+  if (type === 'integer') {
+    if (typeof value !== 'number' || !Number.isInteger(value)) return `期望 integer，实际为 ${typeName(value)}`;
     if (schema.enum && !schema.enum.includes(value)) return `值 ${value} 不在允许范围`;
     return null;
   }
