@@ -5992,12 +5992,12 @@ function catalogFilterActive() {
     || harborAgentFilter.domain !== 'all';
 }
 
-function catalogAgentMatches(agent, system) {
+function catalogAgentMatches(agent, system, ignoreDomain = false) {
   const archived = agent.lifecycle === 'retired' || agent.status === 'archived';
   if (archived && !catalogShowArchived) return false;
   if (harborAgentFilter.level !== 'all' && agent.hierarchyLevel !== harborAgentFilter.level) return false;
   if (harborAgentFilter.status !== 'all' && agent.status !== harborAgentFilter.status) return false;
-  if (harborAgentFilter.domain !== 'all' && !(agent.domainIds || []).includes(harborAgentFilter.domain)) return false;
+  if (!ignoreDomain && harborAgentFilter.domain !== 'all' && !(agent.domainIds || []).includes(harborAgentFilter.domain)) return false;
   const query = String(harborAgentFilter.query || '').trim().toLowerCase();
   if (!query) return true;
   const text = [
@@ -6143,6 +6143,16 @@ function renderHarbor() {
   const matchedPairs = allPairs.filter(({ agent, system }) => catalogAgentMatches(agent, system));
   const archivedTotal = allPairs.filter(({ agent }) => agent.lifecycle === 'retired' || agent.status === 'archived').length;
   if (els.catalogArchivedCount) els.catalogArchivedCount.textContent = String(archivedTotal);
+  const domainBase = allPairs.filter(({ agent, system }) => catalogAgentMatches(agent, system, true));
+  const domainCounts = { all: domainBase.length };
+  for (const domain of ['order', 'kitting', 'quality', 'production', 'cross-domain']) {
+    domainCounts[domain] = domainBase.filter(({ agent }) => (agent.domainIds || []).includes(domain)).length;
+  }
+  $$('[data-domain-count]').forEach((node) => { node.textContent = String(domainCounts[node.dataset.domainCount] ?? 0); });
+  $$('[data-catalog-domain-filter]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.catalogDomainFilter === harborAgentFilter.domain);
+    node.setAttribute('aria-pressed', String(node.dataset.catalogDomainFilter === harborAgentFilter.domain));
+  });
   const totalCost = catalogSystems.reduce((sum, system) => sum + (system.usage?.cost ?? 0), 0);
   const hasUsage = catalogSystems.some((system) => system.usage && system.usage.events > 0);
   const filteredSystems = catalogSystems.map((system) => {
@@ -7112,14 +7122,18 @@ $$('[data-catalog-view]').forEach((button) => button.addEventListener('click', (
 els.harborAgentSearch?.addEventListener('input', () => { harborAgentFilter.query = els.harborAgentSearch.value; renderHarbor(); });
 els.harborAgentLevelFilter?.addEventListener('change', () => { harborAgentFilter.level = els.harborAgentLevelFilter.value; renderHarbor(); });
 els.harborAgentStatusFilter?.addEventListener('change', () => { harborAgentFilter.status = els.harborAgentStatusFilter.value; renderHarbor(); });
-els.harborAgentDomainFilter?.addEventListener('change', () => { harborAgentFilter.domain = els.harborAgentDomainFilter.value; renderHarbor(); });
+els.harborAgentDomainFilter?.addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-catalog-domain-filter]');
+  if (!chip) return;
+  harborAgentFilter.domain = chip.dataset.catalogDomainFilter || 'all';
+  renderHarbor();
+});
 els.harborShowArchived?.addEventListener('change', () => { catalogShowArchived = els.harborShowArchived.checked; renderHarbor(); });
 els.harborAgentFilterClear?.addEventListener('click', () => {
   harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
   if (els.harborAgentSearch) els.harborAgentSearch.value = '';
   if (els.harborAgentLevelFilter) els.harborAgentLevelFilter.value = 'all';
   if (els.harborAgentStatusFilter) els.harborAgentStatusFilter.value = 'all';
-  if (els.harborAgentDomainFilter) els.harborAgentDomainFilter.value = 'all';
   renderHarbor();
 });
 els.harborModalClose.addEventListener('click', closeHarborModal);

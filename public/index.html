@@ -463,13 +463,28 @@
               <div class="harbor-search"><i data-lucide="search"></i><input id="harbor-agent-search" type="search" placeholder="搜索 Agent 名称、职责、系统或技能" /></div>
               <select id="harbor-agent-level-filter" aria-label="筛选 Agent 层级"><option value="all">全部层级</option><option value="L0">L0 · 中枢</option><option value="L1">L1 · 编队</option><option value="L2">L2 · 专项</option><option value="L3">L3 · 任务</option></select>
               <select id="harbor-agent-status-filter" aria-label="筛选 Agent 状态"><option value="all">全部状态</option><option value="idle">可调度</option><option value="working">执行中</option><option value="offline">离线</option><option value="draft">草稿</option><option value="archived">已归档</option></select>
-              <select id="harbor-agent-domain-filter" aria-label="按服务业务域筛选"><option value="all">全部业务域</option><option value="order">订单交付</option><option value="kitting">物料齐套</option><option value="quality">质量异常</option><option value="production">生产进度</option><option value="cross-domain">跨系统协同</option></select>
+              <div id="harbor-agent-domain-filter" class="catalog-domain-filter" role="group" aria-label="按业务域查看">
+                <span class="catalog-domain-label">业务域</span>
+                <button class="catalog-domain-chip active" type="button" data-catalog-domain-filter="all">全部 <b data-domain-count="all">0</b></button>
+                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="order">订单交付 <b data-domain-count="order">0</b></button>
+                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="kitting">物料齐套 <b data-domain-count="kitting">0</b></button>
+                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="quality">质量异常 <b data-domain-count="quality">0</b></button>
+                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="production">生产进度 <b data-domain-count="production">0</b></button>
+                <button class="catalog-domain-chip" type="button" data-catalog-domain-filter="cross-domain">跨系统协同 <b data-domain-count="cross-domain">0</b></button>
+              </div>
               <div class="segmented catalog-view-toggle" role="group" aria-label="目录视图">
                 <button class="active" type="button" data-catalog-view="ownership" aria-pressed="true">归属视图</button>
                 <button type="button" data-catalog-view="hierarchy" aria-pressed="false">功能层级</button>
               </div>
               <button id="harbor-agent-filter-clear" class="btn ghost compact" type="button">清除筛选</button>
               <label class="catalog-archived-toggle"><input id="harbor-show-archived" type="checkbox" />显示已归档 <b id="catalog-archived-count">0</b></label>
+            </div>
+            <div class="catalog-domain-help">
+              <span><b>订单交付</b> 订单风险、交期、客户承诺</span>
+              <span><b>物料齐套</b> 缺料、库存、供给</span>
+              <span><b>质量异常</b> 来料、制程、客诉</span>
+              <span><b>生产进度</b> 工单、工序、报工</span>
+              <span><b>跨系统协同</b> 跨系统共享能力，不属于单一业务域</span>
             </div>
             <div id="catalog-summary" class="catalog-summary"></div>
             <div id="harbor-agent-list" class="catalog-tree"></div>

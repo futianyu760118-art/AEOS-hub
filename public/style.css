@@ -1201,6 +1201,15 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .catalog-archived-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); font-size: 10px; white-space: nowrap; cursor: pointer; }
 .catalog-archived-toggle input { width: 13px; height: 13px; accent-color: var(--accent); }
 .catalog-archived-toggle b { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--surface-soft); color: var(--text-3); font-size: 9px; text-align: center; }
+.catalog-domain-filter { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.catalog-domain-label { margin-right: 2px; color: var(--text-3); font-size: 10px; white-space: nowrap; }
+.catalog-domain-chip { height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 13px; background: #fff; color: var(--text-2); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; }
+.catalog-domain-chip b { color: var(--text-3); font-size: 9px; font-weight: 600; }
+.catalog-domain-chip:hover { border-color: var(--line-active); background: var(--hover); }
+.catalog-domain-chip.active { border-color: rgba(47, 111, 190, 0.42); background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.catalog-domain-chip.active b { color: var(--accent); }
+.catalog-domain-help { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 14px; border-bottom: 1px solid var(--line-subtle); background: #fcfcfd; color: var(--text-3); font-size: 9px; }
+.catalog-domain-help b { margin-right: 3px; color: var(--text-2); font-weight: 600; }
 .segmented { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; background: #f2f2f3; padding: 2px; }
 .segmented button { height: 29px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 4px; background: transparent; padding: 0 10px; color: var(--text-3); font-size: 11px; cursor: pointer; }
 .segmented button:hover { color: var(--text); }

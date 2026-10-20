@@ -11,7 +11,8 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   const css = readFileSync(join(root, 'public', 'style.css'), 'utf8');
 
   assert.match(html, /id="harbor-panel-agents"[\s\S]*统一智能体目录/);
-  assert.match(html, /id="harbor-agent-domain-filter"[\s\S]*订单交付[\s\S]*物料齐套[\s\S]*质量异常[\s\S]*生产进度[\s\S]*跨系统协同/);
+  assert.match(html, /id="harbor-agent-domain-filter"[\s\S]*data-catalog-domain-filter="order"[\s\S]*物料齐套[\s\S]*质量异常[\s\S]*生产进度[\s\S]*跨系统协同/);
+  assert.match(html, /class="catalog-domain-help"[\s\S]*订单风险、交期、客户承诺[\s\S]*缺料、库存、供给[\s\S]*来料、制程、客诉[\s\S]*工单、工序、报工[\s\S]*跨系统共享能力/);
   assert.match(html, /data-catalog-view="ownership"[\s\S]*data-catalog-view="hierarchy"/);
   assert.match(html, /id="harbor-agent-list" class="catalog-tree"/);
   assert.match(html, /id="catalog-summary"/);
@@ -24,7 +25,11 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   assert.match(app, /function renderCatalogHierarchyView\(/);
   assert.match(app, /data-catalog-system-toggle="/);
   assert.match(app, /data-catalog-domain-toggle="/);
-  assert.match(app, /agent\.domainIds \|\| \[\]\)\.includes\(harborAgentFilter\.domain\)/);
+  assert.match(app, /includes\(harborAgentFilter\.domain\)/);
+  assert.match(app, /data-catalog-domain-filter/);
+  assert.match(app, /domainCounts/);
+  assert.match(css, /\.catalog-domain-chip\.active/);
+  assert.match(css, /\.catalog-domain-help/);
   assert.match(app, /未登记港湾/);
   assert.match(app, /catalogShowArchived/);
   assert.match(app, /agent\.lifecycle === 'retired' \|\| agent\.status === 'archived'/);
