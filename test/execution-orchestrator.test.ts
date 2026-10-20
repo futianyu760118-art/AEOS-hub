@@ -138,6 +138,17 @@ test('推理失败时带回两条 runId 并尝试召回', async () => {
   );
 });
 
+test('通用 runCapability：派单并等待完成结果', async () => {
+  const { orchestrator } = planeFixture();
+  const result = await orchestrator.runCapability({
+    agentId: 'query-agent',
+    capability: 'query_control_platform',
+    input: { path: '/external/orders/list', params: {} },
+    timeoutMs: 200,
+  }) as { items?: unknown[] };
+  assert.equal(result.items?.length, 3);
+});
+
 test('构造推理请求时写入订单锚点与只读约束', () => {
   const [order] = rankOrdersFromResult([{ demand_no: 'SO-1', risk_level: 'red', affected_order_amount: 12 }]);
   const request = buildHighestRiskReasoningRequest('分析今日风险最高的订单', order!, 'orch-1');

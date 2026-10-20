@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildIntentDispatch,
+  formatIntentExecutionAnswer,
   formatIntentRoutingReply,
   recognizeHubIntent,
   selectAgentForIntent,
@@ -75,4 +77,50 @@ test('有 Agent 时提示补充业务锚点，无 Agent 时说明意图已识别
   const withoutAgent = formatIntentRoutingReply(intent, null);
   assert.match(withoutAgent, /当前没有在线的订单交付分析\/推理智能体/);
   assert.match(withoutAgent, /意图已识别/);
+});
+
+test('构建订单/齐套/质量/生产的查询输入与分析输入', () => {
+  const order = recognizeHubIntent('查一下订单 SO-2609-001');
+  assert.deepEqual(buildIntentDispatch(order, '查一下订单 SO-2609-001')?.input, {
+    path: '/external/orders/list', params: { keyword: 'SO-2609-001' },
+  });
+  const kitting = recognizeHubIntent('查一下齐套 HJY20260903-261');
+  assert.deepEqual(buildIntentDispatch(kitting, '查一下齐套 HJY20260903-261')?.input, {
+    path: '/external/material-kitting/results', params: { demand_no: 'HJY20260903-261' },
+  });
+  const quality = recognizeHubIntent('查一下质量 SQ-2609-001');
+  assert.deepEqual(buildIntentDispatch(quality, '查一下质量 SQ-2609-001')?.input, {
+    path: '/external/quality-issues/list', params: { order_no: 'SQ-2609-001' },
+  });
+  const production = recognizeHubIntent('查一下生产 WO-2609-001');
+  assert.deepEqual(buildIntentDispatch(production, '查一下生产 WO-2609-001')?.input, {
+    path: '/external/production/work-orders/list', params: { work_order_no: 'WO-2609-001' },
+  });
+  const reasoning = recognizeHubIntent('分析订单 SO-2609-001 的交付风险');
+  assert.deepEqual(buildIntentDispatch(reasoning, '分析订单 SO-2609-001 的交付风险')?.input.context, {
+    businessObjectRef: 'business://order/SO-2609-001',
+  });
+  assert.equal(buildIntentDispatch(order, '查一下订单情况'), null);
+  assert.equal(buildIntentDispatch(recognizeHubIntent('PLM 研发项目进展'), 'PLM 项目 HJ-1'), null);
+});
+
+test('格式化查询结果与分析结论', () => {
+  const query = recognizeHubIntent('查一下订单 SO-2609-001');
+  const queryAnswer = formatIntentExecutionAnswer(query, {
+    total: 1,
+    items: [{ order_no: 'SO-2609-001', customer: '客户甲', status: 'in_progress', risk_level: 'red', promised_date: '2026-10-30' }],
+  });
+  assert.match(queryAnswer, /SO-2609-001/);
+  assert.match(queryAnswer, /客户甲/);
+  assert.match(queryAnswer, /风险 red/);
+
+  const reasoning = recognizeHubIntent('分析订单 SO-2609-001 的交付风险');
+  const reasonAnswer = formatIntentExecutionAnswer(reasoning, {
+    summary: '存在交付风险。',
+    conclusions: [{ matter: '交期紧张', risk: '延误', recommendation: '催料', evidence_refs: ['control-platform://order/SO-2609-001@1'] }],
+    data_confidence: 'high',
+  });
+  assert.match(reasonAnswer, /交期紧张/);
+  assert.match(reasonAnswer, /control-platform:\/\/order\/SO-2609-001@1/);
+  assert.match(reasonAnswer, /数据置信度：high/);
 });

@@ -82,7 +82,7 @@ import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
-import { formatIntentRoutingReply, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
+import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
@@ -1059,6 +1059,43 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
   const sessionId = conv?.threadId || 'hub-execution-orchestrator';
 
   if (intent.action !== 'highest-risk') {
+    const plan = selection ? buildIntentDispatch(intent, text) : null;
+    if (selection && plan) {
+      const runId = `hub-intent-${randomUUID()}`;
+      const envelope = { type: 'evt', convId, sessionId, runId, runtimeInstanceId: 'hub-execution-orchestrator' };
+      pushConv(convId, {
+        ...envelope,
+        method: 'turn/started',
+        params: { threadId: sessionId, turn: { id: runId, threadId: sessionId } },
+      });
+      pushConv(convId, {
+        ...envelope,
+        method: 'item/reasoning/textDelta',
+        params: {
+          itemId: `reasoning:${runId}`,
+          delta: `已识别为${ACTION_LABELS[intent.action]}，正在调用${selection.name}（${selection.capability}）…`,
+        },
+      });
+      try {
+        const result = await executionOrchestrator.runCapability({
+          agentId: selection.agentId,
+          capability: selection.capability,
+          input: plan.input,
+          timeoutMs: plan.timeoutMs,
+        });
+        const answer = formatIntentExecutionAnswer(intent, result);
+        appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
+        pushConv(convId, { type: 'assistant_reply', convId, text: answer, meta: { runId, agentId: selection.agentId, capability: selection.capability } });
+        pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
+      } catch (error) {
+        const message = `执行面调用失败：${(error as Error).message}`;
+        appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: message });
+        pushConv(convId, { type: 'assistant_reply', convId, text: message });
+        pushConv(convId, { type: 'turn_end', convId, status: 'failed', runId, sessionId, message, occurredAt: new Date().toISOString() });
+      }
+      return true;
+    }
+
     const reply = formatIntentRoutingReply(intent, selection);
     appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: reply });
     pushConv(convId, { type: 'assistant_reply', convId, text: reply });

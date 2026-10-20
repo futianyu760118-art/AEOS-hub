@@ -264,6 +264,28 @@ export class ExecutionOrchestrator {
     }
   }
 
+  /** 通用单能力派单：供中枢意图路由调用；失败时尝试召回。 */
+  async runCapability(input: {
+    agentId: string;
+    capability: string;
+    input: unknown;
+    timeoutMs?: number;
+  }): Promise<unknown> {
+    const dispatch = this.plane.dispatch(input.agentId, input.capability, input.input);
+    try {
+      const run = await this.waitForRun(dispatch.runId, input.timeoutMs ?? this.reasoningTimeoutMs, 'EXECUTION_TIMEOUT');
+      if (run.state !== 'completed') {
+        throw new ExecutionOrchestrationError('EXECUTION_FAILED', run.error?.message || '执行面未完成', { status: 502 });
+      }
+      return run.result;
+    } catch (error) {
+      try { this.plane.recall(input.agentId); } catch { /* 已结束或已召回 */ }
+      throw error instanceof ExecutionOrchestrationError
+        ? error
+        : new ExecutionOrchestrationError('EXECUTION_FAILED', (error as Error).message || '执行失败', { status: 502 });
+    }
+  }
+
   private async waitForRun(runId: string, timeoutMs: number, timeoutCode: string): Promise<ExecutionRunRecord> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
