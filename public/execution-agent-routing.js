@@ -15,3 +15,33 @@ export function isReasoningOnly(selection) {
 export function isQueryOnly(selection) {
   return Boolean(selection && selection.query && !selection.reasoning);
 }
+
+/** 从自然语言中提取业务锚点：显式 business:// 优先，其次常见订单/产品/批次编号。 */
+export function inferBusinessObjectRef(text) {
+  const value = String(text || '');
+  const explicit = value.match(/business:\/\/(?:order|product|batch)\/[^\s，。；,;]+/i);
+  if (explicit) return explicit[0];
+  const order = value.match(/\b(?:HJY\d{8}-\d+|SO-\d{4,}-\d+)\b/i);
+  if (order) return `business://order/${order[0]}`;
+  const product = value.match(/\b(?:PN|SKU)[-_:]?[A-Za-z0-9][A-Za-z0-9._:-]*\b/i);
+  if (product) return `business://product/${product[0]}`;
+  const batch = value.match(/\b(?:BATCH|LOT)[-_:]?[A-Za-z0-9][A-Za-z0-9._:-]*\b/i);
+  if (batch) return `business://batch/${batch[0]}`;
+  return null;
+}
+
+/** 推理能力是否强制要求 context.businessObjectRef。 */
+export function requiresBusinessObjectRef(capability) {
+  const required = capability?.inputSchema?.properties?.context?.required;
+  return Array.isArray(required) && required.includes('businessObjectRef');
+}
+
+/** 用问题中的业务锚点补齐推理请求的 context；没有锚点时保持原样。 */
+export function attachBusinessObjectRef(request, text) {
+  const ref = inferBusinessObjectRef(text);
+  if (!ref) return request;
+  return {
+    ...request,
+    context: { ...(request?.context && typeof request.context === 'object' ? request.context : {}), businessObjectRef: ref },
+  };
+}

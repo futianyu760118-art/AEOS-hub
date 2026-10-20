@@ -5,7 +5,7 @@ import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery
 import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
-import { isReasoningOnly, selectExecutionCapabilities } from './execution-agent-routing.js';
+import { attachBusinessObjectRef, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=business-anchor-v1';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
@@ -1887,7 +1887,12 @@ function selectExecutionAgent(agentId) {
   const title = $('#execution-chat-title');
   const subtitle = $('#execution-chat-subtitle');
   if (title) title.textContent = `与「${name}」对话`;
-  if (subtitle) subtitle.textContent = '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
+  const agent = executionAgents.find((item) => item.agentId === agentId);
+  if (subtitle) {
+    subtitle.textContent = isReasoningOnly(selectExecutionCapabilities(agent?.capabilities))
+      ? '推理需要业务锚点：请带上订单号 / 产品编码 / 批次号。'
+      : '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
+  }
 }
 
 function selectedAgentIntent() {
@@ -1903,6 +1908,27 @@ function selectedAgentCapability(kind) {
   const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
   const selection = selectExecutionCapabilities(agent?.capabilities);
   return kind === 'query' ? selection.query : selection.reasoning;
+}
+
+function selectedAgentCapabilityRecord(capabilityName) {
+  const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+  return agent?.capabilities?.find((cap) => cap.name === capabilityName) ?? null;
+}
+
+function prepareReasoningRequest(text, reasonCap) {
+  const parsed = parseExecutionReasoning(text);
+  const request = attachBusinessObjectRef(
+    parsed && !parsed.error
+      ? parsed
+      : { prompt: text, task_type: 'operating_case_analysis', context: {}, constraints: { read_only: true, require_evidence: true } },
+    text,
+  );
+  if (requiresBusinessObjectRef(selectedAgentCapabilityRecord(reasonCap)) && !request.context?.businessObjectRef) {
+    return {
+      error: '该推理智能体需要业务锚点：请在问题中带上订单号/产品编码/批次号，例如“分析订单 HJY20260903-261 的交付风险”。若要分析“今日风险最高的订单”，请先用查询智能体查出订单号。',
+    };
+  }
+  return { request };
 }
 
 function executionMessageBubble(role, text) {
@@ -1992,11 +2018,12 @@ async function sendExecutionQuery() {
   }
   // 推理-only Agent：直接把原问题作为只读推理请求，不去调用不存在的查询能力。
   if (isReasoningOnly(selection)) {
-    const parsedReasoning = parseExecutionReasoning(text);
-    const request = parsedReasoning && !parsedReasoning.error
-      ? parsedReasoning
-      : { prompt: text, task_type: 'operating_case_analysis', context: {}, constraints: { read_only: true, require_evidence: true } };
-    await dispatchExecution(selectedExecutionAgent, reasonCap, request, `正在推理：${describeExecutionReasoning(request)}…`);
+    const prepared = prepareReasoningRequest(text, reasonCap);
+    if (prepared.error) {
+      appendExecutionMessage('agent', prepared.error, null);
+      return;
+    }
+    await dispatchExecution(selectedExecutionAgent, reasonCap, prepared.request, `正在推理：${describeExecutionReasoning(prepared.request)}…`);
     return;
   }
 
@@ -2004,7 +2031,12 @@ async function sendExecutionQuery() {
   if (selectedAgentHasIntent()) {
     const remote = await tryParseIntentRemote(text, selectedExecutionAgent);
     if (remote?.kind === 'reasoning' && reasonCap) {
-      await dispatchExecution(selectedExecutionAgent, reasonCap, remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
+      const request = attachBusinessObjectRef(remote.request, text);
+      if (requiresBusinessObjectRef(selectedAgentCapabilityRecord(reasonCap)) && !request.context?.businessObjectRef) {
+        appendExecutionMessage('agent', '该推理智能体需要业务锚点：请在问题中带上订单号/产品编码/批次号。', null);
+        return;
+      }
+      await dispatchExecution(selectedExecutionAgent, reasonCap, request, `正在推理：${describeExecutionReasoning(request)}…`);
       return;
     }
     if (remote?.kind === 'query') {
@@ -2029,7 +2061,12 @@ async function sendExecutionQuery() {
 
   const reasoning = parseExecutionReasoning(text);
   if (reasoning && !reasoning.error && reasonCap) {
-    await dispatchExecution(selectedExecutionAgent, reasonCap, reasoning, `正在推理：${describeExecutionReasoning(reasoning)}…`);
+    const prepared = prepareReasoningRequest(text, reasonCap);
+    if (prepared.error) {
+      appendExecutionMessage('agent', prepared.error, null);
+      return;
+    }
+    await dispatchExecution(selectedExecutionAgent, reasonCap, prepared.request, `正在推理：${describeExecutionReasoning(prepared.request)}…`);
     return;
   }
   if (reasoning && !reasoning.error && !reasonCap) {
