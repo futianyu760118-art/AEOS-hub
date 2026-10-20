@@ -94,3 +94,18 @@ test('非 GET 返回 405，未知目录路径返回 404，非目录路径不接�
   assert.equal(api().handle({ method: 'GET', pathname: '/api/catalog/unknown' })?.status, 404);
   assert.equal(api().handle({ method: 'GET', pathname: '/api/harbor' }), null);
 });
+
+test('把请求租户传给目录读模型', () => {
+  let seen: string | undefined;
+  const catalog = new CatalogApi((tenantId) => {
+    seen = tenantId;
+    return {
+      harbor: { version: 1, revision: 0, agents: [], runtimes: [], projects: [], runs: [], lifecycleEvents: [] } as unknown as CatalogSources['harbor'],
+      systems: [],
+      executionAgents: [],
+    };
+  });
+  const response = catalog.handle({ method: 'GET', pathname: '/api/catalog/tree', tenantId: 'tenant-demo' });
+  assert.equal(response?.status, 200);
+  assert.equal(seen, 'tenant-demo');
+});

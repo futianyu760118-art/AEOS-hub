@@ -359,8 +359,8 @@ export class BorrowOrderService {
     return order;
   }
 
-  listAll(filter: { status?: BorrowOrderStatus; limit?: number } = {}): BorrowOrderRecord[] {
-    return this.store.list({ status: filter.status, limit: filter.limit ?? 100 });
+  listAll(filter: { status?: BorrowOrderStatus; tenantId?: string; limit?: number } = {}): BorrowOrderRecord[] {
+    return this.store.list({ status: filter.status, tenantId: filter.tenantId, limit: filter.limit ?? 100 });
   }
 
   capabilityDirectory(systemId: string): CapabilityDirectoryEntry[] {

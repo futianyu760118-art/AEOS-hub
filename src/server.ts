@@ -91,7 +91,7 @@ import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.t
 import { CatalogApi } from './catalog-api.ts';
 import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
 import { verifySystemToken } from './system-token.ts';
-import { resolveTenantId } from './tenant-registry.ts';
+import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 import {
   ExecutionIdentityError,
   resolveExecutionPlaneAuth,
@@ -225,12 +225,28 @@ const executionPlane = new ExecutionPlaneRegistry({
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
 const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
-const catalogApi = new CatalogApi(() => ({
-  harbor: loadHarbor(),
-  systems: listSystems(),
-  executionAgents: executionPlane.list().agents,
-  usage: { byAgent: aggregateUsageByAgent(), bySystem: aggregateUsageBySystem() },
-}));
+const catalogApi = new CatalogApi((tenantId) => {
+  const allSystems = listSystems();
+  const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
+  const systemIds = new Set(systems.map((system) => system.systemId));
+  const harbor = loadHarbor();
+  const executionAgents = executionPlane.list().agents.filter((agent) => {
+    if (!tenantId) return true;
+    return resolveTenantId(agent.systemId ?? agent.sourceSystem, allSystems) === tenantId;
+  });
+  return {
+    harbor: {
+      ...harbor,
+      agents: tenantId ? harbor.agents.filter((agent) => systemIds.has(agent.systemId)) : harbor.agents,
+    },
+    systems,
+    executionAgents,
+    usage: {
+      byAgent: aggregateUsageByAgent(tenantId),
+      bySystem: aggregateUsageBySystem(tenantId),
+    },
+  };
+});
 const executionEventStore = new ExecutionEventStore();
 const assistantEventStore = new AssistantEventStore();
 const assistantEventApi = new AssistantEventApi({
@@ -1745,6 +1761,8 @@ const server = createServer(async (req, res) => {
   }
   const requestActorContext = publicAsset ? null : authGateway.actorFromCookie(req.headers.cookie);
   const requestActor = publicAsset ? 'anonymous' : requestActorContext!.actorId;
+  const actorTenant = requestActorContext?.tenantId?.trim();
+  const requestTenantId = !actorTenant || actorTenant === 'local-dev' ? DEFAULT_TENANT_ID : actorTenant;
   let rel: string;
   try {
     rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
@@ -1824,12 +1842,23 @@ const server = createServer(async (req, res) => {
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
-  const catalogResponse = catalogApi.handle({ method: req.method, pathname: url.pathname });
+  const catalogResponse = catalogApi.handle({ method: req.method, pathname: url.pathname, tenantId: requestTenantId });
   if (catalogResponse) { sendJson(res, catalogResponse.status, catalogResponse.body); return; }
   if (url.pathname === '/api/harbor') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
-      sendJson(res, 200, loadHarbor());
+      const snapshot = loadHarbor();
+      const systemIds = new Set(listSystems().filter((system) => system.tenantId === requestTenantId).map((system) => system.systemId));
+      const agents = snapshot.agents.filter((agent) => systemIds.has(agent.systemId));
+      const agentIds = new Set(agents.map((agent) => agent.id));
+      const projects = snapshot.projects.filter((project) => project.agentIds.some((id) => agentIds.has(id))
+        || (project.leadType === 'agent' && agentIds.has(project.leadId)));
+      sendJson(res, 200, {
+        ...snapshot,
+        agents,
+        projects,
+        runs: snapshot.runs.filter((run) => agentIds.has(run.agentId)),
+      });
     } catch (error) {
       sendJson(res, 500, { error: (error as Error).message });
     }
@@ -2247,14 +2276,19 @@ const server = createServer(async (req, res) => {
   const executionAgentsMatch = url.pathname.match(/^\/api\/execution\/agents$/);
   if (executionAgentsMatch) {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    sendJson(res, 200, executionPlane.list());
+    const snapshot = executionPlane.list();
+    const agents = snapshot.agents.filter((agent) => resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId);
+    const agentIds = new Set(agents.map((agent) => agent.agentId));
+    sendJson(res, 200, { agents, runs: snapshot.runs.filter((run) => agentIds.has(run.agentId)) });
     return;
   }
   const executionRunEventsMatch = url.pathname.match(/^\/api\/execution\/runs\/([^/]+)\/events$/);
   if (executionRunEventsMatch) {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     const runId = decodeURIComponent(executionRunEventsMatch[1] ?? '').trim();
-    if (!runId || !executionPlane.getRun(runId)) {
+    const run = runId ? executionPlane.getRun(runId) : undefined;
+    const runAgent = run ? executionPlane.list().agents.find((agent) => agent.agentId === run.agentId) : undefined;
+    if (!runId || !run || !runAgent || resolveTenantId(runAgent.systemId ?? runAgent.sourceSystem, listSystems()) !== requestTenantId) {
       sendJson(res, 404, { error: 'run not found' });
       return;
     }
@@ -2262,8 +2296,8 @@ const server = createServer(async (req, res) => {
       const limit = boundedLimit(url.searchParams.get('limit'));
       sendJson(res, 200, {
         runId,
-        count: executionEventStore.countByRun(runId),
-        events: executionEventStore.listByRun(runId, limit),
+        count: executionEventStore.countByRun(runId, requestTenantId),
+        events: executionEventStore.listByRun(runId, limit, requestTenantId),
       });
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
@@ -2277,9 +2311,9 @@ const server = createServer(async (req, res) => {
     const traceId = url.searchParams.get('traceId')?.trim() || undefined;
     const limit = boundedLimit(url.searchParams.get('limit'));
     sendJson(res, 200, {
-      events: assistantEventStore.listEvents({ systemId, traceId, limit }),
-      traces: assistantEventStore.listTraces({ systemId, limit }),
-      count: assistantEventStore.countEvents({ systemId, traceId }),
+      events: assistantEventStore.listEvents({ systemId, traceId, tenantId: requestTenantId, limit }),
+      traces: assistantEventStore.listTraces({ systemId, tenantId: requestTenantId, limit }),
+      count: assistantEventStore.countEvents({ systemId, traceId, tenantId: requestTenantId }),
     });
     return;
   }
@@ -2344,8 +2378,8 @@ const server = createServer(async (req, res) => {
         status = statusRaw as BorrowOrderStatus;
       }
       const limit = boundedLimit(url.searchParams.get('limit'));
-      const orders = borrowOrderService ? borrowOrderService.listAll({ status, limit }) : [];
-      const all = borrowOrderStore.load().orders;
+      const orders = borrowOrderService ? borrowOrderService.listAll({ status, tenantId: requestTenantId, limit }) : [];
+      const all = borrowOrderStore.load().orders.filter((order) => order.tenantId === requestTenantId);
       const byStatus: Record<string, number> = {};
       for (const item of all) byStatus[item.status] = (byStatus[item.status] ?? 0) + 1;
       const systems = new Set<string>();
@@ -2382,9 +2416,9 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/usage/summary') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     sendJson(res, 200, {
-      byAgent: aggregateUsageByAgent(),
-      bySystem: aggregateUsageBySystem(),
-      byConsumerSystem: aggregateUsageByConsumerSystem(),
+      byAgent: aggregateUsageByAgent(requestTenantId),
+      bySystem: aggregateUsageBySystem(requestTenantId),
+      byConsumerSystem: aggregateUsageByConsumerSystem(requestTenantId),
     });
     return;
   }
@@ -2392,7 +2426,7 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const limit = boundedLimit(url.searchParams.get('limit'));
-      sendJson(res, 200, { events: listUsageEvents(limit) });
+      sendJson(res, 200, { events: listUsageEvents(limit, requestTenantId) });
     } catch (e) {
       sendJson(res, 400, { error: (e as Error).message });
     }

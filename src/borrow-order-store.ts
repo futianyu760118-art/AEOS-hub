@@ -237,9 +237,10 @@ export class BorrowOrderStore {
     return this.load().orders.find((order) => order.runId === runId) ?? null;
   }
 
-  list(filter: { fromSystem?: string; providerSystem?: string; status?: BorrowOrderStatus; limit?: number } = {}): BorrowOrderRecord[] {
+  list(filter: { fromSystem?: string; providerSystem?: string; status?: BorrowOrderStatus; tenantId?: string; limit?: number } = {}): BorrowOrderRecord[] {
     const limit = Math.max(1, Math.min(Math.trunc(filter.limit ?? 100), 1_000));
     return this.load().orders
+      .filter((order) => !filter.tenantId || order.tenantId === filter.tenantId)
       .filter((order) => !filter.fromSystem || order.fromSystem === filter.fromSystem)
       .filter((order) => !filter.providerSystem || order.providerSystem === filter.providerSystem)
       .filter((order) => !filter.status || order.status === filter.status)

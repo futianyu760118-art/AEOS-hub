@@ -212,8 +212,9 @@ export class ExecutionEventStore {
     return events.slice().sort((a, b) => a.seq - b.seq || a.receivedAt.localeCompare(b.receivedAt)).slice(-bounded);
   }
 
-  countByRun(runId: string): number {
-    return this.byRun.get(runId)?.length ?? 0;
+  countByRun(runId: string, tenantId?: string): number {
+    const events = this.byRun.get(runId) ?? [];
+    return tenantId ? events.filter((event) => event.tenantId === tenantId).length : events.length;
   }
 
   private rotateIfNeeded(): void {

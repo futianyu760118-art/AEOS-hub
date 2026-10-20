@@ -10,6 +10,7 @@ import {
 export type CatalogApiRequest = {
   method?: string;
   pathname: string;
+  tenantId?: string;
 };
 
 export type CatalogApiResponse = { status: number; body: Record<string, unknown> };
@@ -17,9 +18,9 @@ export type CatalogApiResponse = { status: number; body: Record<string, unknown>
 const PATH_PREFIX = '/api/catalog';
 
 export class CatalogApi {
-  private readonly loadSources: () => CatalogSources;
+  private readonly loadSources: (tenantId?: string) => CatalogSources;
 
-  constructor(loadSources: () => CatalogSources) {
+  constructor(loadSources: (tenantId?: string) => CatalogSources) {
     this.loadSources = loadSources;
   }
 
@@ -31,21 +32,21 @@ export class CatalogApi {
 
     try {
       if (request.pathname === `${PATH_PREFIX}/tree`) {
-        return { status: 200, body: { tree: buildCatalogTree(this.loadSources()) } };
+        return { status: 200, body: { tree: buildCatalogTree(this.loadSources(request.tenantId)) } };
       }
       if (request.pathname === `${PATH_PREFIX}/systems`) {
-        const tree = buildCatalogTree(this.loadSources());
+        const tree = buildCatalogTree(this.loadSources(request.tenantId));
         return { status: 200, body: { systems: tree.systems, counts: tree.counts, warnings: tree.warnings } };
       }
       if (request.pathname === `${PATH_PREFIX}/capabilities`) {
-        const tree = buildCatalogTree(this.loadSources());
+        const tree = buildCatalogTree(this.loadSources(request.tenantId));
         return { status: 200, body: { capabilities: buildCapabilityCatalog(tree) } };
       }
       const agentMatch = request.pathname.match(/^\/api\/catalog\/agents\/([^/]+)$/);
       if (agentMatch) {
         const agentId = decodeURIComponent(agentMatch[1] ?? '').trim();
         if (!agentId) return { status: 400, body: { error: 'agentId invalid' } };
-        const detail = getCatalogAgent(buildCatalogTree(this.loadSources()), agentId);
+        const detail = getCatalogAgent(buildCatalogTree(this.loadSources(request.tenantId)), agentId);
         if (!detail) return { status: 404, body: { error: 'agent not found', code: 'AGENT_NOT_FOUND' } };
         return { status: 200, body: { agent: detail } };
       }
