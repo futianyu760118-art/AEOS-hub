@@ -87,6 +87,8 @@ import { estimateUsageCostCny } from './model-pricing.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
 import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
 import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.ts';
+import { CatalogApi } from './catalog-api.ts';
+import { ensureSystems, listSystems } from './system-registry.ts';
 import { BorrowOrderApi } from './borrow-order-api.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
 import { OpsMonitor } from './ops-monitor.ts';
@@ -211,6 +213,11 @@ const executionPlane = new ExecutionPlaneRegistry({
   onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
+const catalogApi = new CatalogApi(() => ({
+  harbor: loadHarbor(),
+  systems: listSystems(),
+  executionAgents: executionPlane.list().agents,
+}));
 const executionEventStore = new ExecutionEventStore();
 const assistantEventStore = new AssistantEventStore();
 const assistantEventApi = new AssistantEventApi({
@@ -333,6 +340,13 @@ try {
   ensureModelProfiles();
 } catch (error) {
   console.warn('[model-profile-store] 模型目录初始化失败:', (error as Error).message);
+}
+
+// 幂等补齐默认系统登记（data/systems.json）。失败不阻塞启动。
+try {
+  ensureSystems();
+} catch (error) {
+  console.warn('[system-registry] 系统登记初始化失败:', (error as Error).message);
 }
 
 // 幂等初始化用量台账（data/usage-ledger.json）。失败不阻塞启动。
@@ -1696,6 +1710,8 @@ const server = createServer(async (req, res) => {
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
+  const catalogResponse = catalogApi.handle({ method: req.method, pathname: url.pathname });
+  if (catalogResponse) { sendJson(res, catalogResponse.status, catalogResponse.body); return; }
   if (url.pathname === '/api/harbor') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
