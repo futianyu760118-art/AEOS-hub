@@ -41,7 +41,7 @@ export interface BorrowTerminal {
 
 export interface BorrowExecutionPort {
   create(input: BorrowCreateInput): Promise<BorrowCreated>;
-  waitForTerminal(orderId: string, timeoutMs: number): Promise<BorrowTerminal>;
+  waitForTerminal(orderId: string, timeoutMs: number, fromSystem: string): Promise<BorrowTerminal>;
 }
 
 export class OrchestrationTaskExecutionError extends Error {
@@ -181,6 +181,7 @@ export class OrchestrationTaskExecutor {
             query: this.queryTimeoutMs,
             reasoning: this.reasoningTimeoutMs,
           }), remaining)),
+          current.fromSystem,
         );
       } catch (error) {
         const mapped = error instanceof OrchestrationTaskExecutionError

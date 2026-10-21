@@ -89,7 +89,7 @@ class FakeBorrowPort implements BorrowExecutionPort {
     return { orderId: `borrow-${this.calls.length}`, runId: `run-${this.calls.length}` };
   }
 
-  async waitForTerminal(orderId: string, timeoutMs: number) {
+  async waitForTerminal(orderId: string, timeoutMs: number, _fromSystem: string) {
     this.waits.push({ orderId, timeoutMs });
     const item = this.script[this.calls.length - 1];
     if (!item?.terminal) throw new Error('missing fake terminal');
