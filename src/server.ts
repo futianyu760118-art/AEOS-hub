@@ -85,6 +85,7 @@ import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
 import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
+import { estimateUsageCostForModel } from './usage-cost.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
 import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
 import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.ts';
@@ -204,7 +205,17 @@ const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: ne
 // ---------- 用量台账记账（中枢自身 LLM + 执行面用量上报，两条数据源共用） ----------
 function recordUsageEvent(event: UsageEventAppendInput): void {
   try {
-    appendUsageEvent({ ...event, tenantId: resolveTenantId(event.systemId, listSystems()) });
+    let cost = event.cost;
+    if (cost <= 0 && event.modelId && (event.tokensIn > 0 || event.tokensOut > 0)) {
+      const endedAt = new Date(event.endedAt || event.startedAt);
+      const estimated = estimateUsageCostForModel(event.modelId, {
+        inputTokens: event.tokensIn,
+        cachedInputTokens: event.cachedTokens ?? 0,
+        outputTokens: event.tokensOut,
+      }, Number.isNaN(endedAt.getTime()) ? new Date() : endedAt);
+      if (estimated !== null) cost = estimated;
+    }
+    appendUsageEvent({ ...event, cost, tenantId: resolveTenantId(event.systemId, listSystems()) });
   } catch (error) {
     console.warn('[usage-ledger] 记账失败:', (error as Error).message);
   }
