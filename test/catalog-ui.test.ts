@@ -36,6 +36,9 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   assert.match(app, /function catalogAgentUsageDetail\(/);
   assert.match(app, /data-open-usage-detail/);
   assert.match(app, /Token 未上报/);
+  assert.match(app, /无模型 Token/);
+  assert.match(app, /查询接口不产生模型 Token/);
+  assert.match(app, /function agentExpectsModelUsage/);
   assert.match(css, /\.catalog-agent-detail\s*\{/);
   assert.match(css, /\.catalog-usage-cards\s*\{/);
   assert.match(app, /name="systemId"/);

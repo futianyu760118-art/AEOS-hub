@@ -6165,13 +6165,21 @@ function catalogAgentMatches(agent, system) {
   return text.includes(query);
 }
 
-function catalogUsageHtml(usage) {
+function agentExpectsModelUsage(agent) {
+  const skills = Array.isArray(agent?.skills) ? agent.skills : [];
+  return skills.length === 0 || skills.some((skill) => !String(skill).startsWith('query'));
+}
+
+function catalogUsageHtml(usage, agent) {
   if (!usage || usage.events === 0) {
     return '<span class="catalog-usage empty"><strong>—</strong><small>未产生记账</small></span>';
   }
   const tokens = usage.tokensIn + usage.tokensOut;
   const missing = tokens === 0 && usage.cost === 0;
   if (missing) {
+    if (agent && !agentExpectsModelUsage(agent)) {
+      return `<span class="catalog-usage empty"><strong>无模型 Token</strong><small>${usage.events} 次查询接口</small></span>`;
+    }
     return `<span class="catalog-usage missing"><strong>Token 未上报</strong><small>${usage.events} 次执行</small></span>`;
   }
   return `<span class="catalog-usage"><strong>¥${formatUsageCost(usage.cost)}</strong><small>${formatTokenCount(tokens)} tok · ${usage.events} 次</small></span>`;
@@ -6180,16 +6188,19 @@ function catalogUsageHtml(usage) {
 function catalogAgentUsageDetail(agent, system) {
   const usage = agent.usage;
   const tokens = usage ? usage.tokensIn + usage.tokensOut : 0;
+  const modelExpected = agentExpectsModelUsage(agent);
   const missing = Boolean(usage && usage.events > 0 && tokens === 0 && usage.cost === 0);
   const card = (label, value, note, tone = '') => `<div class="catalog-usage-card"><span>${esc(label)}</span><strong class="${tone}">${esc(value)}</strong><small>${esc(note)}</small></div>`;
   return `<div class="catalog-agent-detail">
     <div class="catalog-usage-cards">
       ${card('已记账成本', usage ? `¥${formatUsageCost(usage.cost)}` : '—', usage ? `${usage.events} 次记账` : '暂无用量')}
-      ${card('Token', usage && tokens > 0 ? formatTokenCount(tokens) : '未上报', missing ? '输入 / 输出均缺失' : '输入 + 输出', missing ? 'missing' : '')}
+      ${card('Token', usage && tokens > 0 ? formatTokenCount(tokens) : (modelExpected ? '未上报' : '无模型调用'), missing ? (modelExpected ? '输入 / 输出均缺失' : '查询接口不产生模型 Token') : '输入 + 输出', missing ? 'missing' : '')}
       ${card('执行次数', usage ? String(usage.events) : '0', '来自 run_complete')}
       ${card('最近调用', usage?.lastAt ? formatHarborTime(usage.lastAt) : '—', agent.status === 'archived' ? '已归档' : '该 Agent')}
     </div>
-    ${missing ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>' : ''}
+    ${missing ? (modelExpected
+      ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>'
+      : '<div class="catalog-usage-note"><b>无模型调用</b>：该 Agent 只有查询接口，不产生模型 Token；执行次数来自 run_complete，成本为 ¥0.00 属正常。</div>') : ''}
     <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看用量明细</button></div>
   </div>`;
 }
@@ -6211,7 +6222,7 @@ function renderCatalogAgentRow(agent, system) {
     </div>
     <span class="catalog-agent-skills">${harborTags(agent.skills, '尚未配置 Skill')}</span>
     <span class="catalog-agent-runtime"><strong>${esc(environment)}</strong><small>${esc(agent.modelProfileId || '未指定模型档')} · ${esc(updated)}</small></span>
-    ${catalogUsageHtml(agent.usage)}
+    ${catalogUsageHtml(agent.usage, agent)}
     <span class="catalog-agent-status">${statusPill('agent', agent.status)}</span>
     <span class="catalog-agent-actions">${linkedMember
       ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
