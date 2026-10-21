@@ -263,7 +263,11 @@ export class OrchestrationTaskService {
       return { task, idempotent: false };
     } catch (error) {
       if (error instanceof OrchestrationTaskStoreError) {
-        const status = error.code === 'ORCHESTRATION_TASK_CAPACITY_EXCEEDED' ? 503 : 400;
+        const status = error.code === 'ORCHESTRATION_TASK_CAPACITY_EXCEEDED'
+          ? 503
+          : error.code === 'ORCHESTRATION_TASK_INPUT_TOO_LARGE'
+            ? 413
+            : 400;
         throw new OrchestrationTaskServiceError(error.code, status, error.message);
       }
       throw error;

@@ -232,6 +232,18 @@ test('plan 超过 maxSteps 被拒绝', (t) => {
   })), 'INVALID_ARGUMENT', 400);
 });
 
+test('请求体超过 64 KB 返回 PAYLOAD_TOO_LARGE', (t) => {
+  const { service } = fixture(t);
+  expectError(() => service.create('control-platform', body({
+    plan: [{
+      stepId: 1,
+      capability: 'query_plm',
+      systemId: 'hengjian-plm',
+      input: { path: '/project/page', params: { data: 'x'.repeat(70_000) } },
+    }],
+  })), 'ORCHESTRATION_TASK_INPUT_TOO_LARGE', 413);
+});
+
 test('未完成任务达到上限返回 TOO_MANY_OPEN_TASKS', (t) => {
   const { service } = fixture(t, { openTaskLimit: 1 });
   service.create('control-platform', body({ taskId: 'task-1' }));

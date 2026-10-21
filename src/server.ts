@@ -107,6 +107,11 @@ import { OpsMonitor } from './ops-monitor.ts';
 import { ExecutionEventStore } from './execution-event-store.ts';
 import { AssistantEventStore } from './assistant-event-store.ts';
 import { AssistantEventApi } from './assistant-event-api.ts';
+import { OrchestrationTaskStore } from './orchestration-task-store.ts';
+import { OrchestrationTaskService } from './orchestration-task-service.ts';
+import { OrchestrationTaskExecutor } from './orchestration-task-executor.ts';
+import { BorrowOrderExecutionAdapter } from './orchestration-task-borrow-adapter.ts';
+import { OrchestrationTaskApi } from './orchestration-task-api.ts';
 import { routeModel, parseRouteRequest } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
@@ -277,6 +282,24 @@ borrowOrderService = new BorrowOrderService({
 const borrowOrderApi = new BorrowOrderApi({
   rootSecret: EXECUTION_PLANE_TOKEN,
   service: borrowOrderService,
+  appendEvidence,
+});
+const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
+const orchestrationTaskService = new OrchestrationTaskService({
+  store: orchestrationTaskStore,
+  executionPlane,
+  tenantId: process.env.AEOS_TENANT_ID,
+});
+const orchestrationTaskExecutor = new OrchestrationTaskExecutor({
+  store: orchestrationTaskStore,
+  borrowPort: new BorrowOrderExecutionAdapter({ borrowOrderService }),
+});
+const orchestrationTaskApi = new OrchestrationTaskApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  enabled: process.env.ORCHESTRATION_TASKS_ENABLED === '1',
+  service: orchestrationTaskService,
+  store: orchestrationTaskStore,
+  executor: orchestrationTaskExecutor,
   appendEvidence,
 });
 try {
@@ -1723,6 +1746,34 @@ const server = createServer(async (req, res) => {
         query: url.searchParams,
       });
       if (!outcome) sendJson(res, 404, { error: 'borrow-order endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 跨系统任务交接（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/orchestration-tasks')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = orchestrationTaskApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'orchestration-task endpoint not found' });
       else sendJson(res, outcome.status, outcome.body);
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
