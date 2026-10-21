@@ -25,7 +25,7 @@
     "test:domains": "node --test test/domain-registry.test.ts",
     "test:catalog": "node --test test/agent-catalog-migration.test.ts test/agent-catalog.test.ts test/capability-catalog.test.ts test/catalog-api.test.ts test/catalog-ui.test.ts test/hub-agent-archive.test.ts test/control-platform-execution-agents.test.ts",
     "test:borrow": "node --test test/borrow-policy.test.ts test/borrow-order-store.test.ts test/borrow-order-service.test.ts test/borrow-order-api.test.ts test/borrow-order-ui.test.ts test/execution-plane-callbacks.test.ts",
-    "test:orchestration": "node --test test/orchestration-task-store.test.ts test/orchestration-task-service.test.ts",
+    "test:orchestration": "node --test test/orchestration-task-store.test.ts test/orchestration-task-service.test.ts test/orchestration-task-executor.test.ts",
     "test:ops": "node --test test/alert-center.test.ts test/ops-monitor.test.ts test/ops-ui.test.ts",
     "test:events": "node --test test/execution-event-store.test.ts test/execution-events-ui.test.ts",
     "test:assistant": "node --test test/assistant-event-store.test.ts test/assistant-event-api.test.ts test/assistant-events-ui.test.ts",
