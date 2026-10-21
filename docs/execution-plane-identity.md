@@ -58,6 +58,8 @@ x-aeos-execution-token: <EXECUTION_PLANE_TOKEN>
 1. 停 Hub。
 2. 为各系统发放令牌：`node scripts/mint-system-token.ts control-platform`（PLM 同理）。
 3. 各执行面改为发送 `x-aeos-system-id` + `x-aeos-system-token`。
+   - 本仓库 `aeos-execution-agent` 已支持：在 `.env` 设置 `EXECUTION_SYSTEM_ID` 和 `EXECUTION_SYSTEM_TOKEN` 即可，系统令牌优先于 legacy `EXECUTION_PLANE_TOKEN`。
+   - 只配置其中一项会拒绝启动，避免身份配置不完整。
 4. 启动 Hub，检查执行面记录：
    - 系统令牌连接：`authMode = system-token`，`sourceSystem = <systemId>`
    - legacy 连接：`authMode = legacy-root`，能在 Evidence 中看到注册审计
