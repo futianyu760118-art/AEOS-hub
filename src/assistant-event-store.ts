@@ -30,6 +30,10 @@ export const ASSISTANT_EVENT_TYPES = [
   'error',
   'conversation_ended',
   'note',
+  'step_started',
+  'step_completed',
+  'confirmation_required',
+  'confirmation_resolved',
 ] as const;
 export const ASSISTANT_EVENT_STATUSES = ['started', 'completed', 'failed', 'info'] as const;
 
@@ -55,6 +59,10 @@ export const AssistantEventSchema = z.object({
   tenantId: trimmed(160, 1).default(DEFAULT_TENANT_ID),
   systemId: trimmed(160, 1),
   traceId: trimmed(160, 1),
+  taskId: trimmed(160).nullable().default(null),
+  stepId: z.number().int().nonnegative().nullable().default(null),
+  tool: trimmed(160).nullable().default(null),
+  confirmationId: trimmed(160).nullable().default(null),
   event: z.enum(ASSISTANT_EVENT_TYPES),
   name: trimmed(100),
   status: z.enum(ASSISTANT_EVENT_STATUSES),
@@ -73,6 +81,10 @@ export type AssistantUsage = z.infer<typeof AssistantUsageSchema>;
 export interface AssistantEventInput {
   eventId?: unknown;
   traceId?: unknown;
+  taskId?: unknown;
+  stepId?: unknown;
+  tool?: unknown;
+  confirmationId?: unknown;
   event?: unknown;
   name?: unknown;
   status?: unknown;
@@ -187,6 +199,10 @@ export class AssistantEventStore {
       tenantId: resolveTenantId(systemId, listSystems()),
       systemId,
       traceId,
+      taskId: typeof input.taskId === 'string' && input.taskId.trim() ? input.taskId.trim().slice(0, 160) : null,
+      stepId: typeof input.stepId === 'number' && Number.isFinite(input.stepId) && input.stepId >= 0 ? Math.trunc(input.stepId) : null,
+      tool: typeof input.tool === 'string' && input.tool.trim() ? input.tool.trim().slice(0, 160) : null,
+      confirmationId: typeof input.confirmationId === 'string' && input.confirmationId.trim() ? input.confirmationId.trim().slice(0, 160) : null,
       event: input.event,
       name: typeof input.name === 'string' ? input.name.slice(0, 100) : '',
       status: input.status ?? 'info',

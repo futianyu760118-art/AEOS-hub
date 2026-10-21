@@ -20,7 +20,7 @@ export interface AssistantEventApiRequest {
 export type AssistantEventApiResponse = { status: number; body: Record<string, unknown> };
 
 const PATH_PREFIX = '/api/system/assistant-events';
-const ALLOWED_FIELDS = new Set(['eventId', 'traceId', 'event', 'name', 'status', 'summary', 'detail', 'startedAt', 'endedAt', 'durationMs', 'usage']);
+const ALLOWED_FIELDS = new Set(['eventId', 'traceId', 'taskId', 'stepId', 'tool', 'confirmationId', 'event', 'name', 'status', 'summary', 'detail', 'startedAt', 'endedAt', 'durationMs', 'usage']);
 
 export class AssistantEventApi {
   private readonly rootSecret: string;

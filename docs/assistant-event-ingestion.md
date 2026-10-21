@@ -1,6 +1,6 @@
 # 中台助手观测上报协议（assistant-events）
 
-> 版本：1.0（2026-10-19）  
+> 版本：1.1（2026-10-21，新增 ReAct 步骤与写确认事件）  
 > 适用：中台自有智能助手（`backend/app/api/v1/assistant` + `services/assistant`）希望把会话与工具调用摘要留痕到 AEOS Hub。  
 > 注意：这条链路**不经过 Hub 派单**，没有 `runId`；与 `run_event` 是两套协议。
 
@@ -20,6 +20,10 @@
 |---|---|---|
 | `eventId` | 是 | 全局唯一；重复发送按 `systemId + eventId` 去重 |
 | `traceId` | 是 | 中台自己的会话/请求 ID，用于把一次对话串起来 |
+| `taskId` | 否 | ReAct 一次任务的 ID，用于把同一任务的多个步骤串起来 |
+| `stepId` | 否 | 任务内步骤序号，从 1 开始的整数 |
+| `tool` | 否 | 本步工具名，如 `call_query_agent` / `call_reasoning_agent` / `call_order_agent` |
+| `confirmationId` | 否 | 写操作确认单 ID，仅写确认事件使用 |
 | `event` | 是 | 见下方事件类型 |
 | `name` | 否 | 工具名/环节名，≤100 字 |
 | `status` | 否 | `started` / `completed` / `failed` / `info`，默认 `info` |
@@ -44,6 +48,10 @@
 | `error` | 某一步失败 |
 | `conversation_ended` | 会话结束 |
 | `note` | 备注 |
+| `step_started` | ReAct 一步开始 |
+| `step_completed` | ReAct 一步完成 |
+| `confirmation_required` | 写操作等待用户确认 |
+| `confirmation_resolved` | 写操作确认已处理（确认或取消） |
 
 ### 示例
 
@@ -101,7 +109,9 @@ GET /api/system/assistant-events?traceId=&limit=200
 |---|---|
 | 会话开始 | `conversation_started` |
 | 收到用户消息 | `message`（只写摘要） |
+| ReAct 每步开始/结束 | `step_started` / `step_completed`（带 taskId、stepId、tool） |
 | 每次工具/接口调用前/后 | `tool_call` / `tool_result` |
+| 写操作等待确认/确认完成 | `confirmation_required` / `confirmation_resolved`（带 confirmationId） |
 | 调用大模型后 | `model_call`（带 usage） |
 | 生成回复后 | `assistant_reply`（只写摘要） |
 | 异常 | `error` |

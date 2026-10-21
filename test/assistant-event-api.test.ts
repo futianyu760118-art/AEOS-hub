@@ -54,6 +54,52 @@ test('上报成功 201，重复 200', (t) => {
   assert.equal(second?.body.duplicate, true);
 });
 
+test('接受 ReAct 步骤与写确认字段', (t) => {
+  const { api, token } = fixture(t);
+  const result = api.handle({
+    method: 'POST',
+    pathname: '/api/system/assistant-events',
+    systemId: '中台',
+    token: token('中台'),
+    body: body({
+      eventId: 'evt-step',
+      event: 'step_started',
+      status: 'started',
+      taskId: 'task-1',
+      stepId: 1,
+      tool: 'call_query_agent',
+    }),
+  });
+  assert.equal(result?.status, 201);
+  const confirmation = api.handle({
+    method: 'POST',
+    pathname: '/api/system/assistant-events',
+    systemId: '中台',
+    token: token('中台'),
+    body: body({
+      eventId: 'evt-confirm',
+      event: 'confirmation_required',
+      status: 'info',
+      taskId: 'task-1',
+      stepId: 2,
+      tool: 'call_order_agent',
+      confirmationId: 'confirm-1',
+    }),
+  });
+  assert.equal(confirmation?.status, 201);
+  const list = api.handle({
+    method: 'GET',
+    pathname: '/api/system/assistant-events',
+    systemId: '中台',
+    token: token('中台'),
+    query: new URLSearchParams(),
+  });
+  const events = list?.body.events as Array<Record<string, unknown>>;
+  assert.equal(events[0].taskId, 'task-1');
+  assert.equal(events[0].stepId, 1);
+  assert.equal(events[1].confirmationId, 'confirm-1');
+});
+
 test('未知字段被拒绝', (t) => {
   const { api, token } = fixture(t);
   const result = api.handle({

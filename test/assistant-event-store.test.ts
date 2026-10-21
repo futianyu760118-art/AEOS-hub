@@ -88,6 +88,43 @@ test('解析模型用量', (t) => {
   assert.equal(stored.usage?.cost, null);
 });
 
+test('记录 ReAct 步骤与写确认字段', (t) => {
+  const { store } = fixture(t);
+  store.record(event({
+    eventId: 'evt-step',
+    event: 'step_started',
+    status: 'started',
+    taskId: 'task-1',
+    stepId: 1,
+    tool: 'call_query_agent',
+  }), '中台');
+  store.record(event({
+    eventId: 'evt-confirm',
+    event: 'confirmation_required',
+    status: 'info',
+    taskId: 'task-1',
+    stepId: 2,
+    tool: 'call_order_agent',
+    confirmationId: 'confirm-1',
+  }), '中台');
+  const events = store.listEvents({ systemId: '中台' });
+  assert.equal(events[0].taskId, 'task-1');
+  assert.equal(events[0].stepId, 1);
+  assert.equal(events[0].tool, 'call_query_agent');
+  assert.equal(events[0].confirmationId, null);
+  assert.equal(events[1].confirmationId, 'confirm-1');
+});
+
+test('旧事件缺少新字段时补 null', (t) => {
+  const { store } = fixture(t);
+  store.record(event(), '中台');
+  const stored = store.listEvents({ systemId: '中台' })[0];
+  assert.equal(stored.taskId, null);
+  assert.equal(stored.stepId, null);
+  assert.equal(stored.tool, null);
+  assert.equal(stored.confirmationId, null);
+});
+
 test('会话归并：数量、最早/最近时间、错误标记', (t) => {
   const { store, clock } = fixture(t);
   store.record(event({ eventId: 'e1', event: 'conversation_started', summary: '开始', startedAt: '2026-10-19T09:00:00.000Z' }), '中台');
