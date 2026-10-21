@@ -69,6 +69,15 @@ test('时间线状态标签为说明/已完成/进行中/失败', () => {
   assert.match(app, /status === 'started' \? '进行中' : '说明'/);
 });
 
+test('ReAct 步骤与写确认在时间线可见', () => {
+  assert.match(app, /confirmation_required: '等待写确认'/);
+  assert.match(app, /confirmation_resolved: '写确认已处理'/);
+  assert.match(app, /event\.tool/);
+  assert.match(app, /event\.taskId/);
+  assert.match(app, /event\.stepId/);
+  assert.match(app, /event\.confirmationId/);
+});
+
 test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);

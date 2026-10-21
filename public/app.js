@@ -2222,6 +2222,7 @@ const EXECUTION_EVENT_LABELS = {
   run_received: '收到任务', step_started: '步骤开始', step_completed: '步骤完成',
   tool_call: '工具调用', tool_result: '工具结果', model_call: '模型调用',
   error: '错误', note: '备注', run_summary: '任务总结',
+  confirmation_required: '等待写确认', confirmation_resolved: '写确认已处理',
   conversation_started: '会话开始', message: '用户消息', assistant_reply: '助手回复', conversation_ended: '会话结束',
 };
 const runEventsCache = new Map();
@@ -2245,9 +2246,15 @@ function executionTimelineHtml(events) {
     const usage = event.usage
       ? `<small>模型 ${esc(event.usage.modelId || '—')} · 输入 ${formatTokenCount(event.usage.tokensIn)} / 输出 ${formatTokenCount(event.usage.tokensOut)} · ¥${formatUsageCost(event.usage.cost ?? 0)}</small>`
       : '';
+    const context = [
+      event.tool ? `工具 ${event.tool}` : '',
+      event.taskId ? `任务 ${event.taskId}` : '',
+      event.stepId !== null && event.stepId !== undefined ? `步骤 ${event.stepId}` : '',
+      event.confirmationId ? `确认 ${event.confirmationId}` : '',
+    ].filter(Boolean).join(' · ');
     return `<div class="execution-step">
       <span class="execution-step-time">${borrowTime(time)}</span>
-      <span class="execution-step-main"><strong>${esc(executionEventLabel(event.event))}${event.name ? ` · ${esc(event.name)}` : ''}</strong><small>${esc(event.summary || '')}</small>${usage}${detail}</span>
+      <span class="execution-step-main"><strong>${esc(executionEventLabel(event.event))}${event.name ? ` · ${esc(event.name)}` : ''}</strong><small>${esc(event.summary || '')}</small>${context ? `<small>${esc(context)}</small>` : ''}${usage}${detail}</span>
       <span class="execution-step-meta"><b class="status-pill ${tone}">${label}</b><small>${esc(duration)}</small></span>
     </div>`;
   }).join('')}</div>`;
