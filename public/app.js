@@ -1804,7 +1804,7 @@ function renderAssistantDetail() {
       <span>模型用量：${esc(usageLine)}</span>
     </div>
     ${highlight}
-    <div class="borrow-detail-block"><h3>时间线</h3>${executionTimelineHtml(events)}</div>`;
+    <div class="borrow-detail-block"><h3>时间线</h3>${assistantTimelineHtml(events)}</div>`;
   if (detailChanged) root.scrollTop = 0;
   refreshIcons(root);
 }
@@ -2258,6 +2258,18 @@ function executionTimelineHtml(events) {
       <span class="execution-step-meta"><b class="status-pill ${tone}">${label}</b><small>${esc(duration)}</small></span>
     </div>`;
   }).join('')}</div>`;
+}
+
+function assistantTimelineHtml(events) {
+  const list = Array.isArray(events) ? events : [];
+  const hasSteps = list.some((event) => event.event === 'step_started' || event.event === 'step_completed');
+  if (!hasSteps) return executionTimelineHtml(list);
+  const main = list.filter((event) => event.event !== 'tool_call' && event.event !== 'tool_result');
+  const tools = list.filter((event) => event.event === 'tool_call' || event.event === 'tool_result');
+  const toolBlock = tools.length
+    ? `<details class="execution-step-detail assistant-tool-events"><summary>工具调用明细（${tools.length}）</summary>${executionTimelineHtml(tools)}</details>`
+    : '';
+  return `${executionTimelineHtml(main)}${toolBlock}`;
 }
 
 async function fetchRunEvents(runId, options = {}) {

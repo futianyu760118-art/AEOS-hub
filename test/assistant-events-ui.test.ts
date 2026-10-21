@@ -78,6 +78,13 @@ test('ReAct 步骤与写确认在时间线可见', () => {
   assert.match(app, /event\.confirmationId/);
 });
 
+test('ReAct 时间线以 step 为主，tool 明细折叠', () => {
+  assert.match(app, /function assistantTimelineHtml/);
+  assert.match(app, /assistant-tool-events/);
+  assert.match(app, /工具调用明细/);
+  assert.match(app, /assistantTimelineHtml\(events\)/);
+});
+
 test('样式与版本号', () => {
   assert.match(css, /\.ai-obs-tabs/);
   assert.match(css, /\.ai-run-table/);
