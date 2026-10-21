@@ -5,9 +5,20 @@ import WebSocket from 'ws';
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+/** 优先使用每系统令牌；未配置时保留 legacy 根令牌，便于滚动升级。 */
+export function buildConnectionHeaders(config) {
+  if (config.systemId && config.systemToken) {
+    return {
+      'x-aeos-system-id': config.systemId,
+      'x-aeos-system-token': config.systemToken,
+    };
+  }
+  return { 'x-aeos-execution-token': config.token };
+}
+
 export class ExecutionAgentCore {
   constructor(config, handlers, log = console.log) {
-    this.config = config; // { wsUrl, token, agentId, name, version, protocolVersion, sourceSystem, capabilities }
+    this.config = config; // { wsUrl, token, systemId, systemToken, agentId, name, version, protocolVersion, sourceSystem, capabilities }
     this.handlers = handlers; // { [capability]: (input, ctx) => void }
     this.log = log;
     this.ws = null;
@@ -33,7 +44,7 @@ export class ExecutionAgentCore {
   }
 
   connect() {
-    const ws = new WebSocket(this.config.wsUrl, { headers: { 'x-aeos-execution-token': this.config.token } });
+    const ws = new WebSocket(this.config.wsUrl, { headers: buildConnectionHeaders(this.config) });
     this.ws = ws;
     ws.on('open', () => {
       this.reconnectAttempt = 0;

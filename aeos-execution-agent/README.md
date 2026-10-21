@@ -27,7 +27,7 @@ docker compose -f docker-compose.example.yml up -d aeos-execution-agent
 
 ## 配置（全部走环境变量，不硬编码）
 
-见 `.env.example`。每个接入系统必须使用独立的 `EXECUTION_AGENT_ID`、`EXECUTION_PLANE_TOKEN`、来源系统标识、目标系统凭证与能力白名单。
+见 `.env.example`。每个接入系统必须使用独立的 `EXECUTION_AGENT_ID`、身份令牌、来源系统标识、目标系统凭证与能力白名单。推荐使用 `EXECUTION_SYSTEM_ID` + `EXECUTION_SYSTEM_TOKEN`（每系统令牌）；未配置时兼容 legacy `EXECUTION_PLANE_TOKEN`。
 
 ## 安全边界
 
@@ -56,7 +56,7 @@ registerCapability({ name: 'query_oa', description: '查询 OA 数据', handler:
 
 - 健康检查：容器 `HEALTHCHECK`（进程存活）+ Hub 心跳（业务健康）。
 - 断线重连：指数退避，最大 30s；重启自动恢复。
-- 排查：`npm start` 前台运行看日志；确认 `EXECUTION_WS_URL`、`EXECUTION_PLANE_TOKEN` 与 Hub 一致。
+- 排查：`npm start` 前台运行看日志；确认 `EXECUTION_WS_URL` 与身份令牌（系统令牌或 legacy 根令牌）和 Hub 一致。
 
 ## 升级与回滚
 

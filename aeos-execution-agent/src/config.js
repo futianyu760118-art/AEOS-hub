@@ -6,9 +6,23 @@ export function loadConfig(env = process.env) {
     return value;
   };
 
+  const legacyToken = (env.EXECUTION_PLANE_TOKEN ?? '').trim();
+  const systemId = (env.EXECUTION_SYSTEM_ID ?? '').trim();
+  const systemToken = (env.EXECUTION_SYSTEM_TOKEN ?? '').trim();
+  const wsUrl = required('EXECUTION_WS_URL');
+  if (Boolean(systemId) !== Boolean(systemToken)) {
+    throw new Error('EXECUTION_SYSTEM_ID 和 EXECUTION_SYSTEM_TOKEN 必须同时提供');
+  }
+  if (!systemId && !legacyToken) {
+    throw new Error('缺少环境变量 EXECUTION_PLANE_TOKEN，或同时提供 EXECUTION_SYSTEM_ID 和 EXECUTION_SYSTEM_TOKEN');
+  }
+
   return {
-    wsUrl: required('EXECUTION_WS_URL'),
-    token: required('EXECUTION_PLANE_TOKEN'),
+    wsUrl,
+    token: legacyToken,
+    systemId,
+    systemToken,
+    authMode: systemId ? 'system-token' : 'legacy-root',
     agentId: required('EXECUTION_AGENT_ID'),
     agentName: (env.EXECUTION_AGENT_NAME ?? '').trim() || required('EXECUTION_AGENT_ID'),
     agentVersion: (env.EXECUTION_AGENT_VERSION ?? '').trim() || '1.0.0',

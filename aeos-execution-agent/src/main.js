@@ -62,6 +62,8 @@ function main() {
     {
       wsUrl: config.wsUrl,
       token: config.token,
+      systemId: config.systemId,
+      systemToken: config.systemToken,
       agentId: config.agentId,
       name: config.agentName,
       version: config.agentVersion,

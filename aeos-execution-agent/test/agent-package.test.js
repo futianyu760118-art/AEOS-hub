@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerCapability, capabilityHandlers, capabilityDefinitions } from '../src/capabilities.js';
 import { loadConfig } from '../src/config.js';
+import { buildConnectionHeaders } from '../src/agent-core.js';
 import { createHttpQueryAdapter } from '../src/adapters/query-adapter.js';
 import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS, COMPANY_CONTROL_QUERY_INTENT } from '../src/adapters/company-control-query.js';
 import { createReasoningAdapter } from '../src/adapters/reasoning-adapter.js';
@@ -31,6 +32,45 @@ test('配置从环境变量读取，缺少必填项抛错', () => {
   });
   assert.equal(config.agentId, 'agent-1');
   assert.equal(config.protocolVersion, '1.0');
+  assert.equal(config.authMode, 'legacy-root');
+});
+
+test('配置支持每系统令牌，且优先于 legacy 根令牌', () => {
+  const config = loadConfig({
+    EXECUTION_WS_URL: 'wss://h/execution-agent',
+    EXECUTION_SYSTEM_ID: 'control-platform',
+    EXECUTION_SYSTEM_TOKEN: 'system-token',
+    EXECUTION_PLANE_TOKEN: 'legacy-token',
+    EXECUTION_AGENT_ID: 'agent-1',
+    EXECUTION_SOURCE_SYSTEM: '公司中控平台',
+    TARGET_QUERY_BASE_URL: 'https://x/api/v1',
+    TARGET_QUERY_APP_KEY: 'k',
+    TARGET_QUERY_APP_SECRET: 's',
+  });
+  assert.equal(config.authMode, 'system-token');
+  assert.deepEqual(buildConnectionHeaders(config), {
+    'x-aeos-system-id': 'control-platform',
+    'x-aeos-system-token': 'system-token',
+  });
+});
+
+test('系统令牌只提供一半时拒绝启动', () => {
+  const base = {
+    EXECUTION_WS_URL: 'wss://h/execution-agent',
+    EXECUTION_AGENT_ID: 'agent-1',
+    EXECUTION_SOURCE_SYSTEM: '系统A',
+    TARGET_QUERY_BASE_URL: 'https://x/api/v1',
+    TARGET_QUERY_APP_KEY: 'k',
+    TARGET_QUERY_APP_SECRET: 's',
+  };
+  assert.throws(() => loadConfig({ ...base, EXECUTION_SYSTEM_ID: 'control-platform' }), /必须同时提供/);
+  assert.throws(() => loadConfig({ ...base, EXECUTION_SYSTEM_TOKEN: 'token' }), /必须同时提供/);
+});
+
+test('未配置系统令牌时保留 legacy 连接头', () => {
+  assert.deepEqual(buildConnectionHeaders({ token: 'legacy-token' }), {
+    'x-aeos-execution-token': 'legacy-token',
+  });
 });
 
 test('中台查询适配器拒绝白名单外 path 与缺 path', async () => {
