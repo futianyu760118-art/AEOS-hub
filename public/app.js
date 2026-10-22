@@ -3984,6 +3984,11 @@ function openDashboardRiskDetail(risk) {
   if (kicker) kicker.textContent = isProduction ? '生产协同详情' : isQuality ? '异常与质量详情' : isKitting ? '物料齐套详情' : '订单风险详情';
   els.dashboardRiskModalTitle.textContent = `${isQuality ? (risk.issueNo || risk.orderNo) : isProduction ? (risk.workOrderNo || risk.orderNo) : risk.orderNo} · ${risk.summary}`;
   els.dashboardRiskModalDesc.textContent = isProduction ? '生产协同中台返回字段与 Evidence 依据；缺失值不会补造。' : isKitting ? '物料齐套中台返回字段与 Evidence 依据；缺失值不会补造。' : isQuality ? '异常与质量中台返回字段与 Evidence 依据；缺失值不会补造。' : '仅展示 company-control 返回字段；缺失值不会补造。';
+  const riskTaskType = isProduction ? 'production' : isQuality ? 'quality' : isKitting ? 'kitting' : 'order';
+  const specialistProfile = isProduction ? productionAgentProfile(risk) : isQuality ? qualityAgentProfile(risk) : isKitting ? kittingAgentProfile(risk) : { pattern: /订单交付风险/ };
+  const hasVisibleSpecialist = visibleHarborAgents().filter((agent) => agent.registration?.lifecycle !== 'retired' && agent.status !== 'archived')
+    .some((agent) => specialistProfile.pattern.test(`${agent.name || ''} ${agent.role || ''}`) && (agent.domainIds || []).includes(riskTaskType));
+  els.dashboardRiskDispatch.classList.toggle('hidden', !hasVisibleSpecialist);
   els.dashboardRiskDispatch.innerHTML = isProduction
     ? '<i data-lucide="bot-message-square"></i><span>交给生产协同 Agent 分析</span>'
     : isKitting
@@ -4021,7 +4026,7 @@ function openDashboardRiskDetail(risk) {
   ${riskLinkageHtml(risk)}
   <section class="risk-detail-gaps"><b><i data-lucide="triangle-alert"></i>字段缺失提示</b>${missing.length ? `<ul>${missing.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p>当前展示字段均已回传；仍应以本次工具调用的 evidence_refs 为准。</p>'}</section>`;
   els.dashboardRiskModalStatus.textContent = '';
-  els.dashboardRiskDispatch.disabled = false;
+  els.dashboardRiskDispatch.disabled = !hasVisibleSpecialist;
   els.dashboardRiskCreateCase.disabled = !risk.evidenceRef;
   els.dashboardRiskModal.classList.remove('hidden');
   refreshIcons(els.dashboardRiskModal);
@@ -4108,7 +4113,7 @@ async function dispatchDashboardRiskToAgent() {
   try {
     await Promise.all([loadSquad({ silent: true }), loadHarbor({ silent: true })]);
     const taskType = isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order';
-    const activeAgents = (harbor.agents || []).filter((agent) => agent.registration?.lifecycle !== 'retired' && agent.status !== 'archived');
+    const activeAgents = visibleHarborAgents().filter((agent) => agent.registration?.lifecycle !== 'retired' && agent.status !== 'archived');
     // 优先按专业角色匹配；匹配不到时，退回服务域覆盖该任务的在线 Agent（如中台执行面）。
     const harborAgent = activeAgents.find((agent) => profile.pattern.test(`${agent.name || ''} ${agent.role || ''}`))
       || activeAgents.find((agent) => (agent.domainIds || []).includes(taskType));
@@ -6248,6 +6253,10 @@ function isCatalogAgentHidden(agent, system) {
   return system?.id === 'aeos-hub' && HIDDEN_HUB_AGENT_IDS.has(agent?.id);
 }
 
+function visibleHarborAgents() {
+  return (harbor?.agents || []).filter((agent) => !HIDDEN_HUB_AGENT_IDS.has(agent?.id));
+}
+
 function catalogFilterActive() {
   return Boolean(String(harborAgentFilter.query || '').trim())
     || harborAgentFilter.level !== 'all'
@@ -6471,7 +6480,8 @@ function renderHarbor() {
   };
   els.harborProjectList.innerHTML = projects.length ? projects.map((project) => {
     const lead = project.leadType === 'agent' ? agentById.get(project.leadId)?.name || '未知智能体' : project.leadId || 'workspace-owner';
-    const teamNames = (project.agentIds || []).map((id) => agentById.get(id)?.name).filter(Boolean);
+    const visibleAgentIds = new Set(visibleHarborAgents().map((agent) => agent.id));
+    const teamNames = (project.agentIds || []).filter((id) => visibleAgentIds.has(id)).map((id) => agentById.get(id)?.name).filter(Boolean);
     const progress = Math.max(0, Math.min(100, Number(project.progress) || 0));
     const [priorityLabel, priorityTone] = priorityMeta[project.priority] || priorityMeta.none;
     return `<div class="harbor-row">
@@ -6600,7 +6610,7 @@ function runtimeOptions(selected = '') {
 
 function agentOptions(selected = '') {
   const options = ['<option value="">由工作区 Owner 负责</option>'];
-  for (const agent of harbor.agents || []) {
+  for (const agent of visibleHarborAgents()) {
     options.push(`<option value="${esc(agent.id)}"${agent.id === selected ? ' selected' : ''}>${esc(agent.name)} · ${esc(agent.role)}</option>`);
   }
   return options.join('');
@@ -6609,7 +6619,7 @@ function agentOptions(selected = '') {
 const agentTypeLabels = { master: '系统主 Agent', specialist: '专业 Agent', tool: '工具 Agent' };
 
 function agentParentOptions(type, selected = '') {
-  const parents = eligibleParentAgents(harbor.agents || [], type);
+  const parents = eligibleParentAgents(visibleHarborAgents(), type);
   const options = ['<option value="">请选择上级 Agent</option>'];
   for (const agent of parents) {
     options.push(`<option value="${esc(agent.id)}"${agent.id === selected ? ' selected' : ''}>${esc(agent.name)} · ${esc(agent.registration?.code || agent.role)}</option>`);
@@ -6627,7 +6637,7 @@ function syncAgentRegistrationForm() {
 
   const { level } = registrationRule(typeSelect.value);
   const oldParent = parentSelect.value;
-  const parents = eligibleParentAgents(harbor.agents || [], typeSelect.value);
+  const parents = eligibleParentAgents(visibleHarborAgents(), typeSelect.value);
   parentSelect.innerHTML = agentParentOptions(typeSelect.value, oldParent);
   parentSelect.value = parents.some((agent) => agent.id === oldParent) ? oldParent : (parents[0]?.id || '');
   parentSelect.disabled = parents.length === 0;
@@ -6698,7 +6708,7 @@ function openHarborModal(type) {
         <label><span>开始日期</span><input name="startDate" type="date" value="${localDateKey()}" /></label>
         <label><span>目标日期</span><input name="targetDate" type="date" /></label>
         <label class="wide"><span>项目目标</span><textarea name="objective" maxlength="1200" required placeholder="定义经营结果、硬约束和可验证完成条件"></textarea></label>
-        <fieldset class="wide"><legend>智能体编队</legend><div class="agent-checks">${(harbor.agents || []).length ? harbor.agents.map((agent) => `<label><input name="agentIds" type="checkbox" value="${esc(agent.id)}" /><span>${esc(agent.name)} · ${esc(agent.autonomyLevel)}</span></label>`).join('') : '<small class="field-note">当前没有可选智能体，可先创建项目，后续再组建编队。</small>'}</div></fieldset>
+        <fieldset class="wide"><legend>智能体编队</legend><div class="agent-checks">${visibleHarborAgents().length ? visibleHarborAgents().map((agent) => `<label><input name="agentIds" type="checkbox" value="${esc(agent.id)}" /><span>${esc(agent.name)} · ${esc(agent.autonomyLevel)}</span></label>`).join('') : '<small class="field-note">当前没有可选智能体，可先创建项目，后续再组建编队。</small>'}</div></fieldset>
         <label class="wide"><span>资源引用</span><input name="resourceRefs" placeholder="逗号分隔，例如：objective://V7.2, capability://delivery-risk" /></label>`,
     },
   };
