@@ -113,10 +113,18 @@ export class ExecutionAgentCore {
     }
   }
 
+  heartbeat() {
+    this.send({
+      type: 'heartbeat',
+      status: this.activeRun ? 'working' : 'idle',
+      currentRunId: this.activeRun?.runId ?? null,
+    });
+  }
+
   startHeartbeat(intervalMs) {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      this.send({ type: 'heartbeat', status: this.activeRun ? 'working' : 'idle' });
+      this.heartbeat();
     }, intervalMs);
   }
 

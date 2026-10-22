@@ -129,6 +129,17 @@ test('心跳刷新 lastSeenAt 与 runtimeStatus', (t) => {
   assert.equal(agent.lastSeenAt, '2026-10-14T00:00:10.000Z');
 });
 
+test('心跳未携带 currentRunId 时保留派单设置的 runId', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/list', params: {} });
+  h.registry.onHeartbeat(h.agentId, { status: 'working' });
+  assert.equal(h.registry.list().agents[0].currentRunId, runId);
+  h.registry.onHeartbeat(h.agentId, { status: 'idle', currentRunId: null });
+  assert.equal(h.registry.list().agents[0].currentRunId, null);
+});
+
+
 test('派单下发 dispatch 并创建 run', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);

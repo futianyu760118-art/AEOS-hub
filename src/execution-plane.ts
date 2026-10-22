@@ -479,9 +479,11 @@ export class ExecutionPlaneRegistry {
   onHeartbeat(agentId: string, input: { status?: unknown; currentRunId?: unknown }): void {
     const entry = this.requireAgent(agentId);
     entry.record.runtimeStatus = parseStatus(input.status);
-    entry.record.currentRunId = typeof input.currentRunId === 'string' && input.currentRunId.trim()
-      ? input.currentRunId.trim()
-      : null;
+    if (Object.prototype.hasOwnProperty.call(input, 'currentRunId')) {
+      entry.record.currentRunId = typeof input.currentRunId === 'string' && input.currentRunId.trim()
+        ? input.currentRunId.trim()
+        : null;
+    }
     entry.record.lastSeenAt = this.nowIso();
     entry.record.connectionStatus = 'online';
     this.persist();

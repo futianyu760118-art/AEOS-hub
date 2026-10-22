@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerCapability, capabilityHandlers, capabilityDefinitions } from '../src/capabilities.js';
 import { loadConfig } from '../src/config.js';
-import { buildConnectionHeaders } from '../src/agent-core.js';
+import { buildConnectionHeaders, ExecutionAgentCore } from '../src/agent-core.js';
 import { createHttpQueryAdapter } from '../src/adapters/query-adapter.js';
 import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS, COMPANY_CONTROL_QUERY_INTENT } from '../src/adapters/company-control-query.js';
 import { createReasoningAdapter } from '../src/adapters/reasoning-adapter.js';
@@ -101,4 +101,16 @@ test('推理适配器返回结构正确且明确未接通（不伪造）', async
   assert.equal(result.data_confidence, 'low');
   assert.ok(Array.isArray(result.conclusions) && result.conclusions.length > 0);
   assert.ok(Array.isArray(result.conclusions[0].evidence_refs) && result.conclusions[0].evidence_refs.length > 0);
+});
+
+test('心跳携带当前 runId，空闲时显式清空', () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, {}, () => {});
+  core.send = (message) => sent.push(message);
+  core.activeRun = { runId: 'run-1', ctx: { aborted: false } };
+  core.heartbeat();
+  assert.deepEqual(sent[0], { type: 'heartbeat', status: 'working', currentRunId: 'run-1' });
+  core.activeRun = null;
+  core.heartbeat();
+  assert.deepEqual(sent[1], { type: 'heartbeat', status: 'idle', currentRunId: null });
 });
