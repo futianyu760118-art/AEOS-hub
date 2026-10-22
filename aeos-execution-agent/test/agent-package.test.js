@@ -114,3 +114,71 @@ test('心跳携带当前 runId，空闲时显式清空', () => {
   core.heartbeat();
   assert.deepEqual(sent[1], { type: 'heartbeat', status: 'idle', currentRunId: null });
 });
+
+test('handler 完成后发送 run_complete 并释放 activeRun', async () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, { query_x: async () => ({ ok: true }) }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-ok', capability: 'query_x', input: {}, timeoutMs: 100 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(core.activeRun, null);
+  assert.deepEqual(sent.find((message) => message.type === 'run_complete'), {
+    type: 'run_complete',
+    runId: 'run-ok',
+    result: { ok: true },
+  });
+  core.heartbeat();
+  assert.deepEqual(sent[sent.length - 1], { type: 'heartbeat', status: 'idle', currentRunId: null });
+});
+
+test('handler 超时发送 run_failed 并释放 activeRun', async () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, { query_x: () => new Promise(() => {}) }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-timeout', capability: 'query_x', input: {}, timeoutMs: 10 }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(core.activeRun, null);
+  const failed = sent.find((message) => message.type === 'run_failed');
+  assert.equal(failed.runId, 'run-timeout');
+  assert.equal(failed.error.code, 'EXECUTION_TIMEOUT');
+});
+
+test('超时后 handler 迟到完成不得再发 run_complete', async () => {
+  const sent = [];
+  let resolveLate;
+  const core = new ExecutionAgentCore({}, {
+    query_x: () => new Promise((resolve) => { resolveLate = resolve; }),
+  }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-late', capability: 'query_x', input: {}, timeoutMs: 10 }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  resolveLate({ late: true });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(sent.filter((message) => message.type === 'run_failed').length, 1);
+  assert.equal(sent.filter((message) => message.type === 'run_complete').length, 0);
+});
+
+test('handler 抛错发送 run_failed 并释放 activeRun', async () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, {
+    query_x: async () => { throw new Error('boom'); },
+  }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-error', capability: 'query_x', input: {}, timeoutMs: 100 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(core.activeRun, null);
+  const failed = sent.find((message) => message.type === 'run_failed');
+  assert.equal(failed.error.code, 'EXECUTION_FAILED');
+  assert.equal(failed.error.message, 'boom');
+});
+
+test('召回会取消超时计时器，不再发送 run_failed', async () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, { query_x: () => new Promise(() => {}) }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-recall', capability: 'query_x', input: {}, timeoutMs: 20 }));
+  core.handleMessage(JSON.stringify({ type: 'recall', runId: 'run-recall' }));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(core.activeRun, null);
+  assert.equal(sent.filter((message) => message.type === 'run_failed').length, 0);
+});
