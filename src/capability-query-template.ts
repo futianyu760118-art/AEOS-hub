@@ -27,6 +27,12 @@ export interface CapabilityQueryTemplate {
   parameterSchema: Schema;
   /** 调用方缺省时补齐的参数默认值。 */
   parameterDefaults?: Record<string, unknown>;
+  /** 执行面页面/中枢自然语言入口的匹配提示；不参与 Agent dispatch。 */
+  intent?: {
+    keywords: string[];
+    examples?: string[];
+    parameterHints?: Record<string, 'identifier' | 'quoted' | 'number'>;
+  };
 }
 
 export class CapabilityQueryTemplateError extends Error {
@@ -104,6 +110,34 @@ export function parseCapabilityQueryTemplate(value: unknown): CapabilityQueryTem
   const parameterDefaults = raw.parameterDefaults === undefined
     ? undefined
     : plainObject(raw.parameterDefaults, `${capability}.parameterDefaults`);
+  const intent = (() => {
+    if (raw.intent === undefined) return undefined;
+    const intentRaw = plainObject(raw.intent, `${capability}.intent`);
+    if (!Array.isArray(intentRaw.keywords) || intentRaw.keywords.length === 0) {
+      throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.intent.keywords 不能为空`);
+    }
+    const keywords = intentRaw.keywords.map((keyword) => requireText(keyword, `${capability}.intent.keywords[]`, 80));
+    const examples = intentRaw.examples === undefined
+      ? undefined
+      : (() => {
+        if (!Array.isArray(intentRaw.examples)) throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.intent.examples 必须是数组`);
+        return intentRaw.examples.map((example) => requireText(example, `${capability}.intent.examples[]`, 300));
+      })();
+    const parameterHints = intentRaw.parameterHints === undefined
+      ? undefined
+      : (() => {
+        const hints = plainObject(intentRaw.parameterHints, `${capability}.intent.parameterHints`);
+        const parsed: Record<string, 'identifier' | 'quoted' | 'number'> = {};
+        for (const [name, hint] of Object.entries(hints)) {
+          if (hint !== 'identifier' && hint !== 'quoted' && hint !== 'number') {
+            throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.intent.parameterHints.${name} 必须是 identifier/quoted/number`);
+          }
+          parsed[name] = hint;
+        }
+        return parsed;
+      })();
+    return { keywords, ...(examples ? { examples } : {}), ...(parameterHints ? { parameterHints } : {}) };
+  })();
 
   const template: CapabilityQueryTemplate = {
     capability,
@@ -115,6 +149,7 @@ export function parseCapabilityQueryTemplate(value: unknown): CapabilityQueryTem
     requestTemplate: { path, params },
     parameterSchema,
     ...(parameterDefaults ? { parameterDefaults } : {}),
+    ...(intent ? { intent } : {}),
     ...(providerAgentId ? { providerAgentId } : {}),
   };
   if (typeof raw.description === 'string' && raw.description.trim()) {

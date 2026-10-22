@@ -6,6 +6,7 @@ import { summarizeExecutionResult, summarizeReasoningResult } from './execution-
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrderQuery, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=highest-risk-v1';
+import { buildCapabilityParams, matchCapabilityTemplate } from './capability-template-intent.js?v=capability-template-intent-v1';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
@@ -2028,6 +2029,91 @@ async function tryParseIntentRemote(text, agentId) {
   }
 }
 
+async function tryDispatchCapabilityTemplate(text) {
+  if (!selectedExecutionAgent) return false;
+  let templates = [];
+  try {
+    const response = await fetch(`/api/execution/capability-templates?agentId=${encodeURIComponent(selectedExecutionAgent)}`, {
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) return false;
+    const body = await response.json();
+    templates = Array.isArray(body?.templates) ? body.templates : [];
+  } catch {
+    return false;
+  }
+  if (!templates.length) return false;
+
+  const template = matchCapabilityTemplate(text, templates);
+  if (!template) {
+    appendExecutionMessage('agent', '没有匹配到该执行面 Agent 的 Hub 能力模板。请带上能力关键词，或先选择其他智能体。', null);
+    return true;
+  }
+  const params = buildCapabilityParams(text, template);
+  if (!params) {
+    appendExecutionMessage('agent', `已匹配能力模板「${template.title || template.capability}」，但没有提取到必填参数。请补充业务编号/关键字。`, null);
+    return true;
+  }
+
+  const pending = appendExecutionMessage('agent', `正在通过 Hub 能力模板查询：${template.title || template.capability}…`, null);
+  try {
+    const response = await fetch('/api/execution/capability-invocations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        capability: template.capability,
+        params,
+        fromAgentId: 'hub-execution-dashboard',
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (pending) pending.textEl.textContent = body.error || `能力调用失败（HTTP ${response.status}）`;
+      return true;
+    }
+    const orderId = body?.invocation?.borrowOrderId || body?.order?.orderId;
+    if (!orderId) {
+      if (pending) pending.textEl.textContent = '能力调用没有返回 borrowOrderId';
+      return true;
+    }
+    await pollCapabilityInvocation(orderId, pending);
+  } catch (error) {
+    if (pending) pending.textEl.textContent = `能力调用失败：${error?.message || error}`;
+  }
+  return true;
+}
+
+async function pollCapabilityInvocation(orderId, pending) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/api/borrow-orders/${encodeURIComponent(orderId)}`, { headers: { accept: 'application/json' } });
+      if (!response.ok) {
+        if (pending) pending.textEl.textContent = `读取借调结果失败（HTTP ${response.status}）`;
+        return;
+      }
+      const body = await response.json();
+      const order = body?.order ?? body;
+      if (order?.status === 'completed') {
+        if (pending) {
+          pending.textEl.textContent = `查询完成：${order.result?.total ?? '—'} 条\n${JSON.stringify(order.result ?? null, null, 2).slice(0, 2000)}`;
+        }
+        return;
+      }
+      if (['failed', 'cancelled', 'recalled'].includes(order?.status)) {
+        if (pending) {
+          pending.textEl.textContent = `查询未完成：${order?.error?.code || order?.status}${order?.error?.message ? ` — ${order.error.message}` : ''}`;
+        }
+        return;
+      }
+    } catch {
+      // 继续轮询
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  if (pending) pending.textEl.textContent = `查询仍未完成（borrowOrderId: ${orderId}），请稍后到「跨系统借调」查看。`;
+}
+
 async function sendExecutionQuery() {
   const input = $('#execution-chat-input');
   const text = input?.value?.trim() ?? '';
@@ -2119,6 +2205,8 @@ async function sendExecutionQuery() {
     appendExecutionMessage('agent', '当前 Agent 未声明查询能力，请使用“分析 / 评估 / 风险 / 建议”等推理表达。', null);
     return;
   }
+
+  if (await tryDispatchCapabilityTemplate(text)) return;
 
   const parsed = parseExecutionQuery(text);
   if (parsed.error) {

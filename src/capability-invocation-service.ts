@@ -80,6 +80,16 @@ const DEFAULT_TEMPLATES: CapabilityQueryTemplate[] = [
       pageNum: 1,
       pageSize: 5,
     },
+    intent: {
+      keywords: ['PLM', '研发项目', '研发', '项目', '图纸', '立项'],
+      examples: [
+        '查 PLM 项目 HJ.26033.V1.256JY',
+        '查询研发项目 HJ.26033.V1.256JY',
+      ],
+      parameterHints: {
+        keyword: 'identifier',
+      },
+    },
   },
   {
     capability: 'query_control_platform',

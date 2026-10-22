@@ -88,7 +88,7 @@ import { estimateUsageCostCny } from './model-pricing.ts';
 import { estimateUsageCostForModel } from './usage-cost.ts';
 import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
 import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
-import { BorrowOrderService, borrowOrderSummary } from './borrow-order-service.ts';
+import { BorrowOrderService, BorrowOrderServiceError, borrowOrderSummary } from './borrow-order-service.ts';
 import { CatalogApi } from './catalog-api.ts';
 import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
 import { verifySystemToken } from './system-token.ts';
@@ -103,7 +103,8 @@ import {
 } from './execution-identity.ts';
 import { BorrowOrderApi } from './borrow-order-api.ts';
 import { CapabilityInvocationApi } from './capability-invocation-api.ts';
-import { CapabilityInvocationService } from './capability-invocation-service.ts';
+import { CapabilityInvocationError, CapabilityInvocationService } from './capability-invocation-service.ts';
+import { CapabilityQueryTemplateError } from './capability-query-template.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
 import { OpsMonitor } from './ops-monitor.ts';
 import { ExecutionEventStore } from './execution-event-store.ts';
@@ -2397,6 +2398,54 @@ const server = createServer(async (req, res) => {
     const agents = snapshot.agents.filter((agent) => resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId);
     const agentIds = new Set(agents.map((agent) => agent.agentId));
     sendJson(res, 200, { agents, runs: snapshot.runs.filter((run) => agentIds.has(run.agentId)) });
+    return;
+  }
+  if (url.pathname === '/api/execution/capability-templates') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const agentId = url.searchParams.get('agentId')?.trim();
+    const templates = capabilityInvocationService.listTemplates().filter((template) => {
+      if (template.providerAgentId && agentId && template.providerAgentId !== agentId) return false;
+      return resolveTenantId(template.providerSystem, listSystems()) === requestTenantId;
+    });
+    sendJson(res, 200, { templates });
+    return;
+  }
+  if (url.pathname === '/api/execution/capability-invocations') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const body = await readJsonBody(req, 128 * 1024);
+      const result = capabilityInvocationService.invoke({
+        fromSystem: 'aeos-hub',
+        body: {
+          ...body,
+          fromAgentId: typeof body.fromAgentId === 'string' && body.fromAgentId.trim()
+            ? body.fromAgentId
+            : 'hub-execution-dashboard',
+        },
+      });
+      const terminal = result.order.status === 'completed' || result.order.status === 'failed';
+      sendJson(res, result.idempotent || terminal ? 200 : 202, {
+        invocation: {
+          capability: result.capability,
+          templateVersion: result.templateVersion,
+          borrowOrderId: result.order.orderId,
+          runId: result.order.runId,
+          status: result.order.status,
+        },
+        order: result.order,
+        idempotent: result.idempotent,
+      });
+    } catch (error) {
+      if (error instanceof CapabilityInvocationError) {
+        sendJson(res, error.httpStatus, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else if (error instanceof BorrowOrderServiceError) {
+        sendJson(res, error.httpStatus, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else if (error instanceof CapabilityQueryTemplateError) {
+        sendJson(res, error.code === 'INVALID_ARGUMENT' ? 400 : 500, { error: error.message, code: error.code });
+      } else {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+    }
     return;
   }
   const executionRunEventsMatch = url.pathname.match(/^\/api\/execution\/runs\/([^/]+)\/events$/);
