@@ -6,7 +6,7 @@ import { summarizeExecutionResult, summarizeReasoningResult } from './execution-
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrderQuery, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=highest-risk-v1';
-import { buildCapabilityParams, matchCapabilityTemplate } from './capability-template-intent.js?v=capability-template-intent-v1';
+import { buildCapabilityParams, matchCapabilityTemplate, summarizeCapabilityResult } from './capability-template-intent.js?v=capability-template-intent-v2';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
@@ -2076,14 +2076,14 @@ async function tryDispatchCapabilityTemplate(text) {
       if (pending) pending.textEl.textContent = '能力调用没有返回 borrowOrderId';
       return true;
     }
-    await pollCapabilityInvocation(orderId, pending);
+    await pollCapabilityInvocation(orderId, pending, template);
   } catch (error) {
     if (pending) pending.textEl.textContent = `能力调用失败：${error?.message || error}`;
   }
   return true;
 }
 
-async function pollCapabilityInvocation(orderId, pending) {
+async function pollCapabilityInvocation(orderId, pending, template) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     try {
@@ -2095,9 +2095,7 @@ async function pollCapabilityInvocation(orderId, pending) {
       const body = await response.json();
       const order = body?.order ?? body;
       if (order?.status === 'completed') {
-        if (pending) {
-          pending.textEl.textContent = `查询完成：${order.result?.total ?? '—'} 条\n${JSON.stringify(order.result ?? null, null, 2).slice(0, 2000)}`;
-        }
+        if (pending) pending.textEl.textContent = summarizeCapabilityResult(order.result, template);
         return;
       }
       if (['failed', 'cancelled', 'recalled'].includes(order?.status)) {

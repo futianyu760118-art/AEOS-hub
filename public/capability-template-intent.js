@@ -57,3 +57,52 @@ export function buildCapabilityParams(text, template) {
   }
   return params;
 }
+
+function present(value) {
+  return value !== undefined && value !== null && value !== '';
+}
+
+function displayValue(value) {
+  if (typeof value === 'number') return value.toLocaleString('zh-CN');
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  return String(value);
+}
+
+/** 把能力调用结果转成页面可读摘要；字段由模板 display 控制。 */
+export function summarizeCapabilityResult(result, template) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return '查询完成，但没有返回结构化结果。';
+  }
+  const display = template?.display && typeof template.display === 'object' ? template.display : {};
+  const labels = display.labels && typeof display.labels === 'object' ? display.labels : {};
+  const items = Array.isArray(result.items) ? result.items : [];
+  const total = present(result.total) ? result.total : items.length;
+  const meta = [
+    present(result.data_as_of) ? `${labels.data_as_of || '数据时间'}：${result.data_as_of}` : '',
+    present(result.data_confidence) ? `${labels.data_confidence || '数据置信度'}：${result.data_confidence}` : '',
+    present(result.stale) ? `${labels.stale || '是否过期'}：${displayValue(result.stale)}` : '',
+  ].filter(Boolean);
+
+  if (!items.length) {
+    return [`查询完成：共 ${displayValue(total)} 条，没有查到相关记录。`, ...meta].join('\n');
+  }
+
+  const titleKeys = Array.isArray(display.title) && display.title.length
+    ? display.title
+    : ['name', 'projectName', 'order_no', 'material_name'];
+  const first = items[0] && typeof items[0] === 'object' ? items[0] : {};
+  const fieldKeys = Array.isArray(display.fields) && display.fields.length
+    ? display.fields
+    : Object.keys(first).slice(0, 6);
+  const lines = items.slice(0, 12).map((item, index) => {
+    const title = titleKeys.map((key) => item?.[key]).find(present) || `记录 ${index + 1}`;
+    const details = fieldKeys
+      .filter((key) => present(item?.[key]))
+      .map((key) => `${labels[key] || key}：${displayValue(item[key])}`)
+      .join('；');
+    return `${index + 1}. ${title}${details ? `\n   ${details}` : ''}`;
+  });
+  const more = items.length > 12 ? `\n本页还有 ${items.length - 12} 条未展开。` : '';
+  return [`查询完成：共 ${displayValue(total)} 条`, ...lines, ...(more ? [more] : []), ...meta].join('\n');
+}
+

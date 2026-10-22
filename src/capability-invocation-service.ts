@@ -90,6 +90,22 @@ const DEFAULT_TEMPLATES: CapabilityQueryTemplate[] = [
         keyword: 'identifier',
       },
     },
+    display: {
+      title: ['projectName', 'projectNo'],
+      fields: ['projectNo', 'projectName', 'status', 'currentGate', 'owner', 'projectType', 'orderAmount'],
+      labels: {
+        projectNo: '项目号',
+        projectName: '项目名称',
+        status: '状态',
+        currentGate: '当前阶段',
+        owner: '负责人',
+        projectType: '项目类型',
+        orderAmount: '订单金额',
+        data_as_of: '数据时间',
+        data_confidence: '数据置信度',
+        stale: '是否过期',
+      },
+    },
   },
   {
     capability: 'query_control_platform',

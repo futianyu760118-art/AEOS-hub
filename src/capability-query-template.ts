@@ -33,6 +33,12 @@ export interface CapabilityQueryTemplate {
     examples?: string[];
     parameterHints?: Record<string, 'identifier' | 'quoted' | 'number'>;
   };
+  /** 结果展示提示：只影响页面可读摘要，不影响执行。 */
+  display?: {
+    title?: string[];
+    fields?: string[];
+    labels?: Record<string, string>;
+  };
 }
 
 export class CapabilityQueryTemplateError extends Error {
@@ -138,6 +144,31 @@ export function parseCapabilityQueryTemplate(value: unknown): CapabilityQueryTem
       })();
     return { keywords, ...(examples ? { examples } : {}), ...(parameterHints ? { parameterHints } : {}) };
   })();
+  const display = (() => {
+    if (raw.display === undefined) return undefined;
+    const displayRaw = plainObject(raw.display, `${capability}.display`);
+    const stringList = (value: unknown, field: string): string[] | undefined => {
+      if (value === undefined) return undefined;
+      if (!Array.isArray(value)) throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.display.${field} 必须是数组`);
+      return value.map((item) => requireText(item, `${capability}.display.${field}[]`, 120));
+    };
+    const labels = displayRaw.labels === undefined
+      ? undefined
+      : (() => {
+        const rawLabels = plainObject(displayRaw.labels, `${capability}.display.labels`);
+        return Object.fromEntries(Object.entries(rawLabels).map(([key, value]) => [
+          key,
+          requireText(value, `${capability}.display.labels.${key}`, 80),
+        ]));
+      })();
+    const title = stringList(displayRaw.title, 'title');
+    const fields = stringList(displayRaw.fields, 'fields');
+    return {
+      ...(title ? { title } : {}),
+      ...(fields ? { fields } : {}),
+      ...(labels ? { labels } : {}),
+    };
+  })();
 
   const template: CapabilityQueryTemplate = {
     capability,
@@ -150,6 +181,7 @@ export function parseCapabilityQueryTemplate(value: unknown): CapabilityQueryTem
     parameterSchema,
     ...(parameterDefaults ? { parameterDefaults } : {}),
     ...(intent ? { intent } : {}),
+    ...(display ? { display } : {}),
     ...(providerAgentId ? { providerAgentId } : {}),
   };
   if (typeof raw.description === 'string' && raw.description.trim()) {
