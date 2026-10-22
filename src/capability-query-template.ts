@@ -21,7 +21,7 @@ export interface CapabilityQueryTemplate {
   /** 渲染后发送给执行面 Agent 的只读请求。 */
   requestTemplate: {
     path: string;
-    params: Record<string, unknown>;
+    params: Record<string, unknown> | string;
   };
   /** 调用方 params 的校验规则。 */
   parameterSchema: Schema;
@@ -79,13 +79,27 @@ export function parseCapabilityQueryTemplate(value: unknown): CapabilityQueryTem
 
   const requestTemplate = plainObject(raw.requestTemplate, `${capability}.requestTemplate`);
   const path = requireText(requestTemplate.path, `${capability}.requestTemplate.path`, 512);
-  if (!path.startsWith('/')) {
-    throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.requestTemplate.path 必须以 / 开头`);
+  const pathPlaceholder = path.match(/^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$/);
+  if (!pathPlaceholder && !path.startsWith('/')) {
+    throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.requestTemplate.path 必须以 / 开头，或使用 {{parameter}} 占位符`);
   }
-  const params = plainObject(requestTemplate.params, `${capability}.requestTemplate.params`);
+  const rawRequestParams = requestTemplate.params;
   const parameterSchema = plainObject(raw.parameterSchema, `${capability}.parameterSchema`) as unknown as Schema;
   if (validateAgainstSchema({}, parameterSchema) !== null && parameterSchema.type !== 'object') {
     throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.parameterSchema 必须是 object schema`);
+  }
+  let params: Record<string, unknown> | string;
+  if (typeof rawRequestParams === 'string') {
+    const paramsPlaceholder = rawRequestParams.match(/^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$/);
+    if (!paramsPlaceholder || !(paramsPlaceholder[1] in (parameterSchema.properties ?? {}))) {
+      throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.requestTemplate.params 必须是对象，或引用已定义的 object 参数`);
+    }
+    params = rawRequestParams;
+  } else {
+    params = plainObject(rawRequestParams, `${capability}.requestTemplate.params`);
+  }
+  if (pathPlaceholder && !(pathPlaceholder[1] in (parameterSchema.properties ?? {}))) {
+    throw new CapabilityQueryTemplateError('INVALID_TEMPLATE', `${capability}.requestTemplate.path 引用的参数未定义：${pathPlaceholder[1]}`);
   }
   const parameterDefaults = raw.parameterDefaults === undefined
     ? undefined

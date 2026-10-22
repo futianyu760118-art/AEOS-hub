@@ -84,7 +84,7 @@ test('未认证调用返回 401 并审计', (t) => {
   assert.equal(evidence.length, 1);
 });
 
-test('GET templates 返回安全的 PLM 能力模板', (t) => {
+test('GET templates 返回 PLM 与中台只读能力模板', (t) => {
   const { api } = fixture(t);
   const list = api.handle({
     method: 'GET',
@@ -94,8 +94,11 @@ test('GET templates 返回安全的 PLM 能力模板', (t) => {
   });
   assert.equal(list?.status, 200);
   const templates = (list.body.templates as Array<Record<string, unknown>>);
-  assert.equal(templates.length, 1);
-  assert.equal(templates[0]?.capability, 'query_plm');
+  assert.equal(templates.length, 2);
+  assert.deepEqual(
+    templates.map((template) => template.capability),
+    ['query_control_platform', 'query_plm'],
+  );
   assert.equal('readOnly' in templates[0]!, false);
 });
 

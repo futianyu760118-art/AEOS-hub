@@ -29,8 +29,29 @@ function agent(): ExecutionAgentRecord {
   };
 }
 
+function controlQueryAgent(): ExecutionAgentRecord {
+  return {
+    agentId: 'runtime-control-platform-query',
+    name: '公司中台查询智能体',
+    version: '1.0.0',
+    capabilities: [{
+      name: 'query_control_platform',
+      description: '中台只读查询',
+      constraints: { readOnly: true },
+    }],
+    connectionStatus: 'online',
+    runtimeStatus: 'idle',
+    lastSeenAt: '2026-10-22T00:00:00.000Z',
+    currentRunId: null,
+    registeredAt: '2026-10-01T00:00:00.000Z',
+    local: false,
+    sourceSystem: 'control-platform',
+    deregisteredAt: null,
+  };
+}
+
 function makePlane() {
-  const agents = [agent()];
+  const agents = [agent(), controlQueryAgent()];
   const dispatches: Array<{ agentId: string; capability: string; input: unknown }> = [];
   return {
     dispatches,
@@ -127,6 +148,44 @@ test('未知模板、非法参数、未知字段和自系统调用拒绝', (t) =
     () => service.invoke({
       fromSystem: 'hengjian-plm',
       body: { capability: 'query_plm', params: { keyword: 'X' } },
+    }),
+    (error: unknown) => (error as Error).message.includes('不能通过能力调用查询本系统'),
+  );
+});
+
+test('PLM 可通过 query_control_platform 模板回查中台', (t) => {
+  const { service, plane } = fixture(t);
+  const result = service.invoke({
+    fromSystem: 'hengjian-plm',
+    body: {
+      capability: 'query_control_platform',
+      params: {
+        path: '/external/orders/list',
+        params: { page: 1, page_size: 5 },
+      },
+      requestId: 'req-control-1',
+      fromAgentId: 'runtime-execution-query',
+    },
+  });
+
+  assert.equal(result.order.status, 'dispatched');
+  assert.equal(result.order.providerSystem, 'control-platform');
+  assert.equal(result.order.providerAgentId, 'runtime-control-platform-query');
+  assert.deepEqual(plane.dispatches.at(-1)?.input, {
+    path: '/external/orders/list',
+    params: { page: 1, page_size: 5 },
+  });
+});
+
+test('中台不能通过 query_control_platform 调用本系统', (t) => {
+  const { service } = fixture(t);
+  assert.throws(
+    () => service.invoke({
+      fromSystem: 'control-platform',
+      body: {
+        capability: 'query_control_platform',
+        params: { path: '/external/orders/list' },
+      },
     }),
     (error: unknown) => (error as Error).message.includes('不能通过能力调用查询本系统'),
   );

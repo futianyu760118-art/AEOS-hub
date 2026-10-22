@@ -81,6 +81,53 @@ const DEFAULT_TEMPLATES: CapabilityQueryTemplate[] = [
       pageSize: 5,
     },
   },
+  {
+    capability: 'query_control_platform',
+    version: '1.0.0',
+    title: '查询中台只读业务数据',
+    description: '按中台冻结白名单查询订单、齐套、物料、供应商、质量、生产等只读数据。',
+    domain: 'control-platform',
+    providerSystem: 'control-platform',
+    providerAgentId: 'runtime-control-platform-query',
+    readOnly: true,
+    requestTemplate: {
+      path: '{{path}}',
+      params: '{{params}}',
+    },
+    parameterSchema: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: {
+          type: 'string',
+          enum: [
+            '/common/ping',
+            '/external/orders/list',
+            '/external/order-details/list',
+            '/external/boms/tree',
+            '/external/materials/list',
+            '/external/suppliers/list',
+            '/external/material-kitting/results',
+            '/external/material-kitting/shortages',
+            '/external/material-kitting/demands',
+            '/external/inventory/availability',
+            '/external/material-supplies/list',
+            '/external/quality-issues/list',
+            '/external/quality-trace/list',
+            '/external/production/work-orders/list',
+            '/external/production/operations/list',
+            '/external/production/order-links/list',
+            '/external/production/reports/list',
+            '/external/production/capacity/list',
+          ],
+        },
+        params: { type: 'object' },
+      },
+    },
+    parameterDefaults: {
+      params: {},
+    },
+  },
 ];
 
 function mergeTemplates(defaults: CapabilityQueryTemplate[], overrides: unknown): CapabilityQueryTemplate[] {

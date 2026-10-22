@@ -74,3 +74,60 @@ test('未知参数和 schema 错误拒绝', () => {
     (error: unknown) => error instanceof CapabilityQueryTemplateError && error.code === 'INVALID_ARGUMENT',
   );
 });
+
+test('path 可引用受 schema 枚举保护的参数', () => {
+  const generic = parseCapabilityQueryTemplate({
+    capability: 'query_control_platform',
+    version: '1.0.0',
+    title: '查询中台只读业务数据',
+    domain: 'control-platform',
+    providerSystem: 'control-platform',
+    providerAgentId: 'runtime-control-platform-query',
+    readOnly: true,
+    requestTemplate: { path: '{{path}}', params: '{{params}}' },
+    parameterSchema: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: { type: 'string', enum: ['/external/orders/list', '/external/materials/list'] },
+        params: { type: 'object' },
+      },
+    },
+    parameterDefaults: { params: {} },
+  });
+
+  const rendered = renderCapabilityQuery(generic, {
+    path: '/external/orders/list',
+    params: { page: 1, page_size: 5 },
+  });
+  assert.deepEqual(rendered, {
+    path: '/external/orders/list',
+    params: { page: 1, page_size: 5 },
+  });
+
+  assert.throws(
+    () => renderCapabilityQuery(generic, { path: '/not/allowed' }),
+    (error: unknown) => error instanceof CapabilityQueryTemplateError && error.code === 'INVALID_ARGUMENT',
+  );
+});
+
+test('path 占位符引用未定义参数时模板拒绝', () => {
+  assert.throws(
+    () => parseCapabilityQueryTemplate({
+      capability: 'bad_path_template',
+      version: '1.0.0',
+      title: 'bad',
+      domain: 'test',
+      providerSystem: 'test',
+      readOnly: true,
+      requestTemplate: { path: '{{endpoint}}', params: {} },
+      parameterSchema: {
+        type: 'object',
+        required: ['path'],
+        properties: { path: { type: 'string' } },
+      },
+    }),
+    (error: unknown) => error instanceof CapabilityQueryTemplateError && /引用的参数未定义/.test(error.message),
+  );
+});
+
