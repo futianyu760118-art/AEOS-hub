@@ -332,7 +332,9 @@ setInterval(() => {
 setInterval(() => {
   executionPlane.markStaleOffline();
   const timedOut = executionPlane.markRunTimeouts();
+  const orphaned = executionPlane.reconcileIdleRuns();
   if (timedOut > 0) console.warn(`[execution-plane] 运行超时：${timedOut}`);
+  if (orphaned > 0) console.warn(`[execution-plane] 空闲孤儿任务：${orphaned}`);
 }, 5_000);
 
 const companyControlPython = process.platform === 'win32'

@@ -108,6 +108,7 @@ const DEFAULT_HEARTBEAT_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
 const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_TIMEOUT_MS = 60_000;
 const DEFAULT_REASONING_TIMEOUT_MS = 240_000;
+const DEFAULT_IDLE_RECONCILE_GRACE_MS = 30_000;
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0']);
 
 function isReasoningCapability(capability: string): boolean {
@@ -239,6 +240,7 @@ export class ExecutionPlaneRegistry {
   private readonly dispatchTimeoutMs: number;
   private readonly queryTimeoutMs: number;
   private readonly reasoningTimeoutMs: number;
+  private readonly idleReconcileGraceMs: number;
   private readonly idFactory: () => string;
   private readonly clock: () => Date;
   private readonly onChange?: () => void;
@@ -252,6 +254,7 @@ export class ExecutionPlaneRegistry {
     dispatchTimeoutMs?: number;
     queryTimeoutMs?: number;
     reasoningTimeoutMs?: number;
+    idleReconcileGraceMs?: number;
     idFactory?: () => string;
     clock?: () => Date;
     onChange?: () => void;
@@ -264,6 +267,7 @@ export class ExecutionPlaneRegistry {
     this.dispatchTimeoutMs = options.dispatchTimeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
     this.reasoningTimeoutMs = options.reasoningTimeoutMs ?? DEFAULT_REASONING_TIMEOUT_MS;
+    this.idleReconcileGraceMs = options.idleReconcileGraceMs ?? DEFAULT_IDLE_RECONCILE_GRACE_MS;
     this.idFactory = options.idFactory ?? randomUUID;
     this.clock = options.clock ?? (() => new Date());
     this.onChange = options.onChange;
@@ -400,6 +404,30 @@ export class ExecutionPlaneRegistry {
         ? `派单后 ${timeoutMs}ms 未收到执行面响应`
         : `执行超过 ${timeoutMs}ms 未完成`;
       if (this.failRun(run, code, message)) count += 1;
+    }
+    return count;
+  }
+
+  /** Agent 已空闲/离线但 run 仍非终态：超过宽限期后回收，避免死单。 */
+  reconcileIdleRuns(): number {
+    const now = this.clock().getTime();
+    let count = 0;
+    for (const run of this.runs.values()) {
+      if (run.state !== 'dispatched' && run.state !== 'running') continue;
+      const startedAt = new Date(run.startedAt).getTime();
+      if (Number.isNaN(startedAt) || now - startedAt < this.idleReconcileGraceMs) continue;
+      const entry = this.agents.get(run.agentId);
+      if (!entry) {
+        if (this.failRun(run, 'ORPHANED_AGENT_MISSING', '执行面已不存在，任务无法回写')) count += 1;
+        continue;
+      }
+      if (entry.record.connectionStatus !== 'online') {
+        if (this.failRun(run, 'ORPHANED_AGENT_OFFLINE', '执行面已离线，任务无法回写')) count += 1;
+        continue;
+      }
+      if (entry.record.runtimeStatus !== 'working') {
+        if (this.failRun(run, 'ORPHANED_AGENT_IDLE', '执行面已空闲但任务未回写')) count += 1;
+      }
     }
     return count;
   }

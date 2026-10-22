@@ -19,7 +19,12 @@ const CAPABILITIES = [{
 
 function fixture(
   t: { after: (fn: () => void) => void },
-  options: { dispatchTimeoutMs?: number; queryTimeoutMs?: number; reasoningTimeoutMs?: number } = {},
+  options: {
+    dispatchTimeoutMs?: number;
+    queryTimeoutMs?: number;
+    reasoningTimeoutMs?: number;
+    idleReconcileGraceMs?: number;
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'execution-callbacks-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -164,3 +169,43 @@ test('已完成的 run 不会被超时扫描误杀', (t) => {
   assert.equal(registry.markRunTimeouts(), 0);
   assert.equal(registry.getRun(runId)?.state, 'completed');
 });
+
+test('Agent 空闲超过宽限期，回收未回写的 run', (t) => {
+  const { registry, clock } = fixture(t, { idleReconcileGraceMs: 1_000 });
+  const runId = dispatch(registry);
+  registry.onHeartbeat('agent-1', { status: 'idle', currentRunId: null });
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.reconcileIdleRuns(), 1);
+  const run = registry.getRun(runId);
+  assert.equal(run?.state, 'failed');
+  assert.equal(run?.error?.code, 'ORPHANED_AGENT_IDLE');
+});
+
+test('Agent 仍在 working 时不回收', (t) => {
+  const { registry, clock } = fixture(t, { idleReconcileGraceMs: 1_000 });
+  const runId = dispatch(registry);
+  registry.onHeartbeat('agent-1', { status: 'working', currentRunId: runId });
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.reconcileIdleRuns(), 0);
+  assert.equal(registry.getRun(runId)?.state, 'dispatched');
+});
+
+test('Agent 离线超过宽限期，回收未回写的 run', (t) => {
+  const { registry, clock } = fixture(t, { idleReconcileGraceMs: 1_000 });
+  const runId = dispatch(registry);
+  registry.disconnect('agent-1');
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.reconcileIdleRuns(), 1);
+  const run = registry.getRun(runId);
+  assert.equal(run?.state, 'failed');
+  assert.equal(run?.error?.code, 'ORPHANED_AGENT_OFFLINE');
+});
+
+test('宽限期内不回收，避免与正常派单竞争', (t) => {
+  const { registry, clock } = fixture(t, { idleReconcileGraceMs: 1_000 });
+  const runId = dispatch(registry);
+  clock.current = new Date('2026-10-19T09:00:00.500Z');
+  assert.equal(registry.reconcileIdleRuns(), 0);
+  assert.equal(registry.getRun(runId)?.state, 'dispatched');
+});
+
