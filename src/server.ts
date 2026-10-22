@@ -102,6 +102,8 @@ import {
   type RegisteredSystem,
 } from './execution-identity.ts';
 import { BorrowOrderApi } from './borrow-order-api.ts';
+import { CapabilityInvocationApi } from './capability-invocation-api.ts';
+import { CapabilityInvocationService } from './capability-invocation-service.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
 import { OpsMonitor } from './ops-monitor.ts';
 import { ExecutionEventStore } from './execution-event-store.ts';
@@ -282,6 +284,25 @@ borrowOrderService = new BorrowOrderService({
 const borrowOrderApi = new BorrowOrderApi({
   rootSecret: EXECUTION_PLANE_TOKEN,
   service: borrowOrderService,
+  appendEvidence,
+});
+let capabilityTemplateOverrides: unknown;
+try {
+  const capabilityTemplateFile = join(dataDir, 'capability-query-templates.json');
+  if (existsSync(capabilityTemplateFile)) {
+    capabilityTemplateOverrides = JSON.parse(readFileSync(capabilityTemplateFile, 'utf8'));
+  }
+} catch (error) {
+  console.warn('[capability-invocation] 模板覆盖文件加载失败，使用内置模板:', (error as Error).message);
+}
+const capabilityInvocationService = new CapabilityInvocationService({
+  borrowOrders: borrowOrderService,
+  executionPlane,
+  templates: capabilityTemplateOverrides,
+});
+const capabilityInvocationApi = new CapabilityInvocationApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  service: capabilityInvocationService,
   appendEvidence,
 });
 const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
@@ -1752,6 +1773,33 @@ const server = createServer(async (req, res) => {
         query: url.searchParams,
       });
       if (!outcome) sendJson(res, 404, { error: 'borrow-order endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 能力模板自动派单（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/capability-invocations')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = capabilityInvocationApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'capability-invocation endpoint not found' });
       else sendJson(res, outcome.status, outcome.body);
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
