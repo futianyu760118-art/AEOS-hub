@@ -6229,6 +6229,24 @@ function harborAgentActivity(agent) {
 
 const CATALOG_LEVEL_LABELS = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
 const CATALOG_DOMAIN_LABELS = { order: '订单交付', kitting: '物料齐套', quality: '质量异常', production: '生产进度', 'cross-domain': '跨系统协同' };
+// Hub 侧保留中枢 Agent（跨系统协同），隐藏当前没有实际业务入口的 10 个 L1 编队 Agent。
+// 只影响 AI 港湾目录展示，不删除数据、不影响执行面或已有引用。
+const HIDDEN_HUB_AGENT_IDS = new Set([
+  'agent-bcaa0313-4b26-4db2-bb22-2ad88d7d826e',
+  'agent-83347684-ce5f-4480-8cfe-b7c37913c3e4',
+  'agent-9ccf336f-262b-4ddd-ab7b-a348a63db88b',
+  'agent-4724207f-8202-4c73-bda1-fc4dc1c60329',
+  'agent-45cb0025-7d48-4a38-b9f4-079c4f65e37f',
+  'agent-b734fb5b-bcff-4168-a80a-d95c1748cc0c',
+  'agent-b39514bd-f389-4766-a83f-100423b8e84f',
+  'agent-ce5fbb98-972a-4fc6-b749-c03f167d400d',
+  'agent-d5fed80d-dd24-4677-ae0e-49c6c99ec186',
+  'agent-2e8c835f-b6d5-4a93-a9f6-e52b265d30bf',
+]);
+
+function isCatalogAgentHidden(agent, system) {
+  return system?.id === 'aeos-hub' && HIDDEN_HUB_AGENT_IDS.has(agent?.id);
+}
 
 function catalogFilterActive() {
   return Boolean(String(harborAgentFilter.query || '').trim())
@@ -6238,6 +6256,7 @@ function catalogFilterActive() {
 }
 
 function catalogAgentMatches(agent, system) {
+  if (isCatalogAgentHidden(agent, system)) return false;
   if (harborAgentFilter.level !== 'all' && agent.hierarchyLevel !== harborAgentFilter.level) return false;
   if (harborAgentFilter.status !== 'all' && agent.status !== harborAgentFilter.status) return false;
   if (harborAgentFilter.domain !== 'all' && !(agent.domainIds || []).includes(harborAgentFilter.domain)) return false;
@@ -6369,13 +6388,14 @@ function renderHarbor() {
   const runs = Array.isArray(harbor.runs) ? harbor.runs : [];
   const runtimeById = new Map(runtimes.map((item) => [item.id, item]));
   const agentById = new Map(agents.map((item) => [item.id, item]));
-  const schedulableAgents = agents.filter((item) => ['idle', 'working'].includes(item.status)).length;
+  const visibleAgents = agents.filter((item) => !HIDDEN_HUB_AGENT_IDS.has(item.id));
+  const schedulableAgents = visibleAgents.filter((item) => ['idle', 'working'].includes(item.status)).length;
   const onlineRuntimes = runtimes.filter((item) => ['online', 'busy'].includes(item.status)).length;
   const readyRuntimes = runtimes.filter((item) => ['ready', 'online', 'busy'].includes(item.status)).length;
   const activeProjects = projects.filter((item) => item.status === 'in_progress').length;
   const activeRuns = runs.filter((item) => ['queued', 'running', 'waiting_approval'].includes(item.status)).length;
 
-  els.harborAgentCount.textContent = String(agents.length);
+  els.harborAgentCount.textContent = String(visibleAgents.length);
   els.harborAgentActive.textContent = `${schedulableAgents} 个可调度`;
   els.harborRuntimeCount.textContent = String(runtimes.length);
   els.harborRuntimeOnline.textContent = `${onlineRuntimes} 个在线 · ${readyRuntimes} 个可用`;
@@ -6402,12 +6422,17 @@ function renderHarbor() {
     const domains = system.domains.map((domain) => {
       const members = domain.agents.filter((agent) => catalogAgentMatches(agent, system));
       return { ...domain, agents: members, agentCount: members.length };
-    }).filter((domain) => domain.agents.length > 0 || !activeFilter);
+    }).filter((domain) => domain.agents.length > 0 || (!activeFilter && system.id !== 'aeos-hub'));
     return { ...system, domains, agentCount: domains.reduce((sum, domain) => sum + domain.agentCount, 0) };
-  }).filter((system) => system.agentCount > 0 || !activeFilter);
+  }).filter((system) => system.agentCount > 0 || (!activeFilter && system.id !== 'aeos-hub'));
 
   if (els.catalogSummary) {
-    const counts = catalogTree?.counts;
+    const visibleSystems = filteredSystems.filter((system) => system.agentCount > 0);
+    const visibleDomains = visibleSystems.reduce((sum, system) => sum + system.domains.filter((domain) => domain.agentCount > 0).length, 0);
+    const visibleAgents = visibleSystems.reduce((sum, system) => sum + system.agentCount, 0);
+    const counts = catalogTree
+      ? { systems: visibleSystems.length, domains: visibleDomains, agents: visibleAgents, unregisteredInHarbor: catalogTree.counts?.unregisteredInHarbor ?? 0 }
+      : null;
     els.catalogSummary.innerHTML = counts
       ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体${hasUsage ? ` · 累计 ¥${formatUsageCost(totalCost)}` : ''}</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
       : '';

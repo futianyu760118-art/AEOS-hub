@@ -50,6 +50,15 @@ test('AI 港湾智能体目录提供三级树、业务域筛选与两种视图',
   assert.match(css, /\.catalog-agent-row\s*\{/);
 });
 
+test('AI 港湾默认隐藏 Hub 下无实际入口的 10 个 L1 编队 Agent', () => {
+  const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
+  assert.match(app, /const HIDDEN_HUB_AGENT_IDS = new Set\(\[/);
+  assert.equal((app.match(/agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) ?? []).length >= 10, true);
+  assert.match(app, /function isCatalogAgentHidden\(/);
+  assert.match(app, /if \(isCatalogAgentHidden\(agent, system\)\) return false/);
+  assert.match(app, /agent-aeos-hub/);
+});
+
 test('智能体目录不再依赖小队筛选或加入小队入口', () => {
   const html = readFileSync(join(root, 'public', 'index.html'), 'utf8');
   const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
