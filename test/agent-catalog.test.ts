@@ -107,14 +107,14 @@ function sources(): CatalogSources {
     ],
     usage: {
       byAgent: [
-        { agentId: 'agent-aeos-hub', tokensIn: 100, tokensOut: 50, cost: 0.01, events: 2, lastAt: NOW },
-        { agentId: 'runtime-control-platform-agent', tokensIn: 0, tokensOut: 0, cost: 0, events: 3, lastAt: '2026-10-19T08:32:04.692Z' },
-        { agentId: 'control-platform-assistant', tokensIn: 200, tokensOut: 20, cost: 1.5, events: 5, lastAt: NOW },
-        { agentId: 'runtime-simulated-agent', tokensIn: 0, tokensOut: 0, cost: 0, events: 9, lastAt: NOW },
+        { agentId: 'agent-aeos-hub', tokensIn: 100, tokensOut: 50, cost: 0.01, events: 2, queryEvents: 0, modelEvents: 2, lastAt: NOW },
+        { agentId: 'runtime-control-platform-agent', tokensIn: 0, tokensOut: 0, cost: 0, events: 3, queryEvents: 3, modelEvents: 0, lastAt: '2026-10-19T08:32:04.692Z' },
+        { agentId: 'control-platform-assistant', tokensIn: 200, tokensOut: 20, cost: 1.5, events: 5, queryEvents: 0, modelEvents: 5, lastAt: NOW },
+        { agentId: 'runtime-simulated-agent', tokensIn: 0, tokensOut: 0, cost: 0, events: 9, queryEvents: 9, modelEvents: 0, lastAt: NOW },
       ],
       bySystem: [
-        { systemId: 'aeos-hub', tokensIn: 100, tokensOut: 50, cost: 0.01, events: 2, lastAt: NOW },
-        { systemId: '公司中控平台（本机演示）', tokensIn: 200, tokensOut: 20, cost: 1.5, events: 17, lastAt: NOW },
+        { systemId: 'aeos-hub', tokensIn: 100, tokensOut: 50, cost: 0.01, events: 2, queryEvents: 0, modelEvents: 2, lastAt: NOW },
+        { systemId: '公司中控平台（本机演示）', tokensIn: 200, tokensOut: 20, cost: 1.5, events: 17, queryEvents: 9, modelEvents: 8, lastAt: NOW },
       ],
     },
   };

@@ -860,7 +860,19 @@ function usageTableHtml(rows, key, emptyText) {
   const body = rows.map((row) => {
     const raw = row[key];
     const label = key === 'agentId' ? usageAgentLabel(raw) : usageSystemLabel(raw);
-    return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span><span class="num">${formatTokenCount(row.tokensIn)}</span><span class="num">${formatTokenCount(row.tokensOut)}</span><span class="num">¥${formatUsageCost(row.cost)}</span><span class="num">${formatTokenCount(row.events)}</span></div>`;
+    const tokens = (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0);
+    const queryOnly = (Number(row.events) || 0) > 0
+      && Number(row.queryEvents) === Number(row.events)
+      && tokens === 0
+      && Number(row.cost) === 0;
+    const inputCell = queryOnly
+      ? '<span class="num" title="查询接口不经过模型，不产生模型 Token">无模型 Token</span>'
+      : `<span class="num">${formatTokenCount(row.tokensIn)}</span>`;
+    const outputCell = queryOnly ? '<span class="num">—</span>' : `<span class="num">${formatTokenCount(row.tokensOut)}</span>`;
+    const costCell = queryOnly
+      ? '<span class="num" title="查询接口不产生模型费用">—</span>'
+      : `<span class="num">¥${formatUsageCost(row.cost)}</span>`;
+    return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span>${inputCell}${outputCell}${costCell}<span class="num">${formatTokenCount(row.events)}</span></div>`;
   }).join('');
   return `<div class="harbor-table usage-table"><div class="harbor-row harbor-head"><span>${head}</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">调用次数</span></div>${body}</div>`;
 }
@@ -6284,12 +6296,23 @@ function agentExpectsModelUsage(agent) {
   return skills.length === 0 || skills.some((skill) => !String(skill).startsWith('query'));
 }
 
+function usageIsQueryOnly(usage) {
+  if (!usage || Number(usage.events) <= 0) return false;
+  const tokens = (Number(usage.tokensIn) || 0) + (Number(usage.tokensOut) || 0);
+  return Number(usage.queryEvents) === Number(usage.events)
+    && tokens === 0
+    && Number(usage.cost) === 0;
+}
+
 function catalogUsageHtml(usage, agent) {
   if (!usage || usage.events === 0) {
     return '<span class="catalog-usage empty"><strong>—</strong><small>未产生记账</small></span>';
   }
   const tokens = usage.tokensIn + usage.tokensOut;
   const missing = tokens === 0 && usage.cost === 0;
+  if (usageIsQueryOnly(usage)) {
+    return `<span class="catalog-usage empty"><strong>无模型 Token</strong><small>${usage.events} 次查询接口</small></span>`;
+  }
   if (missing) {
     if (agent && !agentExpectsModelUsage(agent)) {
       return `<span class="catalog-usage empty"><strong>无模型 Token</strong><small>${usage.events} 次查询接口</small></span>`;
@@ -6302,19 +6325,22 @@ function catalogUsageHtml(usage, agent) {
 function catalogAgentUsageDetail(agent, system) {
   const usage = agent.usage;
   const tokens = usage ? usage.tokensIn + usage.tokensOut : 0;
-  const modelExpected = agentExpectsModelUsage(agent);
-  const missing = Boolean(usage && usage.events > 0 && tokens === 0 && usage.cost === 0);
+  const queryOnly = usageIsQueryOnly(usage);
+  const modelExpected = !queryOnly && agentExpectsModelUsage(agent);
+  const missing = Boolean(usage && usage.events > 0 && tokens === 0 && usage.cost === 0 && !queryOnly);
   const card = (label, value, note, tone = '') => `<div class="catalog-usage-card"><span>${esc(label)}</span><strong class="${tone}">${esc(value)}</strong><small>${esc(note)}</small></div>`;
   return `<div class="catalog-agent-detail">
     <div class="catalog-usage-cards">
-      ${card('已记账成本', usage ? `¥${formatUsageCost(usage.cost)}` : '—', usage ? `${usage.events} 次记账` : '暂无用量')}
-      ${card('Token', usage && tokens > 0 ? formatTokenCount(tokens) : (modelExpected ? '未上报' : '无模型调用'), missing ? (modelExpected ? '输入 / 输出均缺失' : '查询接口不产生模型 Token') : '输入 + 输出', missing ? 'missing' : '')}
+      ${card('已记账成本', queryOnly ? '—' : (usage ? `¥${formatUsageCost(usage.cost)}` : '—'), queryOnly ? '查询接口不产生模型费用' : (usage ? `${usage.events} 次记账` : '暂无用量'))}
+      ${card('Token', queryOnly ? '无模型 Token' : (usage && tokens > 0 ? formatTokenCount(tokens) : (modelExpected ? '未上报' : '无模型调用')), queryOnly ? '纯查询接口不产生模型 Token' : (missing ? (modelExpected ? '输入 / 输出均缺失' : '查询接口不产生模型 Token') : '输入 + 输出'), missing ? 'missing' : '')}
       ${card('执行次数', usage ? String(usage.events) : '0', '来自 run_complete')}
       ${card('最近调用', usage?.lastAt ? formatHarborTime(usage.lastAt) : '—', agent.status === 'archived' ? '已归档' : '该 Agent')}
     </div>
-    ${missing ? (modelExpected
-      ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>'
-      : '<div class="catalog-usage-note"><b>无模型调用</b>：该 Agent 只有查询接口，不产生模型 Token；执行次数来自 run_complete，成本为 ¥0.00 属正常。</div>') : ''}
+    ${queryOnly
+      ? '<div class="catalog-usage-note"><b>无模型费用</b>：这些执行是纯查询接口，不经过模型；调用次数来自 run_complete，Token 和成本为 0 属正常。</div>'
+      : missing ? (modelExpected
+        ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>'
+        : '<div class="catalog-usage-note"><b>无模型调用</b>：该 Agent 只有查询接口，不产生模型 Token；执行次数来自 run_complete，成本为 ¥0.00 属正常。</div>') : ''}
     <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看用量明细</button></div>
   </div>`;
 }

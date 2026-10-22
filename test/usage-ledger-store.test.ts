@@ -143,8 +143,8 @@ test('aggregateByAgent 按成本降序聚合', (t) => {
   store.append(input({ agentId: 'agent-a', cost: 2, tokensIn: 5, tokensOut: 5 }));
   const rows = store.aggregateByAgent();
   assert.equal(rows.length, 2);
-  assert.deepEqual(rows[0], { agentId: 'agent-b', tokensIn: 0, tokensOut: 20, cost: 5, events: 1, lastAt: '2026-10-16T08:00:01.000Z' });
-  assert.deepEqual(rows[1], { agentId: 'agent-a', tokensIn: 15, tokensOut: 5, cost: 3, events: 2, lastAt: '2026-10-16T08:00:01.000Z' });
+  assert.deepEqual(rows[0], { agentId: 'agent-b', tokensIn: 0, tokensOut: 20, cost: 5, events: 1, queryEvents: 0, modelEvents: 1, lastAt: '2026-10-16T08:00:01.000Z' });
+  assert.deepEqual(rows[1], { agentId: 'agent-a', tokensIn: 15, tokensOut: 5, cost: 3, events: 2, queryEvents: 0, modelEvents: 2, lastAt: '2026-10-16T08:00:01.000Z' });
 });
 
 test('aggregateBySystem 按系统聚合', (t) => {
@@ -170,6 +170,15 @@ test('用量事件默认归属试点租户，并可按租户过滤', (t) => {
   assert.equal(tenantBRows[0]?.cost, 2);
   assert.equal(store.list(10, 'tenant-demo').length, 1);
   assert.equal(store.list(10, 'tenant-b').length, 1);
+});
+
+test('纯查询用量按 queryEvents 统计，不和模型未上报混淆', (t) => {
+  const { store } = fixture(t);
+  store.append(input({ agentId: 'plm', systemId: 'hengjian-plm', modelId: null, tokensIn: 0, tokensOut: 0, cost: 0, metering: 'missing', usageKind: 'query' }));
+  store.append(input({ agentId: 'plm', systemId: 'hengjian-plm', modelId: 'deepseek-chat', runId: 'run-model', tokensIn: 10, tokensOut: 2, cost: 0.01, usageKind: 'model' }));
+  const row = store.aggregateByAgent().find((item) => item.agentId === 'plm');
+  assert.equal(row?.queryEvents, 1);
+  assert.equal(row?.modelEvents, 1);
 });
 
 test('损坏文件被隔离为 corrupt-*.json 并回退空账本', (t) => {

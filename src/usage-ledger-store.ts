@@ -28,6 +28,7 @@ const timestampSchema = z.string().min(1).max(64);
 // 用量来源：direct=Hub 直连供应商；gateway=统一网关；app-server=Codex 运行时通知；
 // reported=执行面 run_complete 上报；missing=调用发生但未拿到用量；legacy=引入该字段前的历史账。
 const METERING_SOURCES = ['direct', 'gateway', 'app-server', 'reported', 'missing', 'legacy'] as const;
+const USAGE_KINDS = ['query', 'model'] as const;
 
 export const UsageEventSchema = z.object({
   id: identifierSchema,
@@ -46,6 +47,8 @@ export const UsageEventSchema = z.object({
   tokensOut: z.number().int().nonnegative(),
   cost: z.number().nonnegative(),
   metering: z.enum(METERING_SOURCES).default('legacy'),
+  // query=纯 REST 查询（不产生模型 Token）；model=模型调用；null=旧账未记录。
+  usageKind: z.enum(USAGE_KINDS).nullable().default(null),
   startedAt: timestampSchema,
   endedAt: timestampSchema,
 }).strict();
@@ -74,6 +77,7 @@ export interface UsageEventAppendInput {
   tokensOut: number;
   cost: number;
   metering?: (typeof METERING_SOURCES)[number];
+  usageKind?: (typeof USAGE_KINDS)[number] | null;
   startedAt: string;
   endedAt: string;
 }
@@ -84,6 +88,8 @@ export interface UsageByAgentRow {
   tokensOut: number;
   cost: number;
   events: number;
+  queryEvents: number;
+  modelEvents: number;
   lastAt: string | null;
 }
 
@@ -93,6 +99,8 @@ export interface UsageBySystemRow {
   tokensOut: number;
   cost: number;
   events: number;
+  queryEvents: number;
+  modelEvents: number;
   lastAt: string | null;
 }
 
@@ -108,6 +116,12 @@ function latestTimestamp(current: string | null, candidate: string | null | unde
   if (!candidate) return current;
   if (!current) return candidate;
   return Date.parse(candidate) > Date.parse(current) ? candidate : current;
+}
+
+function isQueryUsage(event: UsageEvent): boolean {
+  if (event.usageKind) return event.usageKind === 'query';
+  // 旧账没有 usageKind：无模型、无 Token、无成本的事件按纯查询处理。
+  return event.modelId === null && event.tokensIn === 0 && event.tokensOut === 0 && event.cost === 0;
 }
 
 export class UsageLedgerStoreError extends Error {
@@ -216,6 +230,7 @@ export class UsageLedgerStore {
       tokensOut: input.tokensOut,
       cost: input.cost,
       metering: input.metering ?? 'reported',
+      usageKind: input.usageKind ?? null,
       startedAt: input.startedAt,
       endedAt: input.endedAt,
     });
@@ -244,11 +259,15 @@ export class UsageLedgerStore {
   aggregateByAgent(tenantId?: string): UsageByAgentRow[] {
     const byAgent = new Map<string, UsageByAgentRow>();
     for (const event of this.eventsForTenant(tenantId)) {
-      const row = byAgent.get(event.agentId) ?? { agentId: event.agentId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
+      const row = byAgent.get(event.agentId) ?? {
+        agentId: event.agentId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, queryEvents: 0, modelEvents: 0, lastAt: null,
+      };
       row.tokensIn += event.tokensIn;
       row.tokensOut += event.tokensOut;
       row.cost += event.cost;
       row.events += 1;
+      if (isQueryUsage(event)) row.queryEvents += 1;
+      else row.modelEvents += 1;
       row.lastAt = latestTimestamp(row.lastAt, event.endedAt);
       byAgent.set(event.agentId, row);
     }
@@ -258,11 +277,15 @@ export class UsageLedgerStore {
   aggregateBySystem(tenantId?: string): UsageBySystemRow[] {
     const bySystem = new Map<string, UsageBySystemRow>();
     for (const event of this.eventsForTenant(tenantId)) {
-      const row = bySystem.get(event.systemId) ?? { systemId: event.systemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
+      const row = bySystem.get(event.systemId) ?? {
+        systemId: event.systemId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, queryEvents: 0, modelEvents: 0, lastAt: null,
+      };
       row.tokensIn += event.tokensIn;
       row.tokensOut += event.tokensOut;
       row.cost += event.cost;
       row.events += 1;
+      if (isQueryUsage(event)) row.queryEvents += 1;
+      else row.modelEvents += 1;
       row.lastAt = latestTimestamp(row.lastAt, event.endedAt);
       bySystem.set(event.systemId, row);
     }

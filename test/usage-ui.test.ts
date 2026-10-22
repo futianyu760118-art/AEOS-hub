@@ -24,3 +24,10 @@ test('未上报用量的助手会明确提示', () => {
   assert.match(app, /未上报模型用量/);
   assert.match(app, /需中台回传 Token/);
 });
+
+test('纯查询调用显示无模型 Token，不显示 Token 0 / 成本 0', () => {
+  assert.match(app, /function usageIsQueryOnly/);
+  assert.match(app, /无模型 Token/);
+  assert.match(app, /查询接口不产生模型费用/);
+  assert.match(app, /queryEvents/);
+});

@@ -536,6 +536,7 @@ export class ExecutionPlaneRegistry {
       tokensOut: usage.tokensOut,
       cost: usage.cost,
       metering: hasUsage ? 'reported' : 'missing',
+      usageKind: run.capability.startsWith('query') ? 'query' : 'model',
       startedAt: run.startedAt,
       endedAt: run.endedAt ?? this.nowIso(),
     });

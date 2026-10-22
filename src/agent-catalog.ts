@@ -18,6 +18,8 @@ export interface CatalogUsageTotals {
   tokensOut: number;
   cost: number;
   events: number;
+  queryEvents: number;
+  modelEvents: number;
   lastAt: string | null;
 }
 
@@ -199,14 +201,16 @@ function sortAgents(agents: CatalogAgentNode[]): CatalogAgentNode[] {
 }
 
 function emptyUsage(): CatalogUsageTotals {
-  return { tokensIn: 0, tokensOut: 0, cost: 0, events: 0, lastAt: null };
+  return { tokensIn: 0, tokensOut: 0, cost: 0, events: 0, queryEvents: 0, modelEvents: 0, lastAt: null };
 }
 
-function addUsage(target: CatalogUsageTotals, row: { tokensIn: number; tokensOut: number; cost: number; events: number; lastAt: string | null }): void {
+function addUsage(target: CatalogUsageTotals, row: { tokensIn: number; tokensOut: number; cost: number; events: number; queryEvents?: number; modelEvents?: number; lastAt: string | null }): void {
   target.tokensIn += row.tokensIn;
   target.tokensOut += row.tokensOut;
   target.cost += row.cost;
   target.events += row.events;
+  target.queryEvents += row.queryEvents ?? 0;
+  target.modelEvents += row.modelEvents ?? (row.queryEvents === undefined ? row.events : 0);
   if (row.lastAt && (!target.lastAt || Date.parse(row.lastAt) > Date.parse(target.lastAt))) {
     target.lastAt = row.lastAt;
   }
@@ -278,6 +282,8 @@ export function buildCatalogTree(sources: CatalogSources, now = new Date()): Cat
     totals.tokensOut = Math.max(0, totals.tokensOut - simulated.tokensOut);
     totals.cost = Math.max(0, totals.cost - simulated.cost);
     totals.events = Math.max(0, totals.events - simulated.events);
+    totals.queryEvents = Math.max(0, totals.queryEvents - simulated.queryEvents);
+    totals.modelEvents = Math.max(0, totals.modelEvents - simulated.modelEvents);
     if (totals.events === 0) systemUsage.delete(systemId);
   }
 
