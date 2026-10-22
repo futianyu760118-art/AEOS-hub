@@ -105,7 +105,14 @@ interface ConnectedAgent {
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
+const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
+const DEFAULT_QUERY_TIMEOUT_MS = 60_000;
+const DEFAULT_REASONING_TIMEOUT_MS = 240_000;
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0']);
+
+function isReasoningCapability(capability: string): boolean {
+  return /(^|[_-])reason(ing)?([_-]|$)/i.test(capability);
+}
 
 export function isLoopbackExecutionPeer(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -229,6 +236,9 @@ export class ExecutionPlaneRegistry {
   private runs = new Map<string, ExecutionRunRecord>();
   private readonly file: string;
   private readonly heartbeatTimeoutMs: number;
+  private readonly dispatchTimeoutMs: number;
+  private readonly queryTimeoutMs: number;
+  private readonly reasoningTimeoutMs: number;
   private readonly idFactory: () => string;
   private readonly clock: () => Date;
   private readonly onChange?: () => void;
@@ -239,6 +249,9 @@ export class ExecutionPlaneRegistry {
   constructor(options: {
     file: string;
     heartbeatTimeoutMs?: number;
+    dispatchTimeoutMs?: number;
+    queryTimeoutMs?: number;
+    reasoningTimeoutMs?: number;
     idFactory?: () => string;
     clock?: () => Date;
     onChange?: () => void;
@@ -248,6 +261,9 @@ export class ExecutionPlaneRegistry {
   }) {
     this.file = options.file;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+    this.dispatchTimeoutMs = options.dispatchTimeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
+    this.queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
+    this.reasoningTimeoutMs = options.reasoningTimeoutMs ?? DEFAULT_REASONING_TIMEOUT_MS;
     this.idFactory = options.idFactory ?? randomUUID;
     this.clock = options.clock ?? (() => new Date());
     this.onChange = options.onChange;
@@ -344,6 +360,50 @@ export class ExecutionPlaneRegistry {
     return this.runs.get(runId);
   }
 
+  private timeoutForRun(run: ExecutionRunRecord): number {
+    if (run.state === 'dispatched') return this.dispatchTimeoutMs;
+    return isReasoningCapability(run.capability) ? this.reasoningTimeoutMs : this.queryTimeoutMs;
+  }
+
+  private failRun(run: ExecutionRunRecord, code: string, message: string): boolean {
+    if (run.state !== 'dispatched' && run.state !== 'running') return false;
+    run.state = 'failed';
+    run.error = { code, message };
+    run.endedAt = this.nowIso();
+    const entry = this.agents.get(run.agentId);
+    if (entry) {
+      if (entry.record.currentRunId === run.runId) entry.record.currentRunId = null;
+      entry.record.runtimeStatus = 'error';
+      try {
+        entry.send({ type: 'recall', runId: run.runId });
+      } catch {
+        // 召回失败不影响 Hub 侧终止状态。
+      }
+    }
+    this.persist();
+    this.emitRunState(run);
+    return true;
+  }
+
+  /** 扫出派单后无响应、或执行超时的 run；由服务端周期调用。 */
+  markRunTimeouts(): number {
+    const now = this.clock().getTime();
+    let count = 0;
+    for (const run of this.runs.values()) {
+      if (run.state !== 'dispatched' && run.state !== 'running') continue;
+      const startedAt = new Date(run.startedAt).getTime();
+      if (Number.isNaN(startedAt)) continue;
+      const timeoutMs = this.timeoutForRun(run);
+      if (now - startedAt < timeoutMs) continue;
+      const code = run.state === 'dispatched' ? 'DISPATCH_TIMEOUT' : 'RUN_TIMEOUT';
+      const message = run.state === 'dispatched'
+        ? `派单后 ${timeoutMs}ms 未收到执行面响应`
+        : `执行超过 ${timeoutMs}ms 未完成`;
+      if (this.failRun(run, code, message)) count += 1;
+    }
+    return count;
+  }
+
   // ---------- 执行面 → 管理面 ----------
   onRegister(
     input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown; simulated?: unknown },
@@ -402,6 +462,7 @@ export class ExecutionPlaneRegistry {
   onRunUpdate(agentId: string, input: { runId?: unknown; state?: unknown }): void {
     const runId = requireString(input.runId, 'runId', 160);
     const run = this.requireRun(runId, agentId);
+    if (run.state === 'completed' || run.state === 'failed' || run.state === 'recalled') return;
     run.state = 'running';
     run.endedAt = null;
     this.requireAgent(agentId).record.currentRunId = runId;
@@ -412,6 +473,7 @@ export class ExecutionPlaneRegistry {
   onRunComplete(agentId: string, input: { runId?: unknown; result?: unknown; usage?: unknown }): void {
     const runId = requireString(input.runId, 'runId', 160);
     const run = this.requireRun(runId, agentId);
+    if (run.state === 'completed' || run.state === 'failed' || run.state === 'recalled') return;
     const entry = this.requireAgent(agentId);
     run.state = 'completed';
     const cap = entry.record.capabilities.find((item) => item.name === run.capability);
@@ -452,6 +514,7 @@ export class ExecutionPlaneRegistry {
   onRunFailed(agentId: string, input: { runId?: unknown; error?: unknown }): void {
     const runId = requireString(input.runId, 'runId', 160);
     const run = this.requireRun(runId, agentId);
+    if (run.state === 'completed' || run.state === 'failed' || run.state === 'recalled') return;
     run.state = 'failed';
     const err = input.error && typeof input.error === 'object' ? (input.error as Record<string, unknown>) : {};
     run.error = {

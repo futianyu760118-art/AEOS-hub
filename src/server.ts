@@ -329,7 +329,11 @@ setTimeout(() => {
 setInterval(() => {
   void opsMonitor.runOnce().catch((error) => console.warn('[ops] 检查失败:', (error as Error).message));
 }, 60_000);
-setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
+setInterval(() => {
+  executionPlane.markStaleOffline();
+  const timedOut = executionPlane.markRunTimeouts();
+  if (timedOut > 0) console.warn(`[execution-plane] 运行超时：${timedOut}`);
+}, 5_000);
 
 const companyControlPython = process.platform === 'win32'
   ? join(root, '.venv', 'Scripts', 'python.exe')

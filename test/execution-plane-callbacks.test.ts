@@ -17,7 +17,10 @@ const CAPABILITIES = [{
   constraints: { readOnly: true },
 }];
 
-function fixture(t: { after: (fn: () => void) => void }) {
+function fixture(
+  t: { after: (fn: () => void) => void },
+  options: { dispatchTimeoutMs?: number; queryTimeoutMs?: number; reasoningTimeoutMs?: number } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), 'execution-callbacks-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const events: Array<{ kind: 'state' | 'usage' | 'offline'; value: unknown }> = [];
@@ -30,6 +33,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
     onRunStateChange: (event: ExecutionRunStateEvent) => events.push({ kind: 'state', value: event }),
     onUsageEvent: (event: UsageEventAppendInput) => events.push({ kind: 'usage', value: event }),
     onAgentOffline: (event: AgentOfflineEvent) => events.push({ kind: 'offline', value: event }),
+    ...options,
   });
   registry.onRegister({
     agentId: 'agent-1',
@@ -114,5 +118,49 @@ test('回调抛异常不影响执行面状态机', (t) => {
   registry.onRegister({ agentId: 'agent-1', name: 'x', version: '1', sourceSystem: 's', capabilities: CAPABILITIES }, () => {});
   const runId = dispatch(registry);
   assert.doesNotThrow(() => registry.onRunComplete('agent-1', { runId, result: {} }));
+  assert.equal(registry.getRun(runId)?.state, 'completed');
+});
+
+test('派单后超过 dispatchTimeoutMs 无响应，标记 DISPATCH_TIMEOUT', (t) => {
+  const { registry, events, clock } = fixture(t, { dispatchTimeoutMs: 1_000 });
+  const runId = dispatch(registry);
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.markRunTimeouts(), 1);
+  const run = registry.getRun(runId);
+  assert.equal(run?.state, 'failed');
+  assert.equal(run?.error?.code, 'DISPATCH_TIMEOUT');
+  assert.equal(registry.list().agents[0].runtimeStatus, 'error');
+  const states = events.filter((event) => event.kind === 'state').map((event) => (event.value as ExecutionRunStateEvent).state);
+  assert.deepEqual(states, ['failed']);
+});
+
+test('执行中超过 queryTimeoutMs，标记 RUN_TIMEOUT', (t) => {
+  const { registry, clock } = fixture(t, { queryTimeoutMs: 1_000 });
+  const runId = dispatch(registry);
+  registry.onRunUpdate('agent-1', { runId, state: 'running' });
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.markRunTimeouts(), 1);
+  const run = registry.getRun(runId);
+  assert.equal(run?.state, 'failed');
+  assert.equal(run?.error?.code, 'RUN_TIMEOUT');
+});
+
+test('超时后迟到的 run_complete 不得覆盖 failed/不得重复记账', (t) => {
+  const { registry, events, clock } = fixture(t, { dispatchTimeoutMs: 1_000 });
+  const runId = dispatch(registry);
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.markRunTimeouts(), 1);
+  registry.onRunComplete('agent-1', { runId, result: { late: true }, usage: { modelId: 'x', tokensIn: 1, tokensOut: 1 } });
+  assert.equal(registry.getRun(runId)?.state, 'failed');
+  assert.equal(events.filter((event) => event.kind === 'usage').length, 0);
+  assert.equal(events.filter((event) => event.kind === 'state').length, 1);
+});
+
+test('已完成的 run 不会被超时扫描误杀', (t) => {
+  const { registry, clock } = fixture(t, { dispatchTimeoutMs: 1_000 });
+  const runId = dispatch(registry);
+  registry.onRunComplete('agent-1', { runId, result: { ok: true } });
+  clock.current = new Date('2026-10-19T09:00:02.000Z');
+  assert.equal(registry.markRunTimeouts(), 0);
   assert.equal(registry.getRun(runId)?.state, 'completed');
 });
