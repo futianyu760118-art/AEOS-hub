@@ -91,6 +91,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-gateway-auto
 
 前提：`.env` 已创建；用户已登录。Hub 未启动时网关会自动重试，不会退出。
 
+### 2.7 新增网关/Agent 的允许列表
+
+Hub 侧新增网关或 Agent ID 时，编辑 `config/execution-agent-allowlist.json`，加入对应的 `systemId` 和 `agentId`。Hub 按文件 mtime 热加载，**无需重启 Hub**。
+
 ## 3. 环境变量
 
 | 变量 | 必填 | 说明 |
