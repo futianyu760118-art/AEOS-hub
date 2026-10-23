@@ -1,7 +1,9 @@
 // 租户解析：系统登记的 tenantId 是权威来源；找不到时回落到试点默认租户。
+// 默认租户可通过 AEOS_DEFAULT_TENANT_ID 覆盖，避免在多个模块重复硬编码。
 import type { SystemRecord } from './system-registry.ts';
 
-export const DEFAULT_TENANT_ID = 'tenant-demo';
+const configuredDefault = process.env.AEOS_DEFAULT_TENANT_ID?.trim();
+export const DEFAULT_TENANT_ID = configuredDefault || 'tenant-demo';
 
 export function resolveTenantId(
   systemId: string,

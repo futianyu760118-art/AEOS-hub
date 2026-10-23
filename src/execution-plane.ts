@@ -103,13 +103,45 @@ interface ConnectedAgent {
   send: SendFn;
 }
 
-const HEARTBEAT_INTERVAL_MS = 5_000;
-const DEFAULT_HEARTBEAT_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = DEFAULT_HEARTBEAT_INTERVAL_MS * 3;
 const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_TIMEOUT_MS = 60_000;
 const DEFAULT_REASONING_TIMEOUT_MS = 240_000;
 const DEFAULT_IDLE_RECONCILE_GRACE_MS = 30_000;
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0']);
+
+export interface ExecutionPlaneTimeouts {
+  heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
+  dispatchTimeoutMs: number;
+  queryTimeoutMs: number;
+  reasoningTimeoutMs: number;
+  idleReconcileGraceMs: number;
+}
+
+function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function envInt(value: string | undefined, fallback: number, min: number, max: number): number {
+  if (!value || !value.trim()) return fallback;
+  return clampInt(Number(value), fallback, min, max);
+}
+
+/** 从环境变量读取执行面超时；默认值保持向后兼容，便于直连/网关双轨期按系统调整。 */
+export function executionPlaneTimeoutsFromEnv(env: NodeJS.ProcessEnv = process.env): ExecutionPlaneTimeouts {
+  const heartbeatIntervalMs = envInt(env.AEOS_HEARTBEAT_INTERVAL_MS, DEFAULT_HEARTBEAT_INTERVAL_MS, 1_000, 60_000);
+  return {
+    heartbeatIntervalMs,
+    heartbeatTimeoutMs: envInt(env.AEOS_HEARTBEAT_TIMEOUT_MS, heartbeatIntervalMs * 3, heartbeatIntervalMs, 300_000),
+    dispatchTimeoutMs: envInt(env.AEOS_DISPATCH_TIMEOUT_MS, DEFAULT_DISPATCH_TIMEOUT_MS, 5_000, 300_000),
+    queryTimeoutMs: envInt(env.AEOS_QUERY_TIMEOUT_MS, DEFAULT_QUERY_TIMEOUT_MS, 5_000, 600_000),
+    reasoningTimeoutMs: envInt(env.AEOS_REASONING_TIMEOUT_MS, DEFAULT_REASONING_TIMEOUT_MS, 5_000, 1_800_000),
+    idleReconcileGraceMs: envInt(env.AEOS_IDLE_RECONCILE_GRACE_MS, DEFAULT_IDLE_RECONCILE_GRACE_MS, 5_000, 300_000),
+  };
+}
 
 function isReasoningCapability(capability: string): boolean {
   return /(^|[_-])reason(ing)?([_-]|$)/i.test(capability);
@@ -236,6 +268,7 @@ export class ExecutionPlaneRegistry {
   private agents = new Map<string, ConnectedAgent>();
   private runs = new Map<string, ExecutionRunRecord>();
   private readonly file: string;
+  private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
   private readonly dispatchTimeoutMs: number;
   private readonly queryTimeoutMs: number;
@@ -250,6 +283,7 @@ export class ExecutionPlaneRegistry {
 
   constructor(options: {
     file: string;
+    heartbeatIntervalMs?: number;
     heartbeatTimeoutMs?: number;
     dispatchTimeoutMs?: number;
     queryTimeoutMs?: number;
@@ -263,7 +297,8 @@ export class ExecutionPlaneRegistry {
     onAgentOffline?: (event: AgentOfflineEvent) => void;
   }) {
     this.file = options.file;
-    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? this.heartbeatIntervalMs * 3;
     this.dispatchTimeoutMs = options.dispatchTimeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
     this.reasoningTimeoutMs = options.reasoningTimeoutMs ?? DEFAULT_REASONING_TIMEOUT_MS;
@@ -473,7 +508,7 @@ export class ExecutionPlaneRegistry {
     };
     this.agents.set(agentId, { record, send });
     this.persist();
-    return { agentId, heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS };
+    return { agentId, heartbeatIntervalMs: this.heartbeatIntervalMs };
   }
 
   onHeartbeat(agentId: string, input: { status?: unknown; currentRunId?: unknown }): void {

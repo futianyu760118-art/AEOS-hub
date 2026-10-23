@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { atomicWrite } from './atomic-file.ts';
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const systemRegistryFile = join(root, 'data', 'systems.json');
@@ -76,7 +77,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
   {
     systemId: 'aeos-hub',
     name: 'AEOS Hub',
-    tenantId: 'tenant-demo',
+    tenantId: DEFAULT_TENANT_ID,
     owner: '平台团队',
     description: 'Hub 自身与中枢 Agent',
     status: 'active',
@@ -85,7 +86,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
   {
     systemId: 'control-platform',
     name: '公司中控平台',
-    tenantId: 'tenant-demo',
+    tenantId: DEFAULT_TENANT_ID,
     owner: '中台团队',
     description: '中台执行面与智能助手',
     status: 'active',
@@ -94,7 +95,7 @@ const DEFAULT_SYSTEMS: Array<Omit<SystemRecord, 'createdAt' | 'updatedAt'>> = [
   {
     systemId: 'hengjian-plm',
     name: '恒剑 PLM',
-    tenantId: 'tenant-demo',
+    tenantId: DEFAULT_TENANT_ID,
     owner: 'PLM 团队',
     description: '恒剑 PLM 执行面',
     status: 'active',

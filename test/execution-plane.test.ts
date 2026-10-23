@@ -3,8 +3,25 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from '../src/execution-plane.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, executionPlaneTimeoutsFromEnv } from '../src/execution-plane.ts';
 import type { UsageEventAppendInput } from '../src/usage-ledger-store.ts';
+
+test('执行面超时参数从环境读取并钳位', () => {
+  const defaults = executionPlaneTimeoutsFromEnv({});
+  assert.equal(defaults.heartbeatIntervalMs, 5_000);
+  assert.equal(defaults.heartbeatTimeoutMs, 15_000);
+
+  const custom = executionPlaneTimeoutsFromEnv({
+    AEOS_HEARTBEAT_INTERVAL_MS: '20000',
+    AEOS_HEARTBEAT_TIMEOUT_MS: '10000',
+    AEOS_QUERY_TIMEOUT_MS: '999999999',
+    AEOS_REASONING_TIMEOUT_MS: 'bad',
+  });
+  assert.equal(custom.heartbeatIntervalMs, 20_000);
+  assert.equal(custom.heartbeatTimeoutMs, 20_000);
+  assert.equal(custom.queryTimeoutMs, 600_000);
+  assert.equal(custom.reasoningTimeoutMs, 240_000);
+});
 
 const QUERY_SCHEMA = {
   type: 'object',

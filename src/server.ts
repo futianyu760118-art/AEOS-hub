@@ -77,7 +77,7 @@ import { PersonnelApi } from './personnel-api.ts';
 import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
 import { AgentControlApi } from './agent-control-api.ts';
-import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, executionPlaneTimeoutsFromEnv } from './execution-plane.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
@@ -237,6 +237,7 @@ const executionHealthSyncedAt = new Map<string, { status: 'healthy' | 'unhealthy
 let borrowOrderService: BorrowOrderService | null = null;
 const executionPlane = new ExecutionPlaneRegistry({
   file: join(dataDir, 'execution-plane.json'),
+  ...executionPlaneTimeoutsFromEnv(),
   onChange: () => syncExecutionHealth(),
   onUsageEvent: (event) => recordUsageEvent(borrowOrderService ? borrowOrderService.attributeUsage(event) : event),
   onRunStateChange: (event) => borrowOrderService?.handleRunStateChange(event),
