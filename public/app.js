@@ -297,9 +297,9 @@ const commands = [
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
 ];
 
-// Local experience review: keep the operating-center implementation intact
-// while temporarily removing its routes from the decision-maker interface.
-const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
+// Local experience review: keep module implementations intact while temporarily
+// removing their routes from the decision-maker interface.
+const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects']);
 const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘', 'usage': '用量明细', 'route': '模型选型' };
 const SPLIT = '::';
 
@@ -566,13 +566,14 @@ function viewVisibleForRole(view, session) {
 
 function defaultViewForSession(session) {
   const roles = Array.isArray(session?.roles) ? session.roles : [];
-  return (roles.includes('manager') || roles.includes('supervisor')) ? 'dashboard' : 'tasks';
+  const preferred = (roles.includes('manager') || roles.includes('supervisor')) ? 'dashboard' : 'tasks';
+  return LOCALLY_HIDDEN_VIEWS.has(preferred) ? 'chat' : preferred;
 }
 
 function applyNavVisibility() {
   $$('.nav-item').forEach((item) => {
     const view = item.dataset.view;
-    if (view) item.classList.toggle('hidden', !viewVisibleForRole(view, authSession));
+    if (view) item.classList.toggle('hidden', LOCALLY_HIDDEN_VIEWS.has(view) || !viewVisibleForRole(view, authSession));
   });
   $$('.nav-group').forEach((group) => {
     const visible = [...group.querySelectorAll('.nav-item')].some((item) => !item.classList.contains('hidden'));

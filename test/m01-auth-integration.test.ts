@@ -152,6 +152,8 @@ test('gateway rejects unauthenticated protected HTTP/static/WebSocket access and
   assert.equal(isPublicLoginResource('/task-center.js', 'GET'), true);
   assert.equal(isPublicLoginResource('/task-agent-eligibility.js', 'GET'), true);
   assert.equal(isPublicLoginResource('/ui-localization.js', 'GET'), true);
+  assert.equal(isPublicLoginResource('/capability-template-intent.js', 'GET'), true);
+  assert.equal(isPublicLoginResource('/time-format.js', 'GET'), true);
   assert.deepEqual(gateway.session(undefined), { authenticated: false, authMode: 'm01' });
   const sessionId = auth.createSession(m01Actor);
   const actorId = gateway.actorIdFromCookie(`aeos_auth=${sessionId}`);
