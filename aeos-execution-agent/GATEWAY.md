@@ -75,6 +75,22 @@ docker compose -f docker-compose.gateway.yml up -d
 
 网关主动出方向连接 Hub，通常不需要映射入站端口。
 
+### 2.6 Windows 登录自启与守护
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-gateway-autostart.ps1
+```
+
+- 用户登录后由计划任务启动守护脚本；网关退出或崩溃会自动重启；
+- 守护日志：`gateway-watchdog.log`；网关输出：`gateway.out.*.log` / `gateway.err.*.log`；
+- 卸载：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-gateway-autostart.ps1 -Uninstall
+```
+
+前提：`.env` 已创建；用户已登录。Hub 未启动时网关会自动重试，不会退出。
+
 ## 3. 环境变量
 
 | 变量 | 必填 | 说明 |
