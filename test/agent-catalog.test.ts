@@ -139,6 +139,25 @@ test('目录树按系统 → 主属域 → Agent 分组，并保留空系统', (
   assert.ok(tree.warnings.some((warning) => warning.includes('未登记系统')));
 });
 
+test('执行面网关在目录中标记 agentKind 与 gatewayVersion', () => {
+  const base = sources();
+  const gateway: ExecutionAgentRecord = {
+    ...base.executionAgents[0]!,
+    agentId: 'gateway-control-platform',
+    name: '公司中控平台网关',
+    agentKind: 'system-gateway',
+    gatewayVersion: '1.0.0',
+  };
+  const tree = buildCatalogTree({ ...base, executionAgents: [...base.executionAgents, gateway] });
+  const agents = tree.systems.find((system) => system.id === 'control-platform')?.domains.flatMap((domain) => domain.agents) ?? [];
+  const gatewayNode = agents.find((agent) => agent.externalAgentId === 'gateway-control-platform');
+  assert.equal(gatewayNode?.execution?.agentKind, 'system-gateway');
+  assert.equal(gatewayNode?.execution?.gatewayVersion, '1.0.0');
+  const directNode = agents.find((agent) => agent.externalAgentId === 'runtime-control-platform-agent');
+  assert.equal(directNode?.execution?.agentKind, 'execution-agent');
+  assert.equal(directNode?.execution?.gatewayVersion, null);
+});
+
 test('执行面独有 Agent 标记为未登记港湾', () => {
   const tree = buildCatalogTree(sources());
   const unregistered = tree.systems.find((system) => system.id === 'unregistered')!;

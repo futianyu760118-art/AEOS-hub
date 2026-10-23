@@ -49,6 +49,10 @@ export interface ExecutionAgentRecord {
   authMode: ExecutionAgentAuthMode;
   /** 本机模拟器注册的连接；不计入真实目录统计。 */
   simulated: boolean;
+  /** 执行体角色：普通执行面 Agent 或系统网关（单 Agent 兼容模式）。 */
+  agentKind?: 'execution-agent' | 'system-gateway';
+  /** 网关协议版本；非网关为 null。 */
+  gatewayVersion?: string | null;
   /** 软删除时间戳：系统自助注销后保留画像/用量台账，仅强制离线、不再派单。 */
   deregisteredAt?: string | null;
 }
@@ -336,6 +340,10 @@ export class ExecutionPlaneRegistry {
                 ? record.authMode
                 : 'unknown',
               simulated: record.simulated === true,
+              agentKind: record.agentKind === 'system-gateway' ? 'system-gateway' : 'execution-agent',
+              gatewayVersion: typeof record.gatewayVersion === 'string' && record.gatewayVersion.trim()
+                ? record.gatewayVersion.trim()
+                : null,
               connectionStatus: 'offline',
               runtimeStatus: 'idle',
               currentRunId: null,
@@ -469,7 +477,7 @@ export class ExecutionPlaneRegistry {
 
   // ---------- 执行面 → 管理面 ----------
   onRegister(
-    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown; simulated?: unknown },
+    input: { agentId?: unknown; name?: unknown; version?: unknown; capabilities?: unknown; local?: unknown; sourceSystem?: unknown; protocolVersion?: unknown; simulated?: unknown; kind?: unknown; gatewayVersion?: unknown },
     send: SendFn,
     identity?: ExecutionRegistrationIdentity,
   ): { agentId: string; heartbeatIntervalMs: number } {
@@ -485,6 +493,12 @@ export class ExecutionPlaneRegistry {
     const capabilities = parseCapabilities(input.capabilities);
     const local = input.local === true;
     const sourceSystem = identity?.sourceSystem ?? requireString(input.sourceSystem, 'sourceSystem', 160);
+    const agentKind = input.kind === 'system-gateway' ? 'system-gateway' : 'execution-agent';
+    const gatewayVersion = agentKind === 'system-gateway'
+      && typeof input.gatewayVersion === 'string'
+      && input.gatewayVersion.trim()
+      ? input.gatewayVersion.trim().slice(0, 40)
+      : null;
 
     const now = this.nowIso();
     const existing = this.agents.get(agentId);
@@ -504,6 +518,8 @@ export class ExecutionPlaneRegistry {
       sourceSystemName: identity?.sourceSystemName ?? sourceSystem,
       authMode: identity?.authMode ?? 'legacy-root',
       simulated: input.simulated === true,
+      agentKind,
+      gatewayVersion,
       deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send });
@@ -717,6 +733,8 @@ export class ExecutionPlaneRegistry {
       sourceSystemName: existing?.record.sourceSystemName ?? null,
       authMode: 'control-plane',
       simulated: existing?.record.simulated ?? false,
+      agentKind: existing?.record.agentKind ?? 'execution-agent',
+      gatewayVersion: existing?.record.gatewayVersion ?? null,
       deregisteredAt: null,
     };
     this.agents.set(agentId, { record, send: existing?.send ?? (() => {}) });

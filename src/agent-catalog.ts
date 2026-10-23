@@ -37,6 +37,10 @@ export interface CatalogExecutionState {
   sourceSystemName: string | null;
   authMode: ExecutionAgentAuthMode;
   currentRunId: string | null;
+  /** 普通执行面 Agent 或系统网关（单 Agent 兼容模式）。 */
+  agentKind: 'execution-agent' | 'system-gateway';
+  /** 网关协议版本；非网关为 null。 */
+  gatewayVersion: string | null;
 }
 
 export interface CatalogAgentNode {
@@ -153,6 +157,8 @@ function executionNode(record: ExecutionAgentRecord, systemId: string): CatalogA
       sourceSystemName: record.sourceSystemName ?? null,
       authMode: record.authMode,
       currentRunId: record.currentRunId,
+      agentKind: record.agentKind === 'system-gateway' ? 'system-gateway' : 'execution-agent',
+      gatewayVersion: record.gatewayVersion ?? null,
     },
     usage: null,
     skills: record.capabilities.map((capability) => capability.name),
@@ -186,6 +192,8 @@ function harborNode(agent: HarborAgent, execution: ExecutionAgentRecord | null):
       sourceSystemName: execution.sourceSystemName ?? null,
       authMode: execution.authMode,
       currentRunId: execution.currentRunId,
+      agentKind: execution.agentKind === 'system-gateway' ? 'system-gateway' : 'execution-agent',
+      gatewayVersion: execution.gatewayVersion ?? null,
     } : null,
     usage: null,
     skills: [...agent.skills],

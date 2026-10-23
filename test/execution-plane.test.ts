@@ -87,6 +87,27 @@ test('注册后 agent 在线并出现在 list 中', (t) => {
   assert.equal(agents[0].sourceSystem, '公司中控平台');
 });
 
+test('网关注册记录 kind/gatewayVersion，直连默认普通执行体', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  h.registry.onRegister({
+    agentId: 'gateway-control-platform',
+    name: '公司中控平台网关',
+    version: '1.0.0',
+    sourceSystem: 'control-platform',
+    kind: 'system-gateway',
+    gatewayVersion: '1.0.0',
+    capabilities: [{ name: 'query_control_platform', description: '中台只读查询', constraints: { readOnly: true } }],
+  }, () => {});
+  const agents = h.registry.list().agents;
+  const gateway = agents.find((agent) => agent.agentId === 'gateway-control-platform');
+  assert.equal(gateway?.agentKind, 'system-gateway');
+  assert.equal(gateway?.gatewayVersion, '1.0.0');
+  const direct = agents.find((agent) => agent.agentId === h.agentId);
+  assert.equal(direct?.agentKind, 'execution-agent');
+  assert.equal(direct?.gatewayVersion, null);
+});
+
 test('注册校验：来源系统不能为空', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
