@@ -61,6 +61,9 @@ export function registerControlPlatformCapabilities(config) {
       url: config.targetReasoningUrl,
       agentId: config.targetReasoningAgentId,
       token: config.targetReasoningToken,
+      model: config.targetReasoningModel,
+      reasoningEffort: config.targetReasoningEffort,
+      timeoutMs: config.targetReasoningTimeoutMs,
     }),
   });
 }

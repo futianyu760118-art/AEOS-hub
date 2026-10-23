@@ -36,6 +36,11 @@ export function loadConfig(env = process.env) {
     targetReasoningUrl: (env.TARGET_REASONING_URL ?? '').trim(),
     targetReasoningAgentId: (env.TARGET_REASONING_AGENT_ID ?? '').trim(),
     targetReasoningToken: (env.TARGET_REASONING_TOKEN ?? '').trim(),
+    targetReasoningModel: (env.TARGET_REASONING_MODEL ?? '').trim() || 'deepseek-flash',
+    targetReasoningEffort: (env.TARGET_REASONING_EFFORT ?? '').trim() || 'high',
+    targetReasoningTimeoutMs: Number(env.TARGET_REASONING_TIMEOUT_MS) > 0
+      ? Math.trunc(Number(env.TARGET_REASONING_TIMEOUT_MS))
+      : 180_000,
   };
 }
 

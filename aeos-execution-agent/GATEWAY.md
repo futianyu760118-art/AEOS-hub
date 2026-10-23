@@ -90,6 +90,9 @@ docker compose -f docker-compose.gateway.yml up -d
 | `TARGET_QUERY_APP_KEY` | 是 | 只读应用 Key |
 | `TARGET_QUERY_APP_SECRET` | 是 | 只读应用 Secret |
 | `TARGET_REASONING_URL` | 否 | 中台推理地址；留空则返回“未接通” |
+| `TARGET_REASONING_MODEL` | 否 | 推理模型，默认 `deepseek-flash` |
+| `TARGET_REASONING_EFFORT` | 否 | 思考强度，默认 `high` |
+| `TARGET_REASONING_TIMEOUT_MS` | 否 | 推理超时，默认 `180000` |
 
 ## 4. Hub 侧会看到什么
 
