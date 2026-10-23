@@ -79,7 +79,7 @@ docker compose -f docker-compose.gateway.yml up -d
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `EXECUTION_WS_URL` | 是 | Hub 执行面 WS 地址 |
+| `EXECUTION_WS_URL` | 是 | Hub 执行面 WS 地址；本地默认 `ws://127.0.0.1:8788/execution-agent`（不是 UI 的 8790） |
 | `EXECUTION_SYSTEM_ID` | 是 | 固定 `control-platform` |
 | `EXECUTION_SYSTEM_TOKEN` | 是 | 中台系统令牌，与 Hub 侧一致 |
 | `EXECUTION_AGENT_ID` | 否 | 默认 `gateway-control-platform` |
