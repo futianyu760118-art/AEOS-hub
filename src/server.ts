@@ -78,6 +78,7 @@ import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
 import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, executionPlaneTimeoutsFromEnv } from './execution-plane.ts';
+import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
@@ -2801,6 +2802,20 @@ executionWss.on('connection', (ws, request) => {
           (m) => send(ws, m),
           identity,
         );
+        const registered = executionPlane.list().agents.find((agent) => agent.agentId === reply.agentId);
+        const gatewayEvidence = registered
+          ? gatewayRegistrationEvidence(registered, {
+            systemId: identity.systemId ?? registered.sourceSystem,
+            authMode: identity.authMode,
+          })
+          : null;
+        if (gatewayEvidence) {
+          try {
+            appendEvidence(gatewayEvidence);
+          } catch {
+            // 审计失败不阻断注册。
+          }
+        }
         executionWsAgent.set(ws, reply.agentId);
         send(ws, { type: 'registered', ...reply, authMode: identity.authMode });
         if (identity.authMode === 'legacy-root') {
