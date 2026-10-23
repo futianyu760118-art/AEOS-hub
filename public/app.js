@@ -2057,6 +2057,11 @@ async function tryDispatchCapabilityTemplate(text) {
 
   const template = matchCapabilityTemplate(text, templates);
   if (!template) {
+    // 中台查询 Agent 走原有通用查询解析器（订单/齐套/质量/生产等）。
+    // 只有没有通用解析能力的 Agent（如 PLM）才提示“没有匹配模板”。
+    const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+    const hasLegacyControlQuery = agent?.capabilities?.some((capability) => capability.name === 'query_control_platform');
+    if (hasLegacyControlQuery) return false;
     appendExecutionMessage('agent', '没有匹配到该执行面 Agent 的 Hub 能力模板。请带上能力关键词，或先选择其他智能体。', null);
     return true;
   }
