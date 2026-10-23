@@ -2466,6 +2466,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-agent-location.remote { background: #e0e7ff; color: #3730a3; }
 .execution-agent-source { min-width: 0; overflow: hidden; background: #f1f5f9; color: #475569; text-overflow: ellipsis; white-space: nowrap; }
 .execution-agent-simulated { background: #fef3c7; color: #92400e; }
+.execution-agent-gateway { background: #ccfbf1; color: #115e59; }
 .execution-agent-meta { font-size: 0.75rem; opacity: 0.7; word-break: break-all; }
 
 .execution-chat-panel { display: flex; flex-direction: column; min-height: 0; }

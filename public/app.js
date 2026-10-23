@@ -807,8 +807,11 @@ function renderExecutionAgentItem(agent) {
     : typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
       ? agent.sourceSystem.trim()
       : '来源待补充';
+  const gatewayBadge = agent.agentKind === 'system-gateway'
+    ? `<span class="execution-agent-identity execution-agent-gateway" title="系统网关${agent.gatewayVersion ? ` · v${esc(agent.gatewayVersion)}` : ''}">网关</span>`
+    : '';
   return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-    <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span></span>
+    <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${gatewayBadge}${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span></span>
     <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
   </button>`;
 }

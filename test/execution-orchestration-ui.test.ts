@@ -15,6 +15,14 @@ test('执行面按系统分组展示，支持展开收起', () => {
   assert.match(css, /\.execution-system-head\s*\{/);
 });
 
+test('执行面网关在列表中显示独立标识', () => {
+  const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
+  const css = readFileSync(join(root, 'public', 'style.css'), 'utf8');
+  assert.match(app, /agentKind === 'system-gateway'/);
+  assert.match(app, /execution-agent-gateway/);
+  assert.match(css, /\.execution-agent-gateway\s*\{/);
+});
+
 test('最高风险订单编排接到推理页面与服务端路由', () => {
   const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
   const server = readFileSync(join(root, 'src', 'server.ts'), 'utf8');
