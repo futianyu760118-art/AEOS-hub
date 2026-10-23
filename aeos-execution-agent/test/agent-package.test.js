@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerCapability, capabilityHandlers, capabilityDefinitions } from '../src/capabilities.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, loadGatewayConfig } from '../src/config.js';
+import { registerControlPlatformCapabilities } from '../src/control-platform-capabilities.js';
 import { buildConnectionHeaders, ExecutionAgentCore } from '../src/agent-core.js';
 import { createHttpQueryAdapter } from '../src/adapters/query-adapter.js';
 import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS, COMPANY_CONTROL_QUERY_INTENT } from '../src/adapters/company-control-query.js';
@@ -71,6 +72,67 @@ test('未配置系统令牌时保留 legacy 连接头', () => {
   assert.deepEqual(buildConnectionHeaders({ token: 'legacy-token' }), {
     'x-aeos-execution-token': 'legacy-token',
   });
+});
+
+test('网关配置默认身份、角色和版本，并要求系统令牌', () => {
+  const config = loadGatewayConfig({
+    EXECUTION_WS_URL: 'wss://h/execution-agent',
+    EXECUTION_SYSTEM_ID: 'control-platform',
+    EXECUTION_SYSTEM_TOKEN: 'system-token',
+    TARGET_QUERY_BASE_URL: 'https://x/api/v1',
+    TARGET_QUERY_APP_KEY: 'k',
+    TARGET_QUERY_APP_SECRET: 's',
+  });
+  assert.equal(config.agentId, 'gateway-control-platform');
+  assert.equal(config.agentName, '公司中控平台网关');
+  assert.equal(config.sourceSystem, 'control-platform');
+  assert.equal(config.agentKind, 'system-gateway');
+  assert.equal(config.gatewayVersion, '1.0.0');
+});
+
+test('网关 register 消息带 kind 与 gatewayVersion，直连模式不带', () => {
+  const sent = [];
+  const gateway = new ExecutionAgentCore({
+    agentId: 'gateway-control-platform',
+    name: '公司中控平台网关',
+    version: '1.0.0',
+    protocolVersion: '1.0',
+    sourceSystem: 'control-platform',
+    agentKind: 'system-gateway',
+    gatewayVersion: '1.0.0',
+    capabilities: [],
+  }, {}, () => {});
+  gateway.send = (message) => sent.push(message);
+  gateway.register();
+  assert.equal(sent[0].kind, 'system-gateway');
+  assert.equal(sent[0].gatewayVersion, '1.0.0');
+
+  const direct = new ExecutionAgentCore({
+    agentId: 'runtime-control-platform-query',
+    name: '直连执行体',
+    version: '1.0.0',
+    protocolVersion: '1.0',
+    sourceSystem: 'control-platform',
+    capabilities: [],
+  }, {}, () => {});
+  direct.send = (message) => sent.push(message);
+  direct.register();
+  assert.equal(sent[1].kind, undefined);
+  assert.equal(sent[1].gatewayVersion, undefined);
+});
+
+test('中台网关注册查询与推理两条能力', () => {
+  registerControlPlatformCapabilities({
+    targetQueryBaseUrl: 'https://x/api/v1',
+    targetQueryAppKey: 'k',
+    targetQueryAppSecret: 's',
+    targetReasoningUrl: '',
+    targetReasoningAgentId: '',
+    targetReasoningToken: '',
+  });
+  const names = capabilityDefinitions().map((capability) => capability.name);
+  assert.ok(names.includes('query_control_platform'));
+  assert.ok(names.includes('reason_control_platform'));
 });
 
 test('中台查询适配器拒绝白名单外 path 与缺 path', async () => {

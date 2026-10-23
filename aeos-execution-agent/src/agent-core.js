@@ -65,7 +65,7 @@ export class ExecutionAgentCore {
   }
 
   register() {
-    this.send({
+    const message = {
       type: 'register',
       agentId: this.config.agentId,
       name: this.config.name,
@@ -73,7 +73,11 @@ export class ExecutionAgentCore {
       protocolVersion: this.config.protocolVersion,
       sourceSystem: this.config.sourceSystem,
       capabilities: this.config.capabilities,
-    });
+    };
+    // 网关模式附带角色与版本；直连模式不带，保持协议向后兼容。
+    if (this.config.agentKind) message.kind = this.config.agentKind;
+    if (this.config.gatewayVersion) message.gatewayVersion = this.config.gatewayVersion;
+    this.send(message);
     this.log(`[agent] 已发送 register：${this.config.agentId}（${this.config.capabilities.map((c) => c.name).join(', ')}）`);
   }
 
