@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { allowedExecutionAgentIds, isExecutionAgentAllowed } from '../src/execution-agent-policy.ts';
 
-test('只允许已登记的查询/推理/PLM 执行面 Agent', () => {
+test('只允许已登记的查询/推理/中台网关/PLM 执行面 Agent', () => {
   assert.equal(isExecutionAgentAllowed('control-platform', 'runtime-control-platform-query'), true);
   assert.equal(isExecutionAgentAllowed('control-platform', 'runtime-control-platform-reasoning'), true);
+  assert.equal(isExecutionAgentAllowed('control-platform', 'gateway-control-platform'), true);
   assert.equal(isExecutionAgentAllowed('hengjian-plm', 'runtime-execution-query'), true);
 });
 
