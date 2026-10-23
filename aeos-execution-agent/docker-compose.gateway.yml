@@ -1,0 +1,14 @@
+# 中控平台网关独立部署示例（单 Agent 兼容模式）
+services:
+  control-platform-gateway:
+    build: .
+    command: ["node", "src/gateway-main.js"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    # 网关主动出方向连接 Hub，通常无需映射端口。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

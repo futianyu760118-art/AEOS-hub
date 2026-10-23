@@ -31,19 +31,49 @@ Hub
 
 ## 2. 怎么启动
 
+### 2.1 签发中台系统令牌
+
+在仓库根目录执行：
+
+```bash
+node scripts/mint-system-token.ts control-platform
+```
+
+把输出填入 `aeos-execution-agent/.env` 的 `EXECUTION_SYSTEM_TOKEN`。
+令牌是敏感信息，不要提交、不要发群、不要写进日志。
+
+### 2.2 配置
+
 ```bash
 cd aeos-execution-agent
 cp .env.gateway.example .env
-# 填入真实的 EXECUTION_SYSTEM_TOKEN、TARGET_QUERY_APP_KEY/SECRET
+# 填入 EXECUTION_SYSTEM_TOKEN、TARGET_QUERY_APP_KEY/SECRET
 npm install
+```
+
+### 2.3 干跑检查
+
+不连接 Hub，只校验配置和能力：
+
+```bash
+node src/gateway-main.js --check
+```
+
+预期输出包含 `gateway-control-platform`、`system-gateway`、`query_control_platform`、`reason_control_platform`。
+
+### 2.4 启动
+
+```bash
 npm run gateway
 ```
 
-Docker 方式沿用现有 `Dockerfile`，把启动命令改为：
+### 2.5 Docker
 
 ```bash
-node src/gateway-main.js
+docker compose -f docker-compose.gateway.yml up -d
 ```
+
+网关主动出方向连接 Hub，通常不需要映射入站端口。
 
 ## 3. 环境变量
 

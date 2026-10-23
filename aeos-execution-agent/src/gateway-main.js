@@ -12,6 +12,18 @@ function main() {
   const config = loadGatewayConfig(process.env);
   registerControlPlatformCapabilities(config);
 
+  if (process.argv.includes('--check')) {
+    console.log(JSON.stringify({
+      agentId: config.agentId,
+      agentName: config.agentName,
+      sourceSystem: config.sourceSystem,
+      agentKind: config.agentKind,
+      gatewayVersion: config.gatewayVersion,
+      capabilities: capabilityDefinitions().map((capability) => capability.name),
+    }, null, 2));
+    return;
+  }
+
   const core = new ExecutionAgentCore(
     {
       wsUrl: config.wsUrl,
