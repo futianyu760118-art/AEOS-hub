@@ -56,7 +56,7 @@ npm install
 不连接 Hub，只校验配置和能力：
 
 ```bash
-node src/gateway-main.js --check
+npm run gateway:check
 ```
 
 预期输出包含 `gateway-control-platform`、`system-gateway`、`query_control_platform`、`reason_control_platform`。

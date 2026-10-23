@@ -5,14 +5,15 @@
   "type": "module",
   "main": "src/main.js",
   "scripts": {
-    "start": "node src/main.js",
-    "gateway": "node src/gateway-main.js",
+    "start": "node --env-file=.env src/main.js",
+    "gateway": "node --env-file=.env src/gateway-main.js",
+    "gateway:check": "node --env-file=.env src/gateway-main.js --check",
     "test": "node --test"
   },
   "dependencies": {
     "ws": "^8.21.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }
