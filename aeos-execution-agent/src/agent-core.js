@@ -106,6 +106,7 @@ export class ExecutionAgentCore {
     const runId = msg.runId;
     const timeoutMs = handlerTimeoutMs(capability, msg.timeoutMs);
     let timer = null;
+    const controller = new AbortController();
     const finish = () => {
       if (timer) {
         clearTimeout(timer);
@@ -116,6 +117,7 @@ export class ExecutionAgentCore {
     const ctx = {
       runId,
       aborted: false,
+      signal: controller.signal,
       sendProgress: (detail) => {
         if (!ctx.aborted) this.send({ type: 'run_update', runId, state: 'running', detail });
       },
@@ -132,11 +134,12 @@ export class ExecutionAgentCore {
         this.sendRunFailed(runId, code, message);
       },
     };
-    this.activeRun = { runId, ctx, timer: null };
+    this.activeRun = { runId, ctx, timer: null, controller };
     this.log(`[agent] 收到派单 ${runId}: ${capability}`);
     timer = setTimeout(() => {
       if (this.activeRun?.runId !== runId) return;
       ctx.aborted = true;
+      controller.abort();
       this.activeRun = null;
       this.sendRunFailed(runId, 'EXECUTION_TIMEOUT', `执行超时（${timeoutMs}ms）`);
     }, timeoutMs);
@@ -148,7 +151,7 @@ export class ExecutionAgentCore {
         if (!ctx.aborted) ctx.sendComplete(result);
       })
       .catch((error) => {
-        if (!ctx.aborted) ctx.sendFailed('EXECUTION_FAILED', error?.message || String(error));
+        if (!ctx.aborted) ctx.sendFailed(error?.code || 'EXECUTION_FAILED', error?.message || String(error));
       });
   }
 
@@ -156,6 +159,7 @@ export class ExecutionAgentCore {
     if (this.activeRun && (msg.runId === undefined || this.activeRun.runId === msg.runId)) {
       const active = this.activeRun;
       active.ctx.aborted = true;
+      active.controller?.abort();
       if (active.timer) clearTimeout(active.timer);
       this.activeRun = null;
       this.log(`[agent] 收到召回 ${msg.runId ?? ''}`);

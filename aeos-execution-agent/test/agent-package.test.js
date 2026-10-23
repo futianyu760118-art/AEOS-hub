@@ -244,3 +244,41 @@ test('召回会取消超时计时器，不再发送 run_failed', async () => {
   assert.equal(core.activeRun, null);
   assert.equal(sent.filter((message) => message.type === 'run_failed').length, 0);
 });
+
+test('召回会中止处理器收到的 AbortSignal', async () => {
+  const sent = [];
+  let signal;
+  const core = new ExecutionAgentCore({}, {
+    query_x: (_input, ctx) => {
+      signal = ctx.signal;
+      return new Promise((_resolve, reject) => {
+        ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    },
+  }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-abort', capability: 'query_x', input: {}, timeoutMs: 1_000 }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(signal.aborted, false);
+  core.handleMessage(JSON.stringify({ type: 'recall', runId: 'run-abort' }));
+  assert.equal(signal.aborted, true);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(sent.filter((message) => message.type === 'run_failed').length, 0);
+});
+
+test('handler 抛错带 code 时透传错误码', async () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, {
+    query_x: async () => {
+      const error = new Error('upstream down');
+      error.code = 'UPSTREAM_UNAVAILABLE';
+      throw error;
+    },
+  }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-code', capability: 'query_x', input: {}, timeoutMs: 100 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const failed = sent.find((message) => message.type === 'run_failed');
+  assert.equal(failed.error.code, 'UPSTREAM_UNAVAILABLE');
+  assert.equal(failed.error.message, 'upstream down');
+});
