@@ -1,17 +1,38 @@
 # 中台推理能力接入说明（reason_control_platform）
 
-> 日期：2026-10-19  
+> 日期：2026-10-23  
 > 发送对象：公司中控平台执行面智能体 / 推理服务开发同学  
-> Hub 侧状态：能力声明、派单、结果校验、用量台账、执行步骤均已就绪  
-> 当前状态：**中台推理适配器仍是占位实现，尚未接通中台大模型**
+> Hub 侧状态：能力声明、派单、结果校验、用量台账、执行步骤均已就绪；推理适配器已按期望契约实现  
+> 当前状态：**未配置真实推理 URL 时仍返回“未接通”；等待中台提供接口契约并填入 `TARGET_REASONING_*`**
+
+---
+
+## 当前进展（2026-10-23）
+
+Hub 侧已完成：
+
+- `reasoning-adapter.js` 支持按期望契约 POST 真实推理接口；
+- 支持 `TARGET_REASONING_URL` / `TARGET_REASONING_TOKEN` / `TARGET_REASONING_AGENT_ID`；
+- 支持 `TARGET_REASONING_MODEL`（默认 `deepseek-flash`）、`TARGET_REASONING_EFFORT`（默认 `high`）、`TARGET_REASONING_TIMEOUT_MS`（默认 `180000`）；
+- 支持 `AbortSignal`：Hub 召回/超时会中止上游请求；
+- 校验 `evidence_refs` / `data_as_of`：缺失时降为 `data_confidence: low` 并返回 `validation_warnings`；
+- 5xx / 401 分别映射为 `UPSTREAM_UNAVAILABLE` / `UPSTREAM_AUTH_FAILED`；
+- 本地 mock 测试覆盖：契约请求、缺证据降级、5xx、超时、调用方中止。
+
+真实链路已在网关验证：
+
+- 查询能力：借调单 `borrow-ede5ab15...` 状态 `completed`；
+- 推理能力（未配置 URL）：借调单 `borrow-e72eee0e...` 状态 `completed`，返回“未接通”且 `data_confidence: low`，未伪造结论。
+
+**中台仍需提供：** 第四节 15 项接口契约；填入 `TARGET_REASONING_*` 后即可联调真实推理。
 
 ---
 
 ## 一、一句话结论
 
-Hub 已经准备好接推理能力，缺的是中台提供推理接口契约，并把 `reasoning-adapter.js` 里的占位实现换成真实调用。中台预计 **1–2 天改造 + 半天联调**。
+Hub 已经准备好接推理能力，适配器也已按期望契约实现；缺的是中台提供真实推理接口地址、鉴权、请求/返回结构和错误码，并填入 `TARGET_REASONING_*`。
 
-现在如果在 Hub 里发起"分析"类问题，链路会走通，但返回的是：
+在**未配置 `TARGET_REASONING_URL`** 时，Hub 发起“分析”类问题链路会走通，但返回的是：
 
 ```
 推理能力尚未接通中台大模型（占位实现）
