@@ -117,6 +117,41 @@ docker compose -f docker-compose.gateway.yml up -d
 5. 重点验证 PLM 登录过期以外的中台失败：JSON 解析、不可达、401。
 6. 验证通过后再决定是否下线直连执行体。
 
+### 6.1 受控只读查询（会新增一张真实借调单）
+
+先启动网关并确认在线，然后用**调用方系统**令牌创建借调单，强制目标为网关：
+
+```bash
+TOKEN=$(node scripts/mint-system-token.ts aeos-hub)
+curl -s -X POST http://127.0.0.1:8790/api/system/borrow-orders \
+  -H "x-aeos-system-id: aeos-hub" \
+  -H "x-aeos-system-token: $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "requestId": "gateway-smoke-请替换为时间戳",
+    "capability": "query_control_platform",
+    "toAgent": "gateway-control-platform",
+    "input": { "path": "/external/orders/list", "params": { "keyword": "请替换为订单号" } }
+  }'
+```
+
+轮询结果：
+
+```bash
+curl -s -H "x-aeos-system-id: aeos-hub" \
+  -H "x-aeos-system-token: $TOKEN" \
+  "http://127.0.0.1:8790/api/system/borrow-orders/<orderId>"
+```
+
+验收：
+
+- `status = completed`；
+- `providerAgentId = gateway-control-platform`；
+- 结果里有 `data_confidence` / `stale`；
+- 网关日志出现“收到派单”。
+
+注意：这会写入一张真实借调单，请使用 `gateway-smoke-*` 这类可识别的 `requestId`，不要查询敏感业务数据。
+
 ## 7. 验收
 
 - Hub 执行面仪表盘出现一个在线网关，能力两条；
