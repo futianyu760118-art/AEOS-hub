@@ -8,6 +8,7 @@ import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnel
 import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrderQuery, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=highest-risk-v1';
 import { buildCapabilityParams, matchCapabilityTemplate, summarizeCapabilityResult } from './capability-template-intent.js?v=capability-template-intent-v2';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
+import { formatBeijingDate, formatBeijingDateTime, formatBeijingTime, isSameBeijingDay } from './time-format.js?v=beijing-time-v1-20261023';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -964,8 +965,7 @@ function borrowStatusPill(status) {
 
 function borrowTime(value) {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? esc(String(value)) : esc(date.toLocaleString('zh-CN', { hour12: false }));
+  return esc(formatBeijingDateTime(value));
 }
 
 function wireBorrowControls() {
@@ -1115,8 +1115,7 @@ function borrowCapabilityLabel(capability) {
 
 function formatDateTimeText(value) {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { hour12: false });
+  return formatBeijingDateTime(value);
 }
 
 function borrowCell(key, value) {
@@ -2777,10 +2776,8 @@ function rememberChoice(convId) {
 let showArchived = false;
 
 function formatConvTime(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+  if (isSameBeijingDay(iso, new Date())) return formatBeijingTime(iso);
+  return formatBeijingDate(iso, { year: undefined });
 }
 
 function convProviderTag(conv) {
@@ -3750,7 +3747,7 @@ function renderEvidenceRows() {
       const occurredAt = row.occurred_at ? new Date(row.occurred_at) : null;
       const ageHours = occurredAt && !Number.isNaN(occurredAt.valueOf()) ? (Date.now() - occurredAt.valueOf()) / 3_600_000 : Number.POSITIVE_INFINITY;
       const freshness = ageHours < 1 ? ['刚刚', 'fresh'] : ageHours < 24 ? ['今日', 'today'] : ['历史', 'old'];
-      time.innerHTML = `<span>${esc(occurredAt && !Number.isNaN(occurredAt.valueOf()) ? occurredAt.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '未知时间')}</span><b class="evidence-freshness ${freshness[1]}">${freshness[0]}</b>`;
+      time.innerHTML = `<span>${esc(occurredAt && !Number.isNaN(occurredAt.valueOf()) ? formatBeijingDateTime(occurredAt, { year: undefined }) : '未知时间')}</span><b class="evidence-freshness ${freshness[1]}">${freshness[0]}</b>`;
       const kind = document.createElement('span');
       kind.className = 'k';
       const [sourceId, sourceLabel] = evidenceSource(row);
@@ -6207,9 +6204,7 @@ function statusPill(kind, value) {
 
 function formatHarborTime(value) {
   if (!value) return '尚未收到';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return formatBeijingDateTime(value, { year: undefined, second: undefined });
 }
 
 function harborVerificationLabel(value) {
@@ -6439,7 +6434,7 @@ function renderHarbor() {
   els.harborRunCount.textContent = String(runs.length);
   els.harborRunActive.textContent = `${activeRuns} 个待处理/执行中`;
   els.harborRuntimeBoundaryStatus.textContent = `${readyRuntimes} 个待命`;
-  els.harborUpdated.textContent = `最近同步 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  els.harborUpdated.textContent = `最近同步 ${formatBeijingTime(new Date(), { second: '2-digit' })}`;
 
   const catalogSystems = Array.isArray(catalogTree?.systems) ? catalogTree.systems : [];
   const activeFilter = catalogFilterActive();
@@ -6849,7 +6844,7 @@ async function deleteHarborAgent(agentId) {
 
 function appendLocalUser(text) {
   const wrap = appendMsg('user', text);
-  wrap.appendChild(msgMeta(`${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} · 你`));
+  wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 你`));
 }
 
 function restoreConversationTranscript(messages) {
@@ -6861,7 +6856,7 @@ function restoreConversationTranscript(messages) {
     return;
   }
   for (const item of rows) {
-    const time = item.createdAt ? new Date(item.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '历史记录';
+    const time = item.createdAt ? formatBeijingTime(item.createdAt) : '历史记录';
     if (item.role === 'user') {
       const wrap = appendMsg('user', item.text);
       wrap.appendChild(msgMeta(`${time} · 你`));
@@ -6983,7 +6978,7 @@ function connect() {
         const wrap = appendMsg('agent', '');
         const bubble = $('.bubble', wrap);
         if (bubble) bubble.innerHTML = md(message.text);
-        wrap.appendChild(msgMeta(`${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} · 中枢 Agent · 执行面`));
+        wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 中枢 Agent · 执行面`));
         els.empty.classList.add('hidden');
         finishThinking();
         setBusy(false);
