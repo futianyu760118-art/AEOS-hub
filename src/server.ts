@@ -82,6 +82,7 @@ import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
+import { authorizeCapability, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
 import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
 import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
@@ -244,6 +245,16 @@ const executionPlane = new ExecutionPlaneRegistry({
   onUsageEvent: (event) => recordUsageEvent(borrowOrderService ? borrowOrderService.attributeUsage(event) : event),
   onRunStateChange: (event) => borrowOrderService?.handleRunStateChange(event),
   onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
+  isCapabilityAuthorized: (agent, capability) => {
+    const systemId = agent.systemId ?? agent.sourceSystem;
+    const tenantId = resolveTenantId(systemId, listSystems());
+    return authorizeCapability(loadExecutionAgentPermissions(), {
+      systemId,
+      agentId: agent.agentId,
+      capability,
+      tenantId,
+    });
+  },
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
 const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);

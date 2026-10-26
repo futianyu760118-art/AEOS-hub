@@ -286,6 +286,12 @@ export class ExecutionPlaneRegistry {
   private readonly onUsageEvent?: (event: UsageEventAppendInput) => void;
   private readonly onRunStateChange?: (event: ExecutionRunStateEvent) => void;
   private readonly onAgentOffline?: (event: AgentOfflineEvent) => void;
+  /** 派单前的能力授权检查；返回 false 时按 enforcement 决定拦截还是仅告警。 */
+  private readonly isCapabilityAuthorized?: (agent: ExecutionAgentRecord, capability: string) => boolean | {
+    allowed: boolean;
+    enforcement?: 'observe' | 'enforce';
+    reason?: string;
+  };
 
   constructor(options: {
     file: string;
@@ -301,6 +307,11 @@ export class ExecutionPlaneRegistry {
     onUsageEvent?: (event: UsageEventAppendInput) => void;
     onRunStateChange?: (event: ExecutionRunStateEvent) => void;
     onAgentOffline?: (event: AgentOfflineEvent) => void;
+    isCapabilityAuthorized?: (agent: ExecutionAgentRecord, capability: string) => boolean | {
+      allowed: boolean;
+      enforcement?: 'observe' | 'enforce';
+      reason?: string;
+    };
   }) {
     this.file = options.file;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
@@ -315,6 +326,7 @@ export class ExecutionPlaneRegistry {
     this.onUsageEvent = options.onUsageEvent;
     this.onRunStateChange = options.onRunStateChange;
     this.onAgentOffline = options.onAgentOffline;
+    this.isCapabilityAuthorized = options.isCapabilityAuthorized;
     this.load();
   }
 
@@ -623,6 +635,18 @@ export class ExecutionPlaneRegistry {
     const cap = entry.record.capabilities.find((item) => item.name === capability);
     if (!cap) {
       throw new ExecutionPlaneError('CAPABILITY_UNSUPPORTED', `执行面 ${agentId} 不支持能力 ${capability}`);
+    }
+    // 能力授权表：enforce 模式拦截未授权派单；observe 模式只告警，便于灰度切换。
+    const authorization = this.isCapabilityAuthorized?.(entry.record, capability);
+    if (authorization !== undefined) {
+      const allowed = typeof authorization === 'boolean' ? authorization : authorization.allowed;
+      if (!allowed) {
+        const enforcement = typeof authorization === 'boolean' ? 'enforce' : authorization.enforcement ?? 'enforce';
+        const reason = typeof authorization === 'boolean' ? '' : authorization.reason ?? '';
+        const message = `执行面 ${agentId} 未被授权能力 ${capability}${reason ? `（${reason}）` : ''}`;
+        if (enforcement === 'enforce') throw new ExecutionPlaneError('CAPABILITY_FORBIDDEN', message);
+        console.warn(`[execution-plane] ${message}；当前为 observe 模式，仍允许派单`);
+      }
     }
     if (cap.constraints?.readOnly !== true) {
       throw new ExecutionPlaneError('WRITE_FORBIDDEN', `能力 ${capability} 未声明只读，试点仅允许只读能力`);

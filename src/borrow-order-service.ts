@@ -678,6 +678,7 @@ function mapDispatchError(error: ExecutionPlaneError): { code: string; httpStatu
     case 'AGENT_OFFLINE': return { code: 'DISPATCH_AGENT_OFFLINE', httpStatus: 409 };
     case 'CAPABILITY_UNSUPPORTED': return { code: 'DISPATCH_CAPABILITY_UNSUPPORTED', httpStatus: 409 };
     case 'WRITE_FORBIDDEN': return { code: 'WRITE_FORBIDDEN', httpStatus: 403 };
+    case 'CAPABILITY_FORBIDDEN': return { code: 'CAPABILITY_FORBIDDEN', httpStatus: 403 };
     case 'INVALID_ARGUMENT': return { code: 'INVALID_ARGUMENT', httpStatus: 400 };
     case 'AGENT_NOT_FOUND': return { code: 'TARGET_NOT_ELIGIBLE', httpStatus: 409 };
     default: return { code: 'DISPATCH_FAILED', httpStatus: 502 };

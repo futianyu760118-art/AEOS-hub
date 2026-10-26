@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "revision": 1,
+  "updatedAt": "2026-10-26T06:20:00.000Z",
+  "enforcement": "enforce",
+  "defaultPolicy": "deny",
+  "grants": [
+    {
+      "systemId": "control-platform",
+      "agentId": "gateway-control-platform",
+      "tenantId": "tenant-demo",
+      "capabilities": [
+        "query_control_platform",
+        "reason_control_platform"
+      ]
+    },
+    {
+      "systemId": "hengjian-plm",
+      "agentId": "runtime-execution-query",
+      "tenantId": "tenant-demo",
+      "capabilities": [
+        "query_plm",
+        "reason_plm",
+        "query_local_files"
+      ]
+    }
+  ]
+}

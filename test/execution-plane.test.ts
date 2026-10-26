@@ -264,6 +264,48 @@ test('run_complete 携带 usage 时经 onUsageEvent 记账', (t) => {
   assert.equal(usageEvents[0].cost, 0.00018);
 });
 
+test('能力授权 enforce 时拒绝未授权派单，observe 时只告警', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-auth-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const build = (enforcement: 'observe' | 'enforce') => {
+    const registry = new ExecutionPlaneRegistry({
+      file: join(dir, `execution-plane-${enforcement}.json`),
+      idFactory: (() => {
+        let n = 0;
+        return () => `auth-${enforcement}-${++n}`;
+      })(),
+      isCapabilityAuthorized: () => ({ allowed: false, enforcement, reason: 'capability_not_granted' }),
+    });
+    registry.onRegister(
+      {
+        agentId: `agent-auth-${enforcement}`,
+        name: '查询智能体',
+        version: '1.0.0',
+        sourceSystem: '公司中控平台',
+        capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+      },
+      () => {},
+    );
+    return registry;
+  };
+
+  const enforced = build('enforce');
+  assert.throws(
+    () => enforced.dispatch('agent-auth-enforce', 'query_control_platform', { path: '/external/orders/list', params: {} }),
+    (error: unknown) => error instanceof ExecutionPlaneError && error.code === 'CAPABILITY_FORBIDDEN',
+  );
+
+  const observed = build('observe');
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const { runId } = observed.dispatch('agent-auth-observe', 'query_control_platform', { path: '/external/orders/list', params: {} });
+    assert.ok(runId);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('dispatch 可指定 traceId，run 与用量按 traceId 关联', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'execution-plane-trace-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
