@@ -3,7 +3,7 @@
 > 致：公司中控平台执行面智能体 / 推理服务开发同学
 > 自：AEOS Hub 管理面
 > 日期：2026-10-26
-> 状态：**中台已回复 15 项契约（2026-10-26），Hub 适配器已按回复实现；剩 4 项等待中台/运维。**
+> 状态：**UAT 全链路已通过（2026-10-26）：自检 5/5、页面端到端 1/1；待生产 18085 放行。**
 > 契约细节见 `docs/control-platform-reasoning-integration.md` 与《AEOS-Hub-推理能力接入回复-对外版-20261026》。
 
 ---
@@ -15,28 +15,30 @@
 | 推理接口契约 | **已对齐**：3 个只读端点、HMAC 鉴权、信封响应、`task_id=runId`、cancel |
 | Hub 推理适配器 | **已实现**：HMAC 三头、信封解包、取消、空结论、usage、`llm.called`；单测 41 项通过 |
 | 接入方式 | 改造 Hub 的 `reasoning-adapter.js`，**不部署中台 Sidecar**（避免 8790 端口冲突与双身份） |
-| 推理接口连通 | **未接通**：`TARGET_REASONING_URL`、`app_key/app_secret` 尚未配置 |
-| 生产 18085 | **待放行**；UAT 地址待中台确认 |
+| 执行面路径 | **只保留统一网关** `gateway-control-platform`；中台侧直连 Agent 已移出允许列表并软注销（2026-10-26） |
+| 推理接口连通 | **UAT 全链路已通**：自检 5/5 + 页面端到端 1/1（2026-10-26） |
+| 端口连通 | UAT 8000 已通；生产 18085 仍 TCP 超时 |
 
-**结论：Hub 侧代码已就绪，只差中台交付凭据与地址。**
+**结论：UAT 验收完成，剩生产端口放行。**
 
-## 二、剩余阻塞项
+## 二、剩余/已完成事项
 
-| # | 事项 | 负责方 | 完成标准 |
+| # | 事项 | 负责方 | 状态 |
 |---|---|---|---|
-| 1 | 推理专用 API Key | 中台 | 勾选 `reasoning.analyze/cancel/task`，安全渠道交付 `app_key/app_secret` |
-| 2 | 生产 18085 放行 | 中台 / 运维 | Hub 能访问 `150.158.13.110:18085` |
-| 3 | UAT 最终地址 | 中台 | 提供 UAT analyze 地址（端口 8000 或最终对外地址） |
-| 4 | 真实大模型配置 | 中台 | `REASONING_MODEL=deepseek-flash`，响应 `llm.called=true` |
-| 5 | 联调窗口 | 双方 | 约定时间，Hub 侧半天内可完成 |
+| 1 | 推理专用 API Key | 中台 | ✅ 已交付并配置到 `.env`（HMAC 生效） |
+| 2 | 生产 18085 放行 | 中台 / 运维 | ⏳ 仍超时 |
+| 3 | UAT 8000 可达 | 中台 / 运维 | ✅ 已通（openapi 200） |
+| 4 | 真实大模型配置 | 中台 | ✅ `llm.called=true`，deepseek-flash |
+| 5 | IP 白名单 | Hub | ✅ 试点期不启用，仅 app_key + 100 次/分钟限流 |
+| 6 | 联调窗口 | 双方 | ✅ UAT 自检 5/5、页面端到端 1/1 已完成 |
 
 ## 三、15 项契约回复情况
 
 | # | 项 | 状态 |
 |---|---|---|
-| 1 | 推理接口地址 | 已明确（生产 18085；UAT 待确认） |
+| 1 | 推理接口地址 | 已明确：生产 `150.158.13.110:18085`；UAT `192.168.0.178:8000`（共用同一套凭据） |
 | 2 | 鉴权方式 | 已明确：HMAC-SHA256 三头，不支持 Bearer |
-| 3 | 调用方 Agent ID / 应用 ID | 已明确：`runtime-control-platform-reasoning` + app_key |
+| 3 | 调用方 Agent ID / 应用 ID | 已明确：调用方身份以 `app_key` 为准；中台不要求创建 `runtime-control-platform-reasoning` |
 | 4 | 请求参数结构 | 已明确（含 `task_id` / `request_id`） |
 | 5 | 返回参数结构 | 已明确：信封 `{code,message,data}` |
 | 6 | 流式输出 | 已明确：v1 不支持，一次性返回 |
@@ -60,7 +62,7 @@
 
 ## 五、联调步骤
 
-1. 中台交付 `app_key/app_secret`、UAT 地址并放行 18085；
+1. 中台交付 `app_key/app_secret`，确认 UAT `192.168.0.178:8000` 与生产 18085 从 Hub 主机可达；
 2. Hub 写入 `TARGET_REASONING_*` 并重启网关；
 3. `cd aeos-execution-agent && npm run reasoning:check`；
 4. 登录 Hub 执行面提问，确认结论与 evidence_refs；

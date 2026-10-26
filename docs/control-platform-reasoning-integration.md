@@ -2,7 +2,7 @@
 
 > 日期：2026-10-26（中台回复版）
 > 发送对象：公司中控平台执行面智能体 / 推理服务开发同学
-> Hub 侧状态：**契约已对齐，适配器已按中台回复实现并通过单测**；等待中台发放推理专用 `app_key/app_secret`、放行 18085 端口
+> Hub 侧状态：**UAT 全链路已通过（2026-10-26）**：自检 5/5、页面端到端 1/1；待生产 18085 放行
 > 中台回复原文：`AEOS-Hub-推理能力接入回复-对外版-20261026.md`
 
 ---
@@ -12,7 +12,8 @@
 1. 中台提供 3 个只读端点：`analyze` / `cancel` / `task`，HMAC-SHA256 鉴权，信封响应 `{code,message,data}`。
 2. **接入方式：改造 Hub 自己的 `reasoning-adapter.js`，不部署中台 Sidecar。**
    - 现有 `gateway-control-platform` 单网关已同时承载查询与推理，减少一个进程与一套身份；
-   - 中台 Sidecar 的 `HEALTH_CHECK_PORT=8790` 与 Hub UI 端口冲突。
+   - 中台 Sidecar 的 `HEALTH_CHECK_PORT=8790` 与 Hub UI 端口冲突；
+   - **MVP 分支只保留统一网关路径**：中台侧直连 Agent（`runtime-control-platform-query` / `runtime-control-platform-reasoning`）已于 2026-10-26 从执行面允许列表移除并软注销，之后的重连会被拒绝。
 3. 按中台回复第 3 节完成 4 处改造：HMAC 三头、`task_id=runId`、信封解包、召回同时调用 cancel。
 4. 额外处理：空结论、`usage` 透传、`llm.called` 元信息、404/409/490/429 错误映射。
 5. 未配置 URL 时仍返回“未接通”占位，不伪造结论。
@@ -26,12 +27,13 @@
 | 环境 | URL |
 |---|---|
 | 生产（main 主机，端口 18085） | `http://150.158.13.110:18085/api/v1/external/reasoning/analyze` |
-| UAT / 联调（dev compose，端口 8000） | `http://<UAT主机>:8000/api/v1/external/reasoning/analyze`（**地址待中台确认**） |
+| UAT / 联调（dev compose，端口 8000） | `http://192.168.0.178:8000/api/v1/external/reasoning/analyze`（**与生产共用同一套 `app_key/app_secret`**） |
 | 取消 | `POST {BASE}/api/v1/external/reasoning/tasks/{task_id}/cancel` |
 | 状态 | `GET {BASE}/api/v1/external/reasoning/tasks/{task_id}` |
 | OpenAPI | `GET {BASE}/api/v1/external/openapi.json` |
 
-生产端口 18085 需放行；最终地址以运维/网关配置为准。
+生产端口 18085 需放行；UAT 的 8000 端口同样需要从 Hub 主机可达。
+截至 2026-10-26：从 Hub 主机（192.168.0.23）访问 UAT `192.168.0.178:8000` 与生产 `150.158.13.110:18085` 均 TCP 超时（UAT 主机可 ping 通），需中台确认服务启动与防火墙放行。
 
 ### 2.2 鉴权（HMAC-SHA256）
 
@@ -174,6 +176,15 @@ TARGET_REASONING_TIMEOUT_MS=180000
 | 6 | 用量台账出现 Token/成本 | 自检展示 usage；Hub 台账记 `reported` | 已实现 |
 | 7 | 执行步骤时间线出现模型调用过程 | 中台 Sidecar 场景；Hub 直连模式暂为部分 | 部分 |
 
+### 2026-10-26 UAT 自检实测
+
+- **5/5 通过**：订单交付 20.3s、齐套缺口 32.7s、质量异常 9.3s、生产协同 30.7s、不存在订单 1.0s；
+- 每个用例 5–6 条结论，全部带 `evidence_refs`；`data_confidence=high`，`data_as_of=2026-10-26T13:21:53+08:00`；
+- `llm.called=true`，模型 `deepseek-flash`，`usage` 正常返回（如订单用例 in=5540 / cached=384 / out=3495）；
+- 不存在订单返回信封 `404`，明确“不代表无风险”；
+- **页面端到端（13:28）**：Hub 执行面提问 → 路由 `gateway-control-platform` → 中台 UAT；run `exec-run-f05288cc-…`，6 条结论、`data_confidence=high`、25.2s；用量台账 `reported`，`deepseek-flash` in=5533 / cached=384 / out=4445，Hub 补算成本 ¥0.0229；
+- **观察**：质量用例中，中台证据集未包含检验记录/不良率等质量数据，模型明确说明证据不足而非编造；建议中台补该订单的质量证据覆盖。
+
 ---
 
 ## 五、联调步骤
@@ -189,10 +200,11 @@ TARGET_REASONING_TIMEOUT_MS=180000
 
 ## 六、待确认
 
-1. UAT 最终地址与端口；
-2. 生产 18085 放行时间；
+1. ~~UAT 最终地址~~：已提供 `http://192.168.0.178:8000/api/v1/external/reasoning/analyze`，与生产共用同一套 `app_key/app_secret`；**当前从 Hub 主机访问 8000 端口超时，待中台确认服务与防火墙**；
+2. 生产 18085 放行时间（当前从 Hub 主机访问超时）；
 3. `app_key/app_secret` 交付方式与生效时间；
-4. 是否需要 Hub 按次指定 `model/reasoning_effort`（当前接受服务端配置）。
+4. 试点期是否启用 IP 白名单（Hub 建议先不启用，仅用 app_key + 默认 100 次/分钟限流）；
+5. 联调窗口（日期/时间段）。
 
 ---
 
