@@ -59,6 +59,8 @@ export interface ExecutionAgentRecord {
 
 export interface ExecutionRunRecord {
   runId: string;
+  /** 链路 ID：借调单号或编排 requestId；未指定时等于 runId。历史记录可能没有该字段。 */
+  traceId?: string;
   agentId: string;
   capability: string;
   input: unknown;
@@ -582,6 +584,7 @@ export class ExecutionPlaneRegistry {
       systemId: entry.record.systemId ?? (entry.record.sourceSystem.trim() ? entry.record.sourceSystem.trim() : 'unknown'),
       modelId: usage.modelId,
       runId: run.runId,
+      traceId: run.traceId ?? run.runId,
       tokensIn: usage.tokensIn,
       cachedTokens: usage.cachedTokens,
       tokensOut: usage.tokensOut,
@@ -612,7 +615,7 @@ export class ExecutionPlaneRegistry {
   }
 
   // ---------- 管理面 → 执行面 ----------
-  dispatch(agentId: string, capability: string, input: unknown): { runId: string; state: ExecutionRunState } {
+  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string } = {}): { runId: string; state: ExecutionRunState } {
     const entry = this.requireAgent(agentId);
     if (entry.record.connectionStatus !== 'online') {
       throw new ExecutionPlaneError('AGENT_OFFLINE', `执行面 ${agentId} 不在线，无法派单`);
@@ -630,8 +633,12 @@ export class ExecutionPlaneRegistry {
       if (validationError) throw new ExecutionPlaneError('INVALID_ARGUMENT', validationError);
     }
     const runId = `exec-run-${this.idFactory()}`;
+    const traceId = typeof options.traceId === 'string' && options.traceId.trim()
+      ? options.traceId.trim().slice(0, 160)
+      : runId;
     const run: ExecutionRunRecord = {
       runId,
+      traceId,
       agentId,
       capability,
       input: input ?? null,

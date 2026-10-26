@@ -7591,7 +7591,7 @@ els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
 
 /* ---------- 统一链路追踪 ---------- */
 const TRACE_KIND_LABELS = { borrow: '借调', run: '执行', usage: '用量', evidence: '审计' };
-const TRACE_RESOLVED_LABELS = { 'borrow-order': '按借调单号', run: '按 runId', request: '按 requestId' };
+const TRACE_RESOLVED_LABELS = { 'borrow-order': '按借调单号', run: '按 runId', request: '按 requestId', trace: '按 traceId' };
 
 function openTraceFor(id) {
   const input = $('#trace-id-input');

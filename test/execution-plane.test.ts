@@ -258,9 +258,39 @@ test('run_complete 携带 usage 时经 onUsageEvent 记账', (t) => {
   assert.equal(usageEvents[0].systemId, '公司中控平台');
   assert.equal(usageEvents[0].modelId, 'deepseek-chat');
   assert.equal(usageEvents[0].runId, runId);
+  assert.equal(usageEvents[0].traceId, runId);
   assert.equal(usageEvents[0].tokensIn, 120);
   assert.equal(usageEvents[0].tokensOut, 30);
   assert.equal(usageEvents[0].cost, 0.00018);
+});
+
+test('dispatch 可指定 traceId，run 与用量按 traceId 关联', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-trace-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const usageEvents: UsageEventAppendInput[] = [];
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => {
+      let n = 0;
+      return () => `id-${++n}`;
+    })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-trace',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  const { runId } = registry.dispatch('agent-query-trace', 'query_control_platform', { path: '/external/orders/list', params: {} }, { traceId: 'borrow-trace-1' });
+  assert.equal(registry.getRun(runId)?.traceId, 'borrow-trace-1');
+  registry.onRunComplete('agent-query-trace', { runId, result: { rows: [] }, usage: { modelId: 'deepseek-chat', tokensIn: 1, tokensOut: 1 } });
+  assert.equal(usageEvents[0]?.traceId, 'borrow-trace-1');
 });
 
 test('注册身份来自认证上下文：规范 systemId 覆盖自报值并进入用量归属', (t) => {

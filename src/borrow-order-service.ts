@@ -235,6 +235,7 @@ export class BorrowOrderService {
         summary: `borrow order ${action}`,
         payload: {
           action,
+          traceId: order?.orderId ?? null,
           orderId: order?.orderId ?? null,
           requestId: order?.requestId ?? null,
           capability: order?.capability ?? extra.capability ?? null,
@@ -401,7 +402,7 @@ export class BorrowOrderService {
     });
     const createdAudit = this.audit('created', order);
     try {
-      const dispatched = this.executionPlane.dispatch(provider.agentId, capability, rawInput);
+      const dispatched = this.executionPlane.dispatch(provider.agentId, capability, rawInput, { traceId: order.orderId });
       this.runToOrder.set(dispatched.runId, order.orderId);
       const updated = this.store.update(order.orderId, {
         status: 'dispatched',
@@ -575,6 +576,7 @@ export class BorrowOrderService {
     if (!order) return event;
     return {
       ...event,
+      traceId: order.orderId,
       consumerSystemId: order.fromSystem,
       consumerAgentId: order.fromAgentId ?? null,
       borrowOrderId: order.orderId,

@@ -1891,6 +1891,7 @@ const server = createServer(async (req, res) => {
       borrowOrderById: (orderId) => borrowOrderStore.get(orderId),
       borrowOrders: () => borrowOrderStore.load().orders,
       runById: (runId) => executionPlane.getRun(runId),
+      allRuns: () => executionPlane.list().runs,
       usageEvents: () => listUsageEvents(5_000),
       evidenceEntries: () => readEvidenceEntries(),
     });
@@ -2631,6 +2632,7 @@ const server = createServer(async (req, res) => {
       },
       borrowOrders: () => borrowOrderStore.load().orders.filter((order) => order.tenantId === requestTenantId),
       runById: (runId) => executionPlane.getRun(runId),
+      allRuns: () => executionPlane.list().runs,
       usageEvents: () => listUsageEvents(5_000, requestTenantId),
       evidenceEntries: () => readEvidenceEntries().filter((entry) => entry.tenant_id === requestTenantId),
     });

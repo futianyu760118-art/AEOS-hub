@@ -68,7 +68,25 @@ borrowOrderId ─┬─ requestId（借调请求）
 | `borrow-8f21bcff-…` | 1 条推理 run（6 条结论、high）、用量归属 `aeos-hub`、成本 ¥0.0254、3 条审计、6 个 evidence_refs |
 | `orch-e562e337-…` | 查询 run + 推理 run、2 条用量、15 个 evidence_refs |
 
-## 五、模块分工（避免重复）
+## 五、traceId 的写入
+
+2026-10-26 起，链路 ID 在写入时就已落到各存储，不再只靠事后拼接：
+
+| 入口 | traceId 取值 |
+|---|---|
+| 跨系统借调 | 借调单号 `borrow-…` |
+| 最高风险编排 | 编排 `requestId`（`orch-…`），查询与推理 run 共用 |
+| 直接派单 / 意图路由 | 默认等于该次 `runId` |
+| 历史数据 | run / 用量没有 `traceId` 时按 `runId` 回退 |
+
+落点：
+
+- `execution-plane.json` 的 run 记录新增 `traceId`；
+- `usage-ledger.json` 的用量事件新增 `traceId`；
+- evidence payload 新增 `traceId`（借调、编排审计）；
+- trace 查询可直接用 `traceId`，也可继续用借调单号 / runId / requestId。
+
+## 六、模块分工（避免重复）
 
 | 模块 | 职责 | 与其他模块的关系 |
 |---|---|---|
@@ -78,8 +96,7 @@ borrowOrderId ─┬─ requestId（借调请求）
 
 执行步骤（`run_event`）只在 AI 观测保留一份，避免三处重复渲染。
 
-## 六、边界与下一步
+## 七、边界与下一步
 
 - **上限**：evidence 只读最后 2 万行；更早的审计被轮转后不会出现在 trace 里；
-- **当前靠既有 ID 关联**，没有单独的 traceId 写入；下一步可在借调创建/run 派单/用量入账时统一写 `traceId`，并给借调详情页加“查看链路”入口；
-- 取消链路可以复用同一视图：借调单取消后 `timeline` 会显示 `cancelled` 与对应审计。
+- **下一步**：给借调详情/AI 观测的「查看链路」增加一键复制 traceId；可选的取消链路验收复用同一视图，借调单取消后 `timeline` 会显示 `cancelled` 与对应审计。

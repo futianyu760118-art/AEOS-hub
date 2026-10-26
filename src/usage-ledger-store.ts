@@ -37,6 +37,8 @@ export const UsageEventSchema = z.object({
   systemId: identifierSchema,
   modelId: identifierSchema.nullable(),
   runId: identifierSchema.nullable(),
+  // 链路 ID：借调单号或编排 requestId；历史记录为 null，可按 runId 反查。
+  traceId: identifierSchema.nullable().default(null),
   // 借调归属：systemId/agentId 是执行方；以下三个字段描述请求方（消费方）。
   consumerSystemId: identifierSchema.nullable().default(null),
   consumerAgentId: identifierSchema.nullable().default(null),
@@ -69,6 +71,7 @@ export interface UsageEventAppendInput {
   tenantId?: string;
   modelId: string | null;
   runId: string | null;
+  traceId?: string | null;
   consumerSystemId?: string | null;
   consumerAgentId?: string | null;
   borrowOrderId?: string | null;
@@ -222,6 +225,7 @@ export class UsageLedgerStore {
       systemId: input.systemId,
       modelId: input.modelId,
       runId: input.runId,
+      traceId: typeof input.traceId === 'string' && input.traceId.trim() ? input.traceId.trim() : null,
       consumerSystemId: typeof input.consumerSystemId === 'string' && input.consumerSystemId.trim() ? input.consumerSystemId.trim() : null,
       consumerAgentId: typeof input.consumerAgentId === 'string' && input.consumerAgentId.trim() ? input.consumerAgentId.trim() : null,
       borrowOrderId: typeof input.borrowOrderId === 'string' && input.borrowOrderId.trim() ? input.borrowOrderId.trim() : null,

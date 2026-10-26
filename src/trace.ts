@@ -12,12 +12,14 @@ export type TraceSources = {
   borrowOrderById: (orderId: string) => BorrowOrderRecord | null;
   borrowOrders: () => BorrowOrderRecord[];
   runById: (runId: string) => ExecutionRunRecord | undefined;
+  allRuns: () => ExecutionRunRecord[];
   usageEvents: () => UsageEvent[];
   evidenceEntries: () => EvidenceEntry[];
 };
 
 export type TraceRun = {
   runId: string;
+  traceId: string;
   taskId: string | null;
   agentId: string;
   capability: string;
@@ -33,6 +35,7 @@ export type TraceRun = {
 
 export type TraceUsage = {
   runId: string | null;
+  traceId: string | null;
   systemId: string;
   consumerSystemId: string | null;
   borrowOrderId: string | null;
@@ -55,7 +58,7 @@ export type TraceTimelineEntry = {
 
 export type TraceResult = {
   traceId: string;
-  resolvedBy: 'borrow-order' | 'run' | 'request' | 'none';
+  resolvedBy: 'borrow-order' | 'run' | 'request' | 'trace' | 'none';
   borrowOrder: {
     orderId: string;
     requestId: string;
@@ -123,7 +126,7 @@ function text(value: unknown): string | null {
 
 function evidenceKeys(entry: EvidenceEntry): string[] {
   const payload = record(entry.payload);
-  return [payload.orderId, payload.requestId, payload.runId, payload.queryRunId, payload.reasoningRunId]
+  return [payload.orderId, payload.requestId, payload.traceId, payload.runId, payload.queryRunId, payload.reasoningRunId]
     .map(text)
     .filter((value): value is string => Boolean(value));
 }
@@ -149,6 +152,7 @@ function runToTrace(run: ExecutionRunRecord): TraceRun {
   }
   return {
     runId: run.runId,
+    traceId: run.traceId ?? run.runId,
     // 推理能力的 task_id 与 runId 一致（适配器按 ctx.runId 传给中台），这里显式标出来。
     taskId: run.capability.startsWith('reason') ? run.runId : null,
     agentId: run.agentId,
@@ -187,6 +191,7 @@ function borrowToSummary(order: BorrowOrderRecord) {
 export function buildTrace(traceId: string, sources: TraceSources): TraceResult {
   const id = String(traceId ?? '').trim();
   const allBorrows = sources.borrowOrders();
+  const allRuns = sources.allRuns();
   const borrow = sources.borrowOrderById(id)
     ?? allBorrows.find((order) => order.requestId === id)
     ?? allBorrows.find((order) => order.runId === id)
@@ -197,6 +202,10 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
     known.add(borrow.orderId);
     known.add(borrow.requestId);
     if (borrow.runId) known.add(borrow.runId);
+  }
+  // 写入链路时 traceId 已落到 run 上：借调单号 / 编排 requestId 可直接反查 run。
+  for (const run of allRuns) {
+    if ((run.traceId ?? run.runId) === id) known.add(run.runId);
   }
 
   const allEvidence = sources.evidenceEntries();
@@ -211,11 +220,17 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
     if (next.size === known.size) break;
     for (const key of next) known.add(key);
   }
+  for (const run of allRuns) {
+    if (known.has(run.traceId ?? run.runId)) known.add(run.runId);
+  }
 
   const runIds = new Set<string>();
   if (borrow?.runId) runIds.add(borrow.runId);
   if (id.startsWith('exec-run-')) runIds.add(id);
   for (const entry of matchedEvidence) collectRunIds(entry, runIds);
+  for (const run of allRuns) {
+    if (known.has(run.runId) || known.has(run.traceId ?? run.runId)) runIds.add(run.runId);
+  }
 
   const runs = [...runIds]
     .map((runId) => sources.runById(runId))
@@ -224,9 +239,12 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
     .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
 
   const usage = sources.usageEvents()
-    .filter((event) => (event.runId ? runIds.has(event.runId) : false) || (borrow ? event.borrowOrderId === borrow.orderId : false))
+    .filter((event) => (event.runId ? runIds.has(event.runId) : false)
+      || (event.traceId ? known.has(event.traceId) : false)
+      || (borrow ? event.borrowOrderId === borrow.orderId : false))
     .map((event): TraceUsage => ({
       runId: event.runId,
+      traceId: event.traceId ?? null,
       systemId: event.systemId,
       consumerSystemId: event.consumerSystemId,
       borrowOrderId: event.borrowOrderId,
@@ -307,7 +325,8 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
 
   const resolvedBy: TraceResult['resolvedBy'] = sources.borrowOrderById(id) ? 'borrow-order'
     : id.startsWith('exec-run-') && sources.runById(id) ? 'run'
-      : matchedEvidence.length ? 'request' : 'none';
+      : matchedEvidence.length ? 'request'
+        : allRuns.some((run) => (run.traceId ?? run.runId) === id) ? 'trace' : 'none';
 
   return {
     traceId: id,

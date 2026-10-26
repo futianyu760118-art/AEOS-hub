@@ -223,7 +223,7 @@ export class ExecutionOrchestrator {
       const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
         path: KITTING_RESULTS_PATH,
         params: { page: 1, page_size: 200, risk_level: 'red' },
-      });
+      }, { traceId: requestId });
       queryRunId = queryDispatch.runId;
       const queryRun = await this.waitForRun(queryRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
       if (queryRun.state !== 'completed') {
@@ -239,7 +239,7 @@ export class ExecutionOrchestrator {
         });
       }
 
-      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId));
+      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId), { traceId: requestId });
       reasoningRunId = reasonDispatch.runId;
       const reasonRun = await this.waitForRun(reasoningRunId, this.reasoningTimeoutMs, 'REASONING_TIMEOUT');
       if (reasonRun.state !== 'completed') {
@@ -248,7 +248,7 @@ export class ExecutionOrchestrator {
         });
       }
 
-      this.audit('completed', { requestId, queryRunId, reasoningRunId, orderNo: order.orderNo, queryAgentId: queryer.agentId, reasoningAgentId: reasoner.agentId });
+      this.audit('completed', { requestId, traceId: requestId, queryRunId, reasoningRunId, orderNo: order.orderNo, queryAgentId: queryer.agentId, reasoningAgentId: reasoner.agentId });
       return { requestId, order, queryRunId, reasoningRunId, result: reasonRun.result };
     } catch (error) {
       const mapped = error instanceof ExecutionOrchestrationError
@@ -259,7 +259,7 @@ export class ExecutionOrchestrator {
       if (reasoningRunId) {
         try { this.plane.recall(reasoner.agentId); } catch { /* 已结束或已召回 */ }
       }
-      this.audit('failed', { requestId, queryRunId, reasoningRunId, code: mapped.code });
+      this.audit('failed', { requestId, traceId: requestId, queryRunId, reasoningRunId, code: mapped.code });
       throw mapped;
     }
   }
