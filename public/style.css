@@ -2608,3 +2608,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .trace-timeline { height: 320px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .trace-usage-scroll { height: 240px; }
 .trace-usage-scroll thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
+.sidebar-view-mode { width: calc(100% - 24px); margin: 8px 12px 0; padding: 6px 10px; border: 1px solid var(--line-subtle); border-radius: 7px; background: transparent; color: var(--text-2); font-size: 11px; text-align: left; cursor: pointer; }
+.sidebar-view-mode:hover { background: var(--surface-soft); border-color: var(--line); }
+.borrow-tech { margin: 0 18px 14px; }
+.borrow-tech summary { cursor: pointer; color: #6b7280; font-size: 12px; }
+.borrow-tech .borrow-detail-grid { margin-top: 8px; }
+.usage-table.compact .harbor-row { min-width: 420px; grid-template-columns: minmax(180px, 1fr) 110px 90px; }
+.catalog-show-hidden { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.catalog-show-hidden input { accent-color: var(--accent, #1f4e79); }

@@ -43,5 +43,5 @@ test('中枢对话窄路由与 assistant_reply 渲染已接线', () => {
   assert.match(server, /executionOrchestrator\.runCapability/);
   assert.match(server, /type: 'assistant_reply'/);
   assert.match(app, /case 'assistant_reply'/);
-  assert.match(app, /中枢 Agent · 执行面/);
+  assert.match(app, /智能助手 · 分析工作台/);
 });

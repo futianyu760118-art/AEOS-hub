@@ -28,6 +28,13 @@ test('链路追踪页时间线已接入，run 明细移至 AI 观测', () => {
   assert.doesNotMatch(app, /class="trace-runs"/);
 });
 
+test('业务视图分层：管理模块可隐藏，技术信息可折叠', () => {
+  assert.match(app, /const MANAGEMENT_VIEWS = new Set/);
+  assert.match(app, /btn-view-mode/);
+  assert.match(app, /function humanizeError/);
+  assert.match(app, /borrow-tech/);
+});
+
 test('时间线只读：没有写请求', () => {
   const start = app.indexOf('// ---------- 执行步骤（中台上报的工序回执） ----------');
   const end = app.indexOf('function openPrompt');

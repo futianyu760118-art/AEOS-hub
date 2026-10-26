@@ -40,7 +40,7 @@ test('助手会话列表与详情重新设计', () => {
 });
 
 test('视图注册、两个标签页数据加载与轮询', () => {
-  assert.match(app, /view: 'ai-obs', label: 'AI 观测'/);
+  assert.match(app, /view: 'ai-obs', label: 'AI 运行观测'/);
   assert.match(app, /if \(view === 'ai-obs'\) loadAiObs\(\);/);
   assert.match(app, /function loadAiRuns\(\)/);
   assert.match(app, /function loadAssistantEvents\(\)/);

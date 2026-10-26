@@ -43,7 +43,7 @@ test('借调详情展示能力版本、schema 锚定与来源', () => {
 });
 
 test('视图注册与懒加载', () => {
-  assert.match(app, /view: 'borrow', label: '跨系统借调'/);
+  assert.match(app, /view: 'borrow', label: '跨系统查询'/);
   assert.match(app, /if \(view === 'borrow'\) loadBorrowOrders\(\);/);
   assert.match(app, /function syncBorrowRefresh\(\)/);
   assert.match(app, /'route', 'borrow'/);

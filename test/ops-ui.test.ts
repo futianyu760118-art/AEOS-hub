@@ -18,7 +18,7 @@ test('运行监控导航与视图存在', () => {
 });
 
 test('视图注册、懒加载与轮询', () => {
-  assert.match(app, /view: 'ops', label: '运行监控'/);
+  assert.match(app, /view: 'ops', label: '运行状态'/);
   assert.match(app, /if \(view === 'ops'\) loadOps\(\);/);
   assert.match(app, /function syncOpsRefresh\(\)/);
   assert.match(app, /\/api\/ops\/status/);

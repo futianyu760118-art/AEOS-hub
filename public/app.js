@@ -2,7 +2,7 @@ import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
 import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery, parseExecutionReasoning, parseExecutionQueryByIntent } from './execution-query-intent.js?v=execution-query-intent-v5-20261015';
-import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
+import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v6-20261026';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
 import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrderQuery, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=highest-risk-v1';
@@ -140,7 +140,7 @@ const els = {
   harborRunCount: $('#harbor-run-count'), harborRunActive: $('#harbor-run-active'),
   harborRuntimeBoundaryStatus: $('#harbor-runtime-boundary-status'), harborUpdated: $('#harbor-updated'),
   harborAgentList: $('#harbor-agent-list'), harborRuntimeList: $('#harbor-runtime-list'), harborProjectList: $('#harbor-project-list'),
-  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentDomainFilter: $('#harbor-agent-domain-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'), catalogSummary: $('#catalog-summary'),
+  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentDomainFilter: $('#harbor-agent-domain-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'), harborShowHiddenAgents: $('#harbor-show-hidden-agents'), catalogSummary: $('#catalog-summary'),
   btnAddAgent: $('#btn-add-agent'), btnAddRuntime: $('#btn-add-runtime'),
   harborModal: $('#harbor-modal'), harborModalKicker: $('#harbor-modal-kicker'), harborModalTitle: $('#harbor-modal-title'),
   harborModalDesc: $('#harbor-modal-desc'), harborModalClose: $('#harbor-modal-close'), harborForm: $('#harbor-form'),
@@ -152,6 +152,13 @@ let ws = null;
 let reconnectTimer = null;
 let authenticated = false;
 let authSession = null;
+// 业务视图：默认隐藏技术/管理模块，管理者可一键切到完整视图。
+const VIEW_MODE_KEY = 'aeos-hub-view-mode-v1';
+const MANAGEMENT_VIEWS = new Set([
+  'borrow', 'ai-obs', 'ops', 'config', 'route', 'registry', 'evidence', 'harbor',
+  'g0-governance', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding',
+]);
+let businessMode = localStorage.getItem(VIEW_MODE_KEY) !== 'full';
 let convs = [];
 let curConvId = null;
 let busy = false;
@@ -168,6 +175,7 @@ let commandMatches = [];
 let welcomeState = { step: 0, name: '管理者', role: '决策责任人', defaultView: 'dashboard', avatar: '' };
 let harbor = { version: 1, agents: [], runtimes: [], projects: [], runs: [] };
 let harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
+let showHiddenHarborAgents = false;
 let catalogTree = null;
 let catalogView = 'ownership';
 let catalogExpansionInitialized = false;
@@ -282,26 +290,26 @@ const MAX_IMAGE_BASE64 = 16 * 1024 * 1024;
 
 const commands = [
   { view: 'dashboard', label: '管理者首页', desc: '目标、风险、TOP 决策与治理脉冲', icon: 'layout-dashboard', group: '经营总览' },
-  { view: 'chat', label: '中枢 Agent', desc: '跨域经营分析与 Capability 调用', icon: 'bot', group: '自治运行' },
-  { view: 'attention', label: 'Attention 中心', desc: '需要责任人介入的例外事项', icon: 'list-checks', group: '自治运行' },
+  { view: 'chat', label: '智能助手', desc: '跨域经营分析与能力调用', icon: 'bot', group: '助手与待办' },
+  { view: 'attention', label: '待关注事项', desc: '需要责任人介入的例外事项', icon: 'list-checks', group: '助手与待办' },
   { view: 'tasks', label: '任务', desc: '任务看板、责任角色、时限与业务核验闭环', icon: 'list-todo', group: '任务协同' },
   { view: 'projects', label: '项目', desc: '项目目标、成员、进度与关联任务', icon: 'folder-kanban', group: '任务协同' },
   { view: 'cases', label: '经营事项', desc: '风险建档、人工决策与闭环验证', icon: 'clipboard-list', group: '经营闭环' },
   { view: 'inbox', label: 'Inbox', desc: '待确认事项、扫描结果与决策留痕', icon: 'inbox', group: '经营闭环' },
-  { view: 'harbor', label: 'AI 港湾', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: 'AI 资源协作' },
-  { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
-  { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
-  { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
-  { view: 'trace', label: '链路追踪', desc: '借调单 / 执行 run / 中台调用的一条完整时间线', icon: 'git-branch', group: '执行面' },
-  { view: 'ai-obs', label: 'AI 观测', desc: 'Hub 派单任务与各系统自有助手的统一观测', icon: 'scan-eye', group: '执行面' },
-  { view: 'ops', label: '运行监控', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
+  { view: 'harbor', label: 'AI 资源', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: '成本与资源' },
+  { view: 'evidence', label: '证据与审计', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与审计' },
+  { view: 'registry', label: '能力目录', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与审计' },
+  { view: 'borrow', label: '跨系统查询', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '分析与记录' },
+  { view: 'trace', label: '处理记录', desc: '一次分析从发起到依据的完整处理记录', icon: 'git-branch', group: '分析与记录' },
+  { view: 'ai-obs', label: 'AI 运行观测', desc: 'Hub 派单任务与各系统自有助手的统一观测', icon: 'scan-eye', group: '分析与记录' },
+  { view: 'ops', label: '运行状态', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
 ];
 
 // Local experience review: keep module implementations intact while temporarily
 // removing their routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘', 'usage': '用量明细', 'route': '模型选型' };
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本', 'route': '模型配置' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -442,7 +450,7 @@ function renderWelcome() {
   } else if (step === 1) {
     const options = [
       ['dashboard', 'layout-dashboard', '管理者首页', '目标、风险与 TOP 决策'],
-      ['chat', 'bot', '中枢 Agent', '直接进入跨域经营对话'],
+      ['chat', 'bot', '智能助手', '直接进入跨域经营对话'],
       ['attention', 'list-checks', 'Attention 中心', '先处理需要人介入的事项'],
     ];
     els.welcomeStep.innerHTML = `
@@ -456,7 +464,7 @@ function renderWelcome() {
   } else {
     els.welcomeStep.innerHTML = `
       <h1>工作区已准备就绪</h1>
-      <p>AEOS 将以只读试点边界连接中枢 Agent、Capability、Evidence 与 Guard</p>
+      <p>AEOS 将以只读试点边界连接智能助手、能力、证据与治理</p>
       <div class="welcome-summary">
         <div><span>显示名称</span><strong>${esc(welcomeState.name || '管理者')}</strong></div>
         <div><span>工作角色</span><strong>${esc(welcomeState.role || '决策责任人')}</strong></div>
@@ -555,6 +563,7 @@ function applyProfile() {
 
 function viewVisibleForRole(view, session) {
   const roles = Array.isArray(session?.roles) ? session.roles : [];
+  if (businessMode && MANAGEMENT_VIEWS.has(view)) return false;
   const managerOnly = ['config', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding', 'g0-governance'];
   if (managerOnly.includes(view)) return roles.includes('manager');
   const resource = VIEW_RESOURCE[view];
@@ -572,6 +581,7 @@ function defaultViewForSession(session) {
 }
 
 function applyNavVisibility() {
+  syncViewModeControl();
   $$('.nav-item').forEach((item) => {
     const view = item.dataset.view;
     if (view) item.classList.toggle('hidden', LOCALLY_HIDDEN_VIEWS.has(view) || !viewVisibleForRole(view, authSession));
@@ -581,6 +591,20 @@ function applyNavVisibility() {
     group.classList.toggle('hidden', !visible);
   });
   $$('.nav-item:not(.hidden)').forEach((node, index) => node.style.setProperty('--nav-order', String(index)));
+}
+
+function canToggleViewMode(session) {
+  const roles = Array.isArray(session?.roles) ? session.roles : [];
+  return roles.some((role) => ['manager', 'supervisor', 'operator', 'owner'].includes(role));
+}
+
+function syncViewModeControl() {
+  const button = $('#btn-view-mode');
+  if (!button) return;
+  const canToggle = canToggleViewMode(authSession);
+  if (!canToggle) businessMode = true;
+  button.classList.toggle('hidden', !canToggle);
+  button.textContent = businessMode ? '切换到完整视图' : '切换到业务视图';
 }
 
 function showWorkspace(entering = false, forcedView = null) {
@@ -861,9 +885,39 @@ function formatUsageCost(value) {
   return amount.toFixed(2);
 }
 
+/** 把技术错误码翻成业务用户能理解的一句话。 */
+const ERROR_HINTS = {
+  CAPABILITY_FORBIDDEN: '当前智能助手没有这项权限，请联系管理员开通',
+  UPSTREAM_UNAVAILABLE: '中台服务暂时不可用，请稍后重试',
+  UPSTREAM_AUTH_FAILED: '中台认证失败，请联系管理员检查配置',
+  UPSTREAM_TIMEOUT: '中台分析超时，请稍后重试',
+  REASONING_ABORTED: '分析已取消',
+  TASK_CANCELLED: '分析已取消',
+  TASK_IN_PROGRESS: '同一任务正在处理中，请稍候',
+  NOT_FOUND: '没有找到可用数据，这不代表没有风险',
+  INVALID_ARGUMENT: '提交的信息不完整，请补充订单号等业务信息后重试',
+  DISPATCH_TIMEOUT: '处理超时，请稍后重试',
+  RUN_TIMEOUT: '处理超时，请稍后重试',
+  EXECUTION_TIMEOUT: '处理超时，请稍后重试',
+  AGENT_OFFLINE: '智能助手暂时离线，请稍后重试',
+  AGENT_NOT_ALLOWED: '该智能助手未获授权接入',
+  PROVIDER_RECALLED: '处理已取消',
+  FORBIDDEN: '没有权限执行该操作',
+  RATE_LIMITED: '请求过于频繁，请稍后再试',
+  INTERNAL_ERROR: '系统内部错误，请联系管理员',
+};
+
+function humanizeError(code, message) {
+  const hint = ERROR_HINTS[String(code || '').trim()] || '';
+  const detail = typeof message === 'string' ? message.trim() : '';
+  if (hint) return detail && !detail.includes(hint) ? `${hint}（${detail}）` : hint;
+  return detail || '处理失败，请稍后重试';
+}
+
 function usageTableHtml(rows, key, emptyText) {
   if (!rows.length) return `<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>${esc(emptyText)}</small></div>`;
   const head = { agentId: 'Agent', systemId: '系统', callerAgentId: '调用方 Agent', callerUserId: '调用方用户' }[key] || key;
+  const compact = businessMode;
   const body = rows.map((row) => {
     const raw = row[key];
     const label = key === 'agentId' || key === 'callerAgentId'
@@ -874,25 +928,51 @@ function usageTableHtml(rows, key, emptyText) {
       && Number(row.queryEvents) === Number(row.events)
       && tokens === 0
       && Number(row.cost) === 0;
+    const costCell = queryOnly
+      ? '<span class="num" title="查询接口不产生模型费用">—</span>'
+      : `<span class="num">¥${formatUsageCost(row.cost)}</span>`;
+    if (compact) {
+      return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span>${costCell}<span class="num">${formatTokenCount(row.events)}</span></div>`;
+    }
     const inputCell = queryOnly
       ? '<span class="num" title="查询接口不经过模型，不产生模型 Token">无模型 Token</span>'
       : `<span class="num">${formatTokenCount(row.tokensIn)}</span>`;
     const outputCell = queryOnly ? '<span class="num">—</span>' : `<span class="num">${formatTokenCount(row.tokensOut)}</span>`;
-    const costCell = queryOnly
-      ? '<span class="num" title="查询接口不产生模型费用">—</span>'
-      : `<span class="num">¥${formatUsageCost(row.cost)}</span>`;
     return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span>${inputCell}${outputCell}${costCell}<span class="num">${formatTokenCount(row.events)}</span></div>`;
   }).join('');
-  return `<div class="harbor-table usage-table"><div class="harbor-row harbor-head"><span>${head}</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">调用次数</span></div>${body}</div>`;
+  const header = compact
+    ? `<div class="harbor-row harbor-head"><span>${head}</span><span class="num">成本（¥）</span><span class="num">次数</span></div>`
+    : `<div class="harbor-row harbor-head"><span>${head}</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">调用次数</span></div>`;
+  return `<div class="harbor-table usage-table${compact ? ' compact' : ''}">${header}${body}</div>`;
 }
 
 const USAGE_AGENT_LABELS = {
-  'agent-aeos-hub': 'AEOS 中枢 Agent',
-  'control-platform-assistant': '中台系统助手（用量汇总，无 Agent 实体）',
-  'runtime-control-platform-agent': '中台执行面智能体',
+  'agent-aeos-hub': 'AEOS 智能助手',
+  'control-platform-assistant': '中台助手',
+  'gateway-control-platform': '中台分析通道（网关）',
+  'runtime-control-platform-agent': '中台执行面（历史）',
+  'runtime-control-platform-query': '中台查询（历史）',
+  'runtime-control-platform-reasoning': '中台分析（历史）',
+  'runtime-control-platform-order': '中台订单（历史）',
   'runtime-execution-query': '恒剑 PLM 执行面智能体',
   'usage-probe-agent': '用量探针（临时）',
 };
+const EXECUTION_CHANNEL_PREFIXES = ['gateway-', 'runtime-'];
+function isExecutionChannelAgent(agentId) {
+  const id = String(agentId || '');
+  return EXECUTION_CHANNEL_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+function isProbeAgent(agentId) {
+  return /(probe|demo)/i.test(String(agentId || ''));
+}
+function isQueryOnlyUsageRow(row) {
+  const tokens = (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0);
+  return (Number(row.events) || 0) > 0
+    && Number(row.queryEvents) === Number(row.events)
+    && tokens === 0
+    && Number(row.cost) === 0;
+}
+
 const USAGE_SYSTEM_LABELS = {
   'aeos-hub': 'AEOS Hub',
   'control-platform': '公司中控平台',
@@ -930,7 +1010,13 @@ async function loadUsage() {
     }
   } catch { return; }
   usageSummary = data;
-  renderUsage();
+  try {
+    renderUsage();
+  } catch (error) {
+    const root = $('#usage-list');
+    if (root) root.innerHTML = '<div class="harbor-empty"><i data-lucide="book-open"></i><strong>用量明细加载失败</strong><small>请刷新重试；若持续出现请联系管理员</small></div>';
+    console.error('[usage] 渲染失败', error);
+  }
 }
 
 function renderUsage() {
@@ -940,6 +1026,10 @@ function renderUsage() {
   const bySystem = Array.isArray(usageSummary?.bySystem) ? usageSummary.bySystem : [];
   const byCallerAgent = Array.isArray(usageSummary?.byCallerAgent) ? usageSummary.byCallerAgent : [];
   const byCallerUser = Array.isArray(usageSummary?.byCallerUser) ? usageSummary.byCallerUser : [];
+  // 业务视图只显示面向用户的助手；执行通道、探针与纯查询记录归完整视图。
+  const displayAgents = businessMode
+    ? byAgent.filter((row) => !isExecutionChannelAgent(row.agentId) && !isProbeAgent(row.agentId) && !isQueryOnlyUsageRow(row))
+    : byAgent;
   const totalCost = byAgent.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
   const totalTokens = byAgent.reduce((sum, row) => sum + (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0), 0);
   const totalEvents = byAgent.reduce((sum, row) => sum + (Number(row.events) || 0), 0);
@@ -948,9 +1038,10 @@ function renderUsage() {
   setText('#usage-total-cost', `¥${formatUsageCost(totalCost)}`);
   setText('#usage-total-tokens', formatTokenCount(totalTokens));
   setText('#usage-total-events', formatTokenCount(totalEvents));
-  setText('#usage-agent-count', formatTokenCount(byAgent.length));
+  setText('#usage-agent-count', formatTokenCount(displayAgents.length));
+  $('#usage-token-metric')?.classList.toggle('hidden', businessMode);
 
-  root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按 Agent</h2><p>每个智能体消耗的成本与 Token</p></div></div>${usageTableHtml(byAgent, 'agentId', '中枢或执行面还没有产生可记账的模型调用')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本与 Token</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>SPC 用户 Agent 维度的成本与 Token（来自 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：借调请求尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>SPC 用户维度的成本与 Token（来自 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：借调请求尚未携带 caller')}</section>`;
+  root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按智能助手</h2><p>每个智能助手消耗的成本</p></div></div>${usageTableHtml(displayAgents, 'agentId', businessMode ? '业务视图下没有面向用户的助手用量；可切换到完整视图查看执行通道与历史记录' : '还没有产生分析成本')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方智能助手</h2><p>SPC 用户智能体维度的成本（来自调用方）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：借调请求尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>SPC 用户维度的成本（来自调用方）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：借调请求尚未携带 caller')}</section>`;
   refreshIcons(root);
 }
 
@@ -1191,7 +1282,7 @@ function renderBorrowDetail() {
   const order = borrowDetail;
   const json = (value) => esc(JSON.stringify(value ?? null, null, 2).slice(0, 8_000));
   const error = order.error
-    ? `<div class="borrow-detail-block"><h3>失败原因</h3><pre class="borrow-json">${esc(JSON.stringify(order.error, null, 2))}</pre></div>`
+    ? `<div class="borrow-detail-block"><h3>未完成原因</h3><p>${esc(humanizeError(order.error.code, order.error.message))}</p></div>`
     : '';
   const truncated = order.resultTruncated
     ? `<p class="form-hint">结果超过 256KB，仅保存摘要（原始 ${formatTokenCount(order.resultBytes)} 字节）。</p>`
@@ -1223,26 +1314,31 @@ function renderBorrowDetail() {
     `输出 ${hashShort(order.outputSchemaHash)}`,
   ].join(' · ');
   root.innerHTML = `<div class="borrow-detail-grid">
-      <div><span>借调单</span><strong class="mono">${esc(order.orderId)}</strong></div>
-      <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
       <div><span>发起方</span><strong>${esc(order.fromSystem)}${order.fromAgentId ? ` · ${esc(order.fromAgentId)}` : ''}</strong></div>
       ${order.caller ? `<div><span>调用方</span><strong>${esc([order.caller.userId, order.caller.agentId, order.caller.taskId].filter(Boolean).join(' · ') || order.caller.systemId)}</strong></div>` : ''}
       <div><span>提供方</span><strong>${esc(order.providerSystem || '—')}${order.providerAgentId ? ` · ${esc(order.providerAgentId)}` : ''}</strong></div>
-      <div><span>能力</span><strong>${esc(borrowCapabilityLabel(order.capability))}<br/><small class="mono">${esc(order.capability)}</small></strong></div>
-      <div><span>能力版本</span><strong class="mono">${esc(order.capabilityVersion || '未指定（按能力名匹配）')}</strong></div>
-      <div><span>schema 锚定</span><strong class="mono" title="${esc(`input ${order.inputSchemaHash || '—'} / output ${order.outputSchemaHash || '—'}`)}">${esc(schemaAnchor)}</strong></div>
-      <div><span>来源</span><strong>执行面 · ${esc(order.providerSystem || '—')}</strong></div>
+      <div><span>业务能力</span><strong>${esc(borrowCapabilityLabel(order.capability))}</strong></div>
       <div><span>状态</span><strong>${borrowStatusPill(order.status)}</strong></div>
-      <div><span>执行 run</span><strong class="mono">${esc(order.runId || '—')}</strong></div>
       <div><span>时间</span><strong>创建 ${borrowTime(order.createdAt)} · 结束 ${borrowTime(order.endedAt)}</strong></div>
     </div>
+    <details class="borrow-tech">
+      <summary>技术信息（编号、版本、哈希）</summary>
+      <div class="borrow-detail-grid">
+        <div><span>记录编号</span><strong class="mono">${esc(order.orderId)}</strong></div>
+        <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
+        <div><span>执行编号</span><strong class="mono">${esc(order.runId || '—')}</strong></div>
+        <div><span>能力版本</span><strong class="mono">${esc(order.capabilityVersion || '未指定（按能力名匹配）')}</strong></div>
+        <div><span>schema 锚定</span><strong class="mono" title="${esc(`input ${order.inputSchemaHash || '—'} / output ${order.outputSchemaHash || '—'}`)}">${esc(schemaAnchor)}</strong></div>
+        <div><span>来源</span><strong>执行面 · ${esc(order.providerSystem || '—')}</strong></div>
+      </div>
+    </details>
     ${truncated}
     ${error}
     ${inputBlock}
     ${resultBlock}
     <div class="borrow-detail-block borrow-detail-actions">
-      ${order.runId ? '<button id="btn-borrow-open-run" class="btn secondary compact" type="button">查看运行详情</button>' : ''}
-      <button id="btn-borrow-open-trace" class="btn secondary compact" type="button">查看链路</button>
+      ${order.runId ? '<button id="btn-borrow-open-run" class="btn secondary compact" type="button">查看执行详情</button>' : ''}
+      <button id="btn-borrow-open-trace" class="btn secondary compact" type="button">查看处理记录</button>
     </div>`;
   refreshIcons(root);
   $('#btn-borrow-open-run')?.addEventListener('click', () => {
@@ -1287,7 +1383,7 @@ async function loadOps() {
 }
 
 function renderOpsForbidden() {
-  const message = '<div class="harbor-empty"><i data-lucide="shield-alert"></i><strong>无权查看运行监控</strong><small>仅 manager / supervisor 角色可见</small></div>';
+  const message = '<div class="harbor-empty"><i data-lucide="shield-alert"></i><strong>无权查看运行状态</strong><small>仅 manager / supervisor 角色可见</small></div>';
   for (const selector of ['#ops-checks', '#ops-alerts']) {
     const root = $(selector);
     if (root) { root.innerHTML = message; refreshIcons(root); }
@@ -2029,7 +2125,7 @@ async function dispatchExecution(agentId, capability, input, pendingText) {
     });
     const body = await response.json();
     if (!response.ok || body.error) {
-      if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`;
+      if (pending) pending.textEl.textContent = humanizeError(body.code, body.error || `派单失败（HTTP ${response.status}）`);
       return;
     }
     pollExecutionRun(body.runId, pending);
@@ -2100,7 +2196,7 @@ async function tryDispatchCapabilityTemplate(text) {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (pending) pending.textEl.textContent = body.error || `能力调用失败（HTTP ${response.status}）`;
+      if (pending) pending.textEl.textContent = humanizeError(body.code, body.error || `能力调用失败（HTTP ${response.status}）`);
       return true;
     }
     const orderId = body?.invocation?.borrowOrderId || body?.order?.orderId;
@@ -2132,7 +2228,7 @@ async function pollCapabilityInvocation(orderId, pending, template) {
       }
       if (['failed', 'cancelled', 'recalled'].includes(order?.status)) {
         if (pending) {
-          pending.textEl.textContent = `查询未完成：${order?.error?.code || order?.status}${order?.error?.message ? ` — ${order.error.message}` : ''}`;
+          pending.textEl.textContent = `查询未完成：${humanizeError(order?.error?.code || (order?.status === 'cancelled' ? 'TASK_CANCELLED' : undefined), order?.error?.message || order?.status)}`;
         }
         return;
       }
@@ -2141,7 +2237,7 @@ async function pollCapabilityInvocation(orderId, pending, template) {
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  if (pending) pending.textEl.textContent = `查询仍未完成（borrowOrderId: ${orderId}），请稍后到「跨系统借调」查看。`;
+  if (pending) pending.textEl.textContent = `查询仍未完成（borrowOrderId: ${orderId}），请稍后到「跨系统查询」查看。`;
 }
 
 async function sendExecutionQuery() {
@@ -2322,9 +2418,9 @@ function pollExecutionRun(runId, pending) {
           }
           attachExecutionSteps(pending.inner, runId);
         } else if (run.state === 'failed') {
-          pending.textEl.textContent = `查询失败：${run.error?.message || '未知错误'}`;
+          pending.textEl.textContent = `查询失败：${humanizeError(run.error?.code, run.error?.message || '未知错误')}`;
         } else {
-          pending.textEl.textContent = '查询已被召回';
+          pending.textEl.textContent = '分析已取消';
         }
       }
       return;
@@ -2923,7 +3019,7 @@ function openHarborAgentConversationSpace(harborAgentId) {
 
 function openHubConversationSpace() {
   chatScope = { type: 'hub', agentId: null, squadId: null, label: '中枢会话' };
-  els.chatViewTitle.textContent = '中枢 Agent';
+  els.chatViewTitle.textContent = '智能助手';
   els.chatViewDesc.textContent = '跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批';
   els.conversationScopeLabel.textContent = '中枢会话';
   els.chatScopeBack.classList.add('hidden');
@@ -6177,9 +6273,9 @@ async function loadCapabilityRegistry(options = {}) {
     registrySnapshot = snapshot;
     renderCapabilityRegistry(snapshot);
   } catch (error) {
-    $('span', els.registryStatus).textContent = `Capability Registry 加载失败：${error.message}`;
+    $('span', els.registryStatus).textContent = `能力目录加载失败：${error.message}`;
     els.registryStatus.classList.add('warning');
-    if (!options.silent) toast(`Capability Registry 加载失败：${error.message}`, true);
+    if (!options.silent) toast(`能力目录加载失败：${error.message}`, true);
   } finally {
     els.registryRefresh.disabled = false;
   }
@@ -6241,7 +6337,7 @@ function harborAgentActivity(agent) {
   const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
   const agentIds = [linkedMember?.id, squad.lead?.harborAgentId === agent.id ? squad.lead?.id : null].filter(Boolean);
   const activity = (squad.activities || []).filter((item) => agentIds.includes(item.agentId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-  if (!activity) return { title: '暂无已沉淀任务', detail: '等待中枢 Agent 按业务边界派发' };
+  if (!activity) return { title: '暂无已沉淀任务', detail: '等待智能助手按业务边界派发' };
   return { title: activity.title || '任务活动', detail: activity.detail || '未返回任务说明' };
 }
 
@@ -6342,7 +6438,7 @@ function catalogAgentUsageDetail(agent, system) {
       : missing ? (modelExpected
         ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>'
         : '<div class="catalog-usage-note"><b>无模型调用</b>：该 Agent 只有查询接口，不产生模型 Token；执行次数来自 run_complete，成本为 ¥0.00 属正常。</div>') : ''}
-    <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看用量明细</button></div>
+    <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看分析成本</button></div>
   </div>`;
 }
 
@@ -6442,7 +6538,15 @@ function renderHarbor() {
   els.harborRuntimeBoundaryStatus.textContent = `${readyRuntimes} 个待命`;
   els.harborUpdated.textContent = `最近同步 ${formatBeijingTime(new Date(), { second: '2-digit' })}`;
 
-  const catalogSystems = Array.isArray(catalogTree?.systems) ? catalogTree.systems : [];
+  if (els.harborShowHiddenAgents) els.harborShowHiddenAgents.checked = showHiddenHarborAgents;
+  // 默认收起早期创建、无独立入口的业务分析编队；管理需要时可勾选显示。
+  const catalogSystems = (Array.isArray(catalogTree?.systems) ? catalogTree.systems : []).map((system) => ({
+    ...system,
+    domains: (system.domains || []).map((domain) => ({
+      ...domain,
+      agents: (domain.agents || []).filter((agent) => showHiddenHarborAgents || !HIDDEN_HUB_AGENT_IDS.has(agent.id)),
+    })),
+  }));
   const activeFilter = catalogFilterActive();
   const allPairs = [];
   for (const system of catalogSystems) {
@@ -6876,7 +6980,7 @@ function restoreConversationTranscript(messages) {
     }
     const bubble = $('.bubble', wrap);
     bubble.innerHTML = md(item.text);
-    wrap.appendChild(msgMeta(`${time} · 中枢 Agent`));
+    wrap.appendChild(msgMeta(`${time} · 智能助手`));
   }
   els.empty.classList.add('hidden');
   els.messages.scrollTop = els.messages.scrollHeight;
@@ -6984,7 +7088,7 @@ function connect() {
         const wrap = appendMsg('agent', '');
         const bubble = $('.bubble', wrap);
         if (bubble) bubble.innerHTML = md(message.text);
-        wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 中枢 Agent · 执行面`));
+        wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 智能助手 · 分析工作台`));
         els.empty.classList.add('hidden');
         finishThinking();
         setBusy(false);
@@ -7438,6 +7542,7 @@ $$('[data-catalog-view]').forEach((button) => button.addEventListener('click', (
   renderHarbor();
 }));
 els.harborAgentSearch?.addEventListener('input', () => { harborAgentFilter.query = els.harborAgentSearch.value; renderHarbor(); });
+els.harborShowHiddenAgents?.addEventListener('change', () => { showHiddenHarborAgents = Boolean(els.harborShowHiddenAgents.checked); renderHarbor(); });
 els.harborAgentLevelFilter?.addEventListener('change', () => { harborAgentFilter.level = els.harborAgentLevelFilter.value; renderHarbor(); });
 els.harborAgentStatusFilter?.addEventListener('change', () => { harborAgentFilter.status = els.harborAgentStatusFilter.value; renderHarbor(); });
 els.harborAgentDomainFilter?.addEventListener('change', () => { harborAgentFilter.domain = els.harborAgentDomainFilter.value; renderHarbor(); });
@@ -7573,6 +7678,12 @@ window.addEventListener('hashchange', () => {
 });
 
 /* Agent, Guard, configuration and evidence controls */
+$('#btn-view-mode')?.addEventListener('click', () => {
+  businessMode = !businessMode;
+  localStorage.setItem(VIEW_MODE_KEY, businessMode ? 'business' : 'full');
+  applyNavVisibility();
+  if (!viewVisibleForRole(currentView, authSession)) showView('dashboard');
+});
 els.btnNew.addEventListener('click', newConversation);
 els.convSearch?.addEventListener('input', () => { conversationQuery = els.convSearch.value; renderConvs(); });
 els.btnSend.addEventListener('click', () => doSend());
@@ -7596,7 +7707,16 @@ els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
 
 /* ---------- 统一链路追踪 ---------- */
 const TRACE_KIND_LABELS = { borrow: '借调', run: '执行', usage: '用量', evidence: '审计' };
-const TRACE_RESOLVED_LABELS = { 'borrow-order': '按借调单号', run: '按 runId', request: '按 requestId', trace: '按 traceId' };
+const TRACE_AGENT_LABELS = { 'gateway-control-platform': '中台网关', 'runtime-execution-query': 'PLM 助手' };
+const TRACE_CAPABILITY_LABELS = { query_control_platform: '查询', reason_control_platform: '分析', query_plm: 'PLM 查询', reason_plm: 'PLM 分析', query_local_files: '本地文件查询' };
+
+function humanizeTraceText(value) {
+  let text = String(value ?? '');
+  for (const [agentId, label] of Object.entries(TRACE_AGENT_LABELS)) text = text.split(agentId).join(label);
+  for (const [code, label] of Object.entries(ERROR_HINTS)) text = text.split(code).join(label);
+  return text;
+}
+const TRACE_RESOLVED_LABELS = { 'borrow-order': '按记录编号', run: '按执行编号', request: '按请求编号', trace: '按记录编号' };
 
 function openTraceFor(id) {
   const input = $('#trace-id-input');
@@ -7676,7 +7796,7 @@ async function loadTrace(id) {
     const response = await fetch(`/api/trace/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      root.innerHTML = harborEmpty('git-branch', '查询失败', esc(body.error || `HTTP ${response.status}`));
+      root.innerHTML = harborEmpty('git-branch', '查询失败', esc(humanizeError(body.code, body.error || `HTTP ${response.status}`)));
       return;
     }
     renderTrace(body);
@@ -7707,15 +7827,15 @@ function renderTrace(trace) {
         <div><span>借调单</span><strong>${borrow ? esc(borrow.status) : '无'}</strong><small>${borrow ? esc(`${borrow.fromSystem} → ${borrow.providerSystem || '—'}`) : '直接派单 / 编排'}</small></div>
         <div><span>执行环节</span><strong>${runs.length}</strong><small>查询 ${queryRuns} · 推理 ${runs.length - queryRuns}</small></div>
         <div><span>证据引用</span><strong>${(trace.evidenceRefs || []).length}</strong><small>evidence_refs</small></div>
-        <div><span>总成本</span><strong>${cost ? `¥${cost.toFixed(4)}` : '—'}</strong><small>${usage.length} 条用量记录</small></div>
+        <div><span>总成本</span><strong>${cost ? `¥${formatUsageCost(cost)}` : '—'}</strong><small>${usage.length} 条用量记录</small></div>
       </div>
-      ${runs.length ? `<div class="trace-actions"><button id="btn-trace-open-run" class="btn secondary compact" type="button">查看执行详情${runs.length > 1 ? `（${runs.length} 个 run）` : ''} → AI 观测</button></div>` : ''}
+      ${runs.length && !businessMode ? `<div class="trace-actions"><button id="btn-trace-open-run" class="btn secondary compact" type="button">查看执行详情${runs.length > 1 ? `（${runs.length} 个 run）` : ''} → AI 运行观测</button></div>` : ''}
     </section>`;
 
   const timelineItems = (trace.timeline || []).map((item) => `
     <li class="trace-entry">
       <span class="trace-kind ${esc(item.kind)}">${esc(TRACE_KIND_LABELS[item.kind] || item.kind)}</span>
-      <div><strong>${esc(item.title)}</strong>${item.detail ? `<small>${esc(item.detail)}</small>` : ''}</div>
+      <div><strong>${esc(humanizeTraceText(item.title))}</strong>${item.detail ? `<small>${esc(humanizeTraceText(item.detail))}</small>` : ''}</div>
       <time>${esc(formatDateTimeText(item.at))}</time>
     </li>`).join('');
   const timeline = `

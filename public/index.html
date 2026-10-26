@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=trace-simplify-v1-20261026" />
+  <link rel="stylesheet" href="/style.css?v=p0-business-v3-20261026" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -87,7 +87,7 @@
           <div class="preview-brand"><span class="brand-mark mini"><img src="/brand/ztrz-mark-white.png" alt="" /></span><span>AEOS</span></div>
           <div class="preview-nav"><span><i data-lucide="inbox"></i>待办事项</span><span><i data-lucide="circle"></i>我的决策</span><span><i data-lucide="activity"></i>运行证据</span></div>
           <small>工作区</small>
-          <div class="preview-nav"><span><i data-lucide="layout-dashboard"></i>管理者首页</span><span><i data-lucide="bot"></i>中枢 Agent</span></div>
+          <div class="preview-nav"><span><i data-lucide="layout-dashboard"></i>管理者首页</span><span><i data-lucide="bot"></i>智能助手</span></div>
         </div>
         <div class="preview-main">
           <div class="preview-header"><i data-lucide="search"></i><span>搜索或跳转...</span><i data-lucide="square-pen"></i></div>
@@ -113,11 +113,11 @@
       </button>
 
       <nav class="main-nav" aria-label="主导航">
-        <div class="nav-group"><span class="nav-label">经营总览</span><button class="nav-item active" type="button" data-view="dashboard" data-title="管理者首页"><i data-lucide="layout-dashboard"></i><span>管理者首页</span></button></div>
+        <div class="nav-group"><span class="nav-label">工作台</span><button class="nav-item active" type="button" data-view="dashboard" data-title="管理者首页"><i data-lucide="layout-dashboard"></i><span>管理者首页</span></button></div>
         <div class="nav-group">
-          <span class="nav-label">自治运行</span>
-          <button class="nav-item" type="button" data-view="chat" data-title="中枢 Agent"><i data-lucide="bot"></i><span>中枢 Agent</span></button>
-          <button class="nav-item" type="button" data-view="attention" data-title="Attention 中心"><i data-lucide="list-checks"></i><span>Attention 中心</span><b id="nav-attention-count" class="nav-badge">0</b></button>
+          <span class="nav-label">助手与待办</span>
+          <button class="nav-item" type="button" data-view="chat" data-title="智能助手"><i data-lucide="bot"></i><span>智能助手</span></button>
+          <button class="nav-item" type="button" data-view="attention" data-title="待关注事项"><i data-lucide="list-checks"></i><span>待关注事项</span><b id="nav-attention-count" class="nav-badge">0</b></button>
         </div>
         <div class="nav-group" id="task-center-nav">
           <span class="nav-label">任务协同</span>
@@ -125,27 +125,28 @@
           <button class="nav-item" type="button" data-view="projects" data-title="项目"><i data-lucide="folder-kanban"></i><span>项目</span></button>
         </div>
         <div class="nav-group">
-          <span class="nav-label">AI 资源协作</span>
-          <button class="nav-item" type="button" data-view="harbor" data-title="AI 港湾"><i data-lucide="waypoints"></i><span>AI 港湾</span></button>
-          <button class="nav-item" type="button" data-view="usage" data-title="用量明细"><i data-lucide="book-open"></i><span>用量明细</span></button>
-          <button class="nav-item" type="button" data-view="route" data-title="模型选型"><i data-lucide="route"></i><span>模型选型</span></button>
+          <span class="nav-label">成本与资源</span>
+          <button class="nav-item" type="button" data-view="harbor" data-title="AI 资源"><i data-lucide="waypoints"></i><span>AI 资源</span></button>
+          <button class="nav-item" type="button" data-view="usage" data-title="分析成本"><i data-lucide="book-open"></i><span>分析成本</span></button>
+          <button class="nav-item" type="button" data-view="route" data-title="模型配置"><i data-lucide="route"></i><span>模型配置</span></button>
         </div>
         <div class="nav-group">
-          <span class="nav-label">执行面</span>
-          <button class="nav-item" type="button" data-view="execution" data-title="执行面仪表盘"><i data-lucide="radio-tower"></i><span>执行面仪表盘</span></button>
-          <button class="nav-item" type="button" data-view="borrow" data-title="跨系统借调"><i data-lucide="arrow-left-right"></i><span>跨系统借调</span></button>
-          <button class="nav-item" type="button" data-view="trace" data-title="链路追踪"><i data-lucide="git-branch"></i><span>链路追踪</span></button>
-          <button class="nav-item" type="button" data-view="ai-obs" data-title="AI 观测"><i data-lucide="scan-eye"></i><span>AI 观测</span></button>
+          <span class="nav-label">分析与记录</span>
+          <button class="nav-item" type="button" data-view="execution" data-title="分析工作台"><i data-lucide="radio-tower"></i><span>分析工作台</span></button>
+          <button class="nav-item" type="button" data-view="borrow" data-title="跨系统查询"><i data-lucide="arrow-left-right"></i><span>跨系统查询</span></button>
+          <button class="nav-item" type="button" data-view="trace" data-title="处理记录"><i data-lucide="git-branch"></i><span>处理记录</span></button>
+          <button class="nav-item" type="button" data-view="ai-obs" data-title="AI 运行观测"><i data-lucide="scan-eye"></i><span>AI 运行观测</span></button>
         </div>
         <div class="nav-group">
-          <span class="nav-label">治理与证据</span>
-          <button class="nav-item" type="button" data-view="evidence" data-title="Evidence 证据中心"><i data-lucide="file-search"></i><span>Evidence 证据中心</span></button>
-          <button class="nav-item" type="button" data-view="registry" data-title="Capability Registry"><i data-lucide="boxes"></i><span>Capability Registry</span></button>
+          <span class="nav-label">治理与审计</span>
+          <button class="nav-item" type="button" data-view="evidence" data-title="证据与审计"><i data-lucide="file-search"></i><span>证据与审计</span></button>
+          <button class="nav-item" type="button" data-view="registry" data-title="能力目录"><i data-lucide="boxes"></i><span>能力目录</span></button>
         </div>
-        <div class="nav-group"><span class="nav-label">系统</span><button class="nav-item" type="button" data-view="ops" data-title="运行监控"><i data-lucide="activity"></i><span>运行监控</span></button><button class="nav-item" type="button" data-view="config" data-title="系统配置"><i data-lucide="settings"></i><span>系统配置</span></button></div>
+        <div class="nav-group"><span class="nav-label">系统</span><button class="nav-item" type="button" data-view="ops" data-title="运行状态"><i data-lucide="activity"></i><span>运行状态</span></button><button class="nav-item" type="button" data-view="config" data-title="系统配置"><i data-lucide="settings"></i><span>系统配置</span></button></div>
       </nav>
 
       <div class="sidebar-foot">
+        <button id="btn-view-mode" class="sidebar-view-mode" type="button">切换到完整视图</button>
         <div class="runtime-mini"><span class="live-dot"></span><div><strong>中枢运行中</strong><small>隔离环境 · 只读试点</small></div></div>
         <button id="sidebar-user" class="sidebar-user" type="button"><span id="sidebar-avatar" class="avatar">管</span><span><strong id="sidebar-user-name">管理者</strong><small id="sidebar-user-role">决策责任人</small></span><i data-lucide="more-horizontal"></i></button>
       </div>
@@ -156,7 +157,7 @@
         <div class="breadcrumbs"><span>AEOS</span><b>›</b><span id="breadcrumb-current">管理者首页</span></div>
         <div class="header-spacer"></div>
         <button id="command-trigger" class="command-trigger" type="button"><i data-lucide="search"></i><span>搜索或跳转...</span><kbd>Ctrl</kbd><kbd>K</kbd></button>
-        <button id="header-agent" class="btn ghost compact" type="button"><i data-lucide="sparkles"></i><span>中枢 Agent</span></button>
+        <button id="header-agent" class="btn ghost compact" type="button"><i data-lucide="sparkles"></i><span>智能助手</span></button>
         <button id="header-attention" class="icon-btn header-icon" type="button" aria-label="查看待关注事项" title="查看待关注事项"><i data-lucide="bell"></i><span id="header-attention-dot"></span></button>
         <button id="header-avatar" class="avatar avatar-button" type="button" title="个人菜单">管</button>
         <div id="user-menu" class="user-menu hidden"><div><strong id="menu-user-name">管理者</strong><span id="menu-user-role">决策责任人</span></div><button id="logout" type="button"><i data-lucide="log-out"></i>退出登录</button></div>
@@ -165,14 +166,14 @@
       <main id="workspace-content" class="workspace-content">
         <section id="view-dashboard" class="view app-view">
           <div class="page-head">
-            <div><span class="page-module">经营总览</span><h1>管理者首页</h1><p id="dashboard-data-caption">AEOS V7.2 · 中枢 Agent 第一阶段试点 · 正在同步经营数据</p></div>
+            <div><span class="page-module">工作台</span><h1>管理者首页</h1><p id="dashboard-data-caption">AEOS V7.2 · 智能助手 第一阶段试点 · 正在同步经营数据</p></div>
             <div class="page-actions"><button class="btn secondary nav-action" type="button" data-target="cases"><i data-lucide="clipboard-list"></i>进入经营闭环</button><button class="btn primary nav-action" type="button" data-target="chat"><i data-lucide="message-square-text"></i>进入智能分析</button></div>
           </div>
 
           <section class="dashboard-layout-item dashboard-objective-module">
           <div class="objective-strip">
             <span class="objective-icon"><i data-lucide="target"></i></span>
-            <div><div><strong>当前目标</strong><code>Objective V7.2 / Pilot-01</code></div><p>跑通“中枢 Agent → Capability → Evidence → Guard”只读经营分析闭环</p></div>
+            <div><div><strong>当前目标</strong><code>Objective V7.2 / Pilot-01</code></div><p>跑通“智能助手 → Capability → Evidence → Guard”只读经营分析闭环</p></div>
             <div class="objective-status"><span class="status-dot running"></span><span>A1/A2 试点运行</span></div>
           </div>
           </section>
@@ -191,7 +192,7 @@
           <section class="surface dashboard-platform-chain dashboard-layout-item dashboard-module is-collapsed">
             <div class="dashboard-platform-chain-head">
               <button class="dashboard-platform-chain-toggle dashboard-module-toggle" type="button" aria-expanded="false" aria-controls="dashboard-platform-chain-content">
-                <span class="dashboard-platform-chain-title"><span class="dashboard-platform-chain-icon"><i data-lucide="network"></i></span><span><small>经营总览 · 中台协同</small><strong>中台链路</strong><em>订单、物料、质量、生产与决策治理的只读协同链路</em></span></span>
+                <span class="dashboard-platform-chain-title"><span class="dashboard-platform-chain-icon"><i data-lucide="network"></i></span><span><small>工作台 · 中台协同</small><strong>中台链路</strong><em>订单、物料、质量、生产与决策治理的只读协同链路</em></span></span>
                 <span class="dashboard-platform-chain-control"><span data-dashboard-toggle-label>展开链路</span><i data-lucide="chevron-right"></i></span>
               </button>
             </div>
@@ -261,8 +262,8 @@
         </section>
 
         <section id="view-chat" class="view app-view hidden">
-          <div class="page-head compact-head"><div><span class="page-module">自治运行</span><h1 id="chat-view-title">中枢 Agent</h1><p id="chat-view-desc">跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批</p></div><div class="runtime-state"><span class="live-dot"></span><span>Codex Runtime 已连接</span></div></div>
-          <div class="agent-workbench-strip" aria-label="中枢 Agent 工作台状态">
+          <div class="page-head compact-head"><div><span class="page-module">助手与待办</span><h1 id="chat-view-title">智能助手</h1><p id="chat-view-desc">跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批</p></div><div class="runtime-state"><span class="live-dot"></span><span>Codex Runtime 已连接</span></div></div>
+          <div class="agent-workbench-strip" aria-label="智能助手 工作台状态">
             <div><span class="agent-workbench-icon"><i data-lucide="shield-check"></i></span><span><strong>只读经营分析</strong><small>建议权 · Guard 门禁</small></span></div>
             <div><span class="agent-workbench-icon"><i data-lucide="file-check-2"></i></span><span><strong>Evidence 必填</strong><small>结论需引用 evidence_ref</small></span></div>
             <div><span class="agent-workbench-icon"><i data-lucide="network"></i></span><span><strong>跨域 Capability</strong><small>仅使用已注册能力</small></span></div>
@@ -274,13 +275,13 @@
               <div id="messages" class="messages"></div>
               <div id="empty-state" class="empty-state"><span class="empty-mark"><i data-lucide="message-square"></i></span><h2>开始一次经营分析</h2><p>输入问题，或从常用任务开始。</p><div id="capability-prompt-chips" class="prompt-chips"><span class="registry-loading">正在读取当前可用业务能力…</span></div></div>
               <div id="turnbar" class="turnbar hidden"><span class="spinner"></span><span id="turn-status">Agent 执行中...</span><button id="btn-stop" class="btn ghost compact" type="button"><i data-lucide="square"></i>停止</button></div>
-              <div class="composer"><div class="model-pick"><span>运行模型</span><select id="model-select" title="切换当前对话的模型"></select></div><div class="composer-input"><textarea id="input" rows="1" placeholder="给中枢 Agent 发消息...（Enter 发送，Shift+Enter 换行）"></textarea><button id="btn-send" class="icon-btn send-btn" type="button" title="发送" aria-label="发送"><i data-lucide="arrow-up"></i></button></div></div>
+              <div class="composer"><div class="model-pick"><span>运行模型</span><select id="model-select" title="切换当前对话的模型"></select></div><div class="composer-input"><textarea id="input" rows="1" placeholder="给智能助手 发消息...（Enter 发送，Shift+Enter 换行）"></textarea><button id="btn-send" class="icon-btn send-btn" type="button" title="发送" aria-label="发送"><i data-lucide="arrow-up"></i></button></div></div>
             </section>
           </div>
         </section>
 
         <section id="view-attention" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">自治运行</span><h1>Attention 中心</h1><p>决定谁在什么时候需要知道什么，只升级真正需要人介入的例外</p></div><div class="page-actions"><button id="btn-attention-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>重新研判</button></div></div>
+          <div class="page-head"><div><span class="page-module">助手与待办</span><h1>待关注事项</h1><p>决定谁在什么时候需要知道什么，只升级真正需要人介入的例外</p></div><div class="page-actions"><button id="btn-attention-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>重新研判</button></div></div>
           <div class="attention-summary"><div><span class="severity high">L4</span><strong id="attention-l4-count">0</strong><small>重要升级</small></div><div><span class="severity medium">L3</span><strong id="attention-l3-count">0</strong><small>责任人处理</small></div><div><span class="severity low">L2</span><strong id="attention-l2-count">0</strong><small>专业中心预警</small></div><div><span class="status-dot running"></span><strong id="guard-pending-count">0</strong><small>实时审批请求</small></div></div>
           <section class="surface attention-board">
             <div class="surface-head"><div><h2>需人关注事项</h2><p>金额影响 × 概率 × 时效</p></div><span id="attention-data-status" class="status-pill info">正在同步</span></div>
@@ -292,7 +293,7 @@
         </section>
 
         <section id="view-evidence" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">治理与证据</span><h1>Evidence 证据中心</h1><p>事实、推理、工具调用、审批与结果的可追溯事件流</p></div><div class="page-actions"><button id="btn-evidence-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+          <div class="page-head"><div><span class="page-module">治理与审计</span><h1>证据与审计</h1><p>事实、推理、工具调用、审批与结果的可追溯事件流</p></div><div class="page-actions"><button id="btn-evidence-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
           <div class="evidence-metrics"><div><span>累计证据</span><strong id="evidence-total">0</strong><small>JSONL 事件</small></div><div><span>今日新增</span><strong id="evidence-today">0</strong><small>2026-09-03</small></div><div><span>存储状态</span><strong class="success-text">可用</strong><small>本地试点 · 待接 EDP</small></div><div><span>审计链</span><strong>完整</strong><small>Turn / Tool / Guard</small></div></div>
           <section class="surface evidence-surface"><div class="surface-head"><div><h2>最近事件</h2><p>按发生时间倒序显示最近 80 条；来源标记为后续数据中台对接预留。</p></div><span id="evidence-path" class="mono subtle"></span></div><div class="evidence-filters"><input id="evidence-search" type="search" placeholder="筛选摘要、类型或证据 ID" /><select id="evidence-source-filter"><option value="all">全部来源</option><option value="hub">AEOS Hub</option><option value="runtime">Codex Runtime</option><option value="mcp">MCP / 数据中台</option></select><span id="evidence-filter-count"></span></div><div class="evidence-head"><span>时间</span><span>类型 / 来源</span><span>摘要</span></div><div id="evidence-list" class="evidence-list"></div></section>
         </section>
@@ -415,7 +416,7 @@
         </section>
 
         <section id="view-registry" class="view app-view hidden">
-          <div class="page-head"><div><span class="page-module">治理与证据</span><h1>Capability Registry</h1><p>按能力寻址，而不是把 Agent 与某个业务接口硬编码绑定</p></div><div class="page-actions"><button id="btn-registry-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button class="btn secondary prompt-action" type="button" data-prompt="说明当前可调用的 Capability、输入输出、只读边界和证据要求。"><i data-lucide="scan-search"></i>能力自检</button></div></div>
+          <div class="page-head"><div><span class="page-module">治理与审计</span><h1>能力目录</h1><p>按能力寻址，而不是把 Agent 与某个业务接口硬编码绑定</p></div><div class="page-actions"><button id="btn-registry-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button><button class="btn secondary prompt-action" type="button" data-prompt="说明当前可调用的 Capability、输入输出、只读边界和证据要求。"><i data-lucide="scan-search"></i>能力自检</button></div></div>
           <div id="registry-status" class="registry-strip"><i data-lucide="info"></i><span>正在读取 MCP Runtime 的实时注册状态与 Tool 清单…</span></div>
           <section class="surface registry-systems"><div class="surface-head"><div><h2>System Registry</h2><p id="registry-system-caption">当前已接入运行单元</p></div><span id="registry-system-count" class="status-pill info">加载中</span></div><div id="registry-system-grid" class="system-grid"><div class="registry-loading">正在加载系统注册表…</div></div></section>
           <section class="surface capability-table-surface">
@@ -427,11 +428,11 @@
 
         <section id="view-harbor" class="view app-view hidden">
           <div class="page-head harbor-page-head">
-            <div><span class="page-module">AI 资源协作</span><h1>AI 港湾</h1><p>统一登记、连接和编排公司的人与智能体资源，执行过程受 Guard、Evidence 与 Attention 治理</p></div>
+            <div><span class="page-module">成本与资源</span><h1>AI 资源</h1><p>统一登记、连接和编排公司的人与智能体资源，执行过程受 Guard、Evidence 与 Attention 治理</p></div>
             <div class="page-actions"><button id="btn-add-runtime" class="btn secondary" type="button"><i data-lucide="plug"></i>登记 Runtime</button><button id="btn-add-agent" class="btn primary" type="button"><i data-lucide="bot"></i>新增智能体</button></div>
           </div>
 
-          <div class="harbor-boundary" aria-label="AI 港湾运行边界">
+          <div class="harbor-boundary" aria-label="AI 资源运行边界">
             <div><span class="boundary-icon"><i data-lucide="panel-top"></i></span><span><strong>控制面</strong><small>Agent · Project · Work Item · Squad</small></span><b class="status-pill ok">本机可用</b></div>
             <i data-lucide="chevron-right"></i>
             <div><span class="boundary-icon"><i data-lucide="cpu"></i></span><span><strong>执行面</strong><small>Runtime Adapter · Session · Run</small></span><b id="harbor-runtime-boundary-status" class="status-pill info">1 个待命</b></div>
@@ -450,7 +451,7 @@
           </div>
 
           <div class="harbor-toolbar">
-            <div class="segmented harbor-tabs" role="tablist" aria-label="AI 港湾视图">
+            <div class="segmented harbor-tabs" role="tablist" aria-label="AI 资源视图">
               <button class="active" type="button" role="tab" aria-selected="true" data-harbor-tab="agents"><i data-lucide="bot"></i>智能体目录</button>
               <button type="button" role="tab" aria-selected="false" data-harbor-tab="runtimes"><i data-lucide="server"></i>运行节点</button>
               <button type="button" role="tab" aria-selected="false" data-harbor-tab="projects"><i data-lucide="folder-kanban"></i>协作项目</button>
@@ -470,6 +471,7 @@
                 <button type="button" data-catalog-view="hierarchy" aria-pressed="false">功能层级</button>
               </div>
               <button id="harbor-agent-filter-clear" class="btn ghost compact" type="button">清除筛选</button>
+              <label class="catalog-show-hidden"><input id="harbor-show-hidden-agents" type="checkbox" /> 显示业务分析编队（10）</label>
             </div>
             <div class="catalog-domain-help">
               <span><b>订单交付</b> 订单风险、交期、客户承诺</span>
@@ -533,7 +535,7 @@
 
         <section id="view-execution" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">自治运行</span><h1>执行面</h1><p>用自然语言向执行面查询智能体提问</p></div>
+            <div><span class="page-module">分析</span><h1>分析工作台</h1><p>用自然语言向智能助手提问</p></div>
             <div class="page-actions"><button id="btn-execution-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
@@ -561,7 +563,7 @@
 
         <section id="view-borrow" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">跨系统协作</span><h1>跨系统借调</h1><p>各系统 Agent 经 Hub 发起的只读借调单（只读监控）</p></div>
+            <div><span class="page-module">跨系统协作</span><h1>跨系统查询</h1><p>跨系统查询记录（只读）</p></div>
             <div class="page-actions"><button id="btn-borrow-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
@@ -599,7 +601,7 @@
 
         <section id="view-trace" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">执行面</span><h1>链路追踪</h1><p>按借调单号、runId 或编排 requestId 串起借调、执行、用量与审计</p></div>
+            <div><span class="page-module">分析与记录</span><h1>处理记录</h1><p>查看一次分析从发起到依据的完整过程</p></div>
           </div>
 
           <section class="surface">
@@ -624,11 +626,11 @@
 
         <section id="view-ai-obs" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">跨系统协作</span><h1>AI 观测</h1><p>Hub 派单任务与各系统自有助手的统一观测（只读）</p></div>
+            <div><span class="page-module">跨系统协作</span><h1>AI 运行观测</h1><p>Hub 派单任务与各系统自有助手的统一观测（只读）</p></div>
             <div class="page-actions"><button id="btn-ai-obs-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
-          <div class="segmented ai-obs-tabs" role="tablist" aria-label="AI 观测视图">
+          <div class="segmented ai-obs-tabs" role="tablist" aria-label="AI 运行观测视图">
             <button type="button" class="active" data-ai-tab="runs">Hub 派单任务</button>
             <button type="button" data-ai-tab="assistants">各系统助手</button>
           </div>
@@ -704,15 +706,15 @@
 
         <section id="view-usage" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">AI 资源协作</span><h1>用量明细</h1><p>逐条模型调用的 Token 与成本明细，按 Agent / 系统对账；聚合统计已展示在 AI 港湾</p></div>
+            <div><span class="page-module">成本与资源</span><h1>分析成本</h1><p>按智能助手和系统查看分析成本；Token 明细在完整视图中查看</p></div>
             <div class="page-actions"><button id="btn-usage-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
           <div class="harbor-metrics usage-metrics">
             <div><span>累计成本</span><strong id="usage-total-cost">¥0.00</strong><small>人民币</small></div>
-            <div><span>累计 Token</span><strong id="usage-total-tokens">0</strong><small>输入 + 输出</small></div>
+            <div id="usage-token-metric"><span>累计 Token</span><strong id="usage-total-tokens">0</strong><small>输入 + 输出</small></div>
             <div><span>调用次数</span><strong id="usage-total-events">0</strong><small>条用量事件</small></div>
-            <div><span>覆盖 Agent</span><strong id="usage-agent-count">0</strong><small>有过记账的智能体</small></div>
+            <div><span>覆盖智能助手</span><strong id="usage-agent-count">0</strong><small>有过记账的智能体</small></div>
           </div>
 
           <div id="usage-list" class="usage-list"><div class="dashboard-loading">正在读取用量台账…</div></div>
@@ -720,7 +722,7 @@
 
         <section id="view-route" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">AI 资源协作</span><h1>模型选型</h1><p>按任务难度与约束，为模型调用选定模型档（可解释规则矩阵）</p></div>
+            <div><span class="page-module">成本与资源</span><h1>模型配置</h1><p>按任务难度与约束，为模型调用选定模型档（可解释规则矩阵）</p></div>
           </div>
 
           <div class="route-layout">
@@ -751,7 +753,7 @@
 
         <section id="view-ops" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">系统</span><h1>运行监控</h1><p>服务健康、模型错误、借调失败率与备份状态（只读）</p></div>
+            <div><span class="page-module">系统</span><h1>运行状态</h1><p>服务健康、模型错误、借调失败率与备份状态（只读）</p></div>
             <div class="page-actions"><button id="btn-ops-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
@@ -806,7 +808,7 @@
 
   <div id="harbor-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="harbor-modal-title">
     <div class="modal-panel">
-      <div class="modal-head"><div><span id="harbor-modal-kicker">AI 港湾</span><h2 id="harbor-modal-title">新增智能体</h2><p id="harbor-modal-desc"></p></div><button id="harbor-modal-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div class="modal-head"><div><span id="harbor-modal-kicker">AI 资源</span><h2 id="harbor-modal-title">新增智能体</h2><p id="harbor-modal-desc"></p></div><button id="harbor-modal-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
       <form id="harbor-form">
         <div id="harbor-form-fields" class="modal-body harbor-form-grid"></div>
         <div class="modal-foot"><span id="harbor-form-status"></span><button id="harbor-form-cancel" class="btn secondary" type="button">取消</button><button id="harbor-form-submit" class="btn primary" type="submit"><i data-lucide="check"></i><span>保存</span></button></div>
@@ -910,6 +912,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=trace-simplify-v1-20261026"></script>
+  <script type="module" src="/app.js?v=p0-business-v3-20261026"></script>
 </body>
 </html>
