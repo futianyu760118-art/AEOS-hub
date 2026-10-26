@@ -292,6 +292,7 @@ const commands = [
   { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
   { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
   { view: 'borrow', label: '跨系统借调', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '执行面' },
+  { view: 'trace', label: '链路追踪', desc: '借调单 / 执行 run / 中台调用的一条完整时间线', icon: 'git-branch', group: '执行面' },
   { view: 'ai-obs', label: 'AI 观测', desc: 'Hub 派单任务与各系统自有助手的统一观测', icon: 'scan-eye', group: '执行面' },
   { view: 'ops', label: '运行监控', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
@@ -712,6 +713,7 @@ function showView(view, options = {}) {
   if (view === 'execution') loadExecution();
   if (view === 'usage') loadUsage();
   if (view === 'borrow') loadBorrowOrders();
+  if (view === 'trace') loadTraceView();
   if (view === 'ai-obs') loadAiObs();
   if (view === 'ops') loadOps();
   if (view === 'route') loadRoute();
@@ -1233,14 +1235,15 @@ function renderBorrowDetail() {
     ${error}
     ${inputBlock}
     ${resultBlock}
-    <div class="borrow-detail-block"><div class="borrow-steps-head"><h3>执行步骤</h3><button id="btn-borrow-steps-refresh" class="btn ghost compact" type="button">刷新</button></div><div id="borrow-steps"></div></div>`;
+    <div class="borrow-detail-block borrow-detail-actions">
+      ${order.runId ? '<button id="btn-borrow-open-run" class="btn secondary compact" type="button">查看运行详情</button>' : ''}
+      <button id="btn-borrow-open-trace" class="btn secondary compact" type="button">查看链路</button>
+    </div>`;
   refreshIcons(root);
-  $('#btn-borrow-steps-refresh')?.addEventListener('click', () => {
-    if (!order.runId) return;
-    runEventsCache.delete(order.runId);
-    void loadBorrowSteps(order.runId, true);
+  $('#btn-borrow-open-run')?.addEventListener('click', () => {
+    if (order.runId) openExecutionRun(order.runId);
   });
-  void loadBorrowSteps(order.runId);
+  $('#btn-borrow-open-trace')?.addEventListener('click', () => openTraceFor(order.orderId));
 }
 
 function syncBorrowRefresh() {
@@ -1530,8 +1533,12 @@ async function renderAiRunDetail() {
       <div><span>耗时</span><strong>${esc(aiRunDuration(run))}</strong></div>
     </div>
     <div class="borrow-detail-block"><h3>结果摘要</h3><p class="form-hint">${esc(aiRunResultSummary(run))}</p></div>
-    <div class="borrow-detail-block"><h3>执行步骤</h3>${executionTimelineHtml(events)}</div>`;
+    <div class="borrow-detail-block"><h3>执行步骤</h3>${executionTimelineHtml(events)}</div>
+    <div class="borrow-detail-block borrow-detail-actions">
+      <button id="btn-ai-run-open-trace" class="btn secondary compact" type="button">查看链路</button>
+    </div>`;
   refreshIcons(root);
+  $('#btn-ai-run-open-trace')?.addEventListener('click', () => openTraceFor(run.runId));
 }
 
 function syncAiObsRefresh() {
@@ -2412,21 +2419,6 @@ function attachExecutionSteps(container, runId) {
     body.innerHTML = executionTimelineHtml(events);
     refreshIcons(body);
   });
-}
-
-async function loadBorrowSteps(runId, force = false) {
-  const root = $('#borrow-steps');
-  if (!root) return;
-  if (!runId) {
-    root.innerHTML = '<div class="harbor-empty"><i data-lucide="list-tree"></i><strong>暂无执行记录</strong><small>该借调单没有关联的执行 run</small></div>';
-    refreshIcons(root);
-    return;
-  }
-  const events = await fetchRunEvents(runId, { refresh: force });
-  const target = $('#borrow-steps');
-  if (!target) return;
-  target.innerHTML = executionTimelineHtml(events);
-  refreshIcons(target);
 }
 
 function openPrompt(prompt) {
@@ -7596,6 +7588,172 @@ els.evRefresh.addEventListener('click', loadEvidence);
 els.evidenceSearch?.addEventListener('input', renderEvidenceRows);
 els.evidenceSourceFilter?.addEventListener('change', renderEvidenceRows);
 els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
+
+/* ---------- 统一链路追踪 ---------- */
+const TRACE_KIND_LABELS = { borrow: '借调', run: '执行', usage: '用量', evidence: '审计' };
+const TRACE_RESOLVED_LABELS = { 'borrow-order': '按借调单号', run: '按 runId', request: '按 requestId' };
+
+function openTraceFor(id) {
+  const input = $('#trace-id-input');
+  if (input) input.value = id;
+  showView('trace');
+  void loadTrace(id);
+}
+
+function openExecutionRun(runId) {
+  selectedAiRunId = runId;
+  aiObsTab = 'runs';
+  showView('ai-obs');
+}
+
+async function loadTraceRecent() {
+  const root = $('#trace-recent');
+  if (!root) return;
+  if (root.dataset.bound !== '1') {
+    root.dataset.bound = '1';
+    root.addEventListener('click', (event) => {
+      const id = event.target.closest('[data-trace-id]')?.getAttribute('data-trace-id');
+      if (id) openTraceFor(id);
+    });
+  }
+  try {
+    const [ordersResponse, agentsResponse] = await Promise.all([
+      fetch('/api/borrow-orders?limit=8', { headers: { accept: 'application/json' } }),
+      fetch('/api/execution/agents', { headers: { accept: 'application/json' } }),
+    ]);
+    const ordersData = ordersResponse.ok ? await ordersResponse.json() : {};
+    const agentsData = agentsResponse.ok ? await agentsResponse.json() : {};
+    const orders = Array.isArray(ordersData?.orders) ? ordersData.orders : [];
+    const runIdsWithOrders = new Set(orders.map((order) => order.runId).filter(Boolean));
+    const runs = (Array.isArray(agentsData?.runs) ? agentsData.runs : [])
+      .filter((run) => run.state === 'completed' || run.state === 'failed')
+      .filter((run) => !runIdsWithOrders.has(run.runId))
+      .sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))
+      .slice(0, 8);
+    const borrowItems = orders.map((order) => `
+      <button class="trace-recent-item" type="button" data-trace-id="${esc(order.orderId)}">
+        <span><strong>${esc(order.orderId)}</strong><small>借调 · ${esc(order.fromSystem)} → ${esc(order.providerSystem || '—')} · ${esc(order.status)}</small></span>
+        <time>${esc(formatDateTimeText(order.createdAt))}</time>
+      </button>`);
+    const runItems = runs.map((run) => `
+      <button class="trace-recent-item" type="button" data-trace-id="${esc(run.runId)}">
+        <span><strong>${esc(run.capability)}</strong><small>${esc(run.agentId)} · ${esc(run.state)}</small></span>
+        <time>${esc(formatDateTimeText(run.startedAt))}</time>
+      </button>`);
+    const items = [...borrowItems, ...runItems];
+    root.innerHTML = items.length
+      ? `<div class="trace-recent-list">${items.join('')}</div>`
+      : '<div class="dashboard-loading">暂无借调单或执行记录</div>';
+    refreshIcons(root);
+  } catch {
+    root.innerHTML = '<div class="dashboard-loading">最近链路读取失败</div>';
+  }
+}
+
+function loadTraceView() {
+  const form = $('#trace-form');
+  if (form && form.dataset.bound !== '1') {
+    form.dataset.bound = '1';
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const id = $('#trace-id-input')?.value.trim();
+      if (id) void loadTrace(id);
+    });
+  }
+  void loadTraceRecent();
+}
+
+async function loadTrace(id) {
+  const root = $('#trace-result');
+  if (!root) return;
+  root.innerHTML = '<div class="dashboard-loading">正在读取链路…</div>';
+  try {
+    const response = await fetch(`/api/trace/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      root.innerHTML = harborEmpty('git-branch', '查询失败', esc(body.error || `HTTP ${response.status}`));
+      return;
+    }
+    renderTrace(body);
+  } catch (error) {
+    root.innerHTML = harborEmpty('git-branch', '查询失败', esc(error?.message || String(error)));
+  }
+}
+
+function renderTrace(trace) {
+  const root = $('#trace-result');
+  if (!root) return;
+  if (!trace || trace.resolvedBy === 'none') {
+    root.innerHTML = harborEmpty('git-branch', '没有找到链路', `未找到与「${esc(trace?.traceId || '')}」关联的借调单、run 或编排请求`);
+    return;
+  }
+  const borrow = trace.borrowOrder;
+  const usage = Array.isArray(trace.usage) ? trace.usage : [];
+  const runs = Array.isArray(trace.runs) ? trace.runs : [];
+  const cost = usage.reduce((sum, item) => sum + Number(item.cost || 0), 0);
+  const queryRuns = runs.filter((item) => String(item.capability || '').startsWith('query')).length;
+  const summary = `
+    <section class="surface">
+      <div class="surface-head">
+        <div><h2>链路概览</h2><p>${esc(TRACE_RESOLVED_LABELS[trace.resolvedBy] || trace.resolvedBy)} · <span class="mono">${esc(trace.traceId)}</span></p></div>
+      </div>
+      <div class="harbor-metrics usage-metrics">
+        <div><span>借调单</span><strong>${borrow ? esc(borrow.status) : '无'}</strong><small>${borrow ? esc(`${borrow.fromSystem} → ${borrow.providerSystem || '—'}`) : '直接派单 / 编排'}</small></div>
+        <div><span>执行 run</span><strong>${runs.length}</strong><small>查询 ${queryRuns} · 推理 ${runs.length - queryRuns}</small></div>
+        <div><span>证据引用</span><strong>${(trace.evidenceRefs || []).length}</strong><small>evidence_refs</small></div>
+        <div><span>总成本</span><strong>${cost ? `¥${cost.toFixed(4)}` : '—'}</strong><small>${usage.length} 条用量记录</small></div>
+      </div>
+    </section>`;
+
+  const timelineItems = (trace.timeline || []).map((item) => `
+    <li class="trace-entry">
+      <span class="trace-kind ${esc(item.kind)}">${esc(TRACE_KIND_LABELS[item.kind] || item.kind)}</span>
+      <div><strong>${esc(item.title)}</strong>${item.detail ? `<small>${esc(item.detail)}</small>` : ''}</div>
+      <time>${esc(formatDateTimeText(item.at))}</time>
+    </li>`).join('');
+  const timeline = `
+    <section class="surface">
+      <div class="surface-head"><div><h2>时间线</h2><p>借调、执行、用量与审计按时间排序</p></div></div>
+      <ul class="trace-timeline">${timelineItems || '<li class="trace-entry">暂无事件</li>'}</ul>
+    </section>`;
+
+  const runItems = runs.map((run) => `
+    <div class="trace-run">
+      <div class="trace-run-head"><strong>${esc(run.capability)}</strong><span class="mono">${esc(run.runId)}</span></div>
+      <div class="trace-run-meta">${esc(run.agentId)} · ${esc(run.state)} · 置信度 ${esc(run.dataConfidence || '—')} · ${run.conclusions} 条结论${run.taskId ? ` · task_id=${esc(run.taskId)}` : ''}</div>
+      ${run.summary ? `<p>${esc(run.summary)}</p>` : ''}
+      ${run.error ? `<p class="trace-error">${esc(run.error.code)}: ${esc(run.error.message)}</p>` : ''}
+      ${run.evidenceRefs?.length ? `<div class="trace-refs">${run.evidenceRefs.slice(0, 8).map((ref) => `<code>${esc(ref)}</code>`).join('')}</div>` : ''}
+    </div>`).join('');
+  const runSection = `
+    <section class="surface">
+      <div class="surface-head"><div><h2>执行 run</h2><p>查询与推理的实际执行记录；推理 run 的 task_id 与 runId 一致</p></div></div>
+      <div class="trace-runs">${runItems || '<div class="dashboard-loading">没有关联的执行 run</div>'}</div>
+    </section>`;
+
+  const usageRows = usage.map((item) => `
+    <tr>
+      <td>${esc(formatDateTimeText(item.endedAt))}</td>
+      <td>${esc(item.usageKind === 'query' ? '查询' : item.modelId || '模型')}</td>
+      <td>${esc(item.metering)}</td>
+      <td class="num">${item.tokensIn} / ${item.tokensOut}</td>
+      <td class="num">${item.cost ? `¥${Number(item.cost).toFixed(4)}` : '—'}</td>
+      <td>${esc(item.consumerSystemId || '—')}</td>
+    </tr>`).join('');
+  const usageSection = `
+    <section class="surface">
+      <div class="surface-head"><div><h2>用量</h2><p>执行方与请求方归属</p></div></div>
+      <div class="trace-scroll trace-usage-scroll">
+        <table class="trace-table">
+          <thead><tr><th>时间</th><th>模型/类型</th><th>计量</th><th class="num">Token in / out</th><th class="num">成本</th><th>请求方</th></tr></thead>
+          <tbody>${usageRows || '<tr><td colspan="6">没有用量记录</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>`;
+
+  root.innerHTML = summary + timeline + runSection + usageSection;
+  refreshIcons();
+}
 
 localizeStaticDocument();
 refreshIcons();
