@@ -36,6 +36,10 @@ export function loadConfig(env = process.env) {
     targetReasoningUrl: (env.TARGET_REASONING_URL ?? '').trim(),
     targetReasoningAgentId: (env.TARGET_REASONING_AGENT_ID ?? '').trim(),
     targetReasoningToken: (env.TARGET_REASONING_TOKEN ?? '').trim(),
+    // 中台推理使用 HMAC 鉴权（X-App-Key/X-Timestamp/X-Signature），Token 仅保留给其他上游。
+    targetReasoningAppKey: (env.TARGET_REASONING_APP_KEY ?? '').trim(),
+    targetReasoningAppSecret: (env.TARGET_REASONING_APP_SECRET ?? '').trim(),
+    // 模型与思考强度当前由中台服务端配置，Hub 请求不再携带；保留配置项便于后续按次指定。
     targetReasoningModel: (env.TARGET_REASONING_MODEL ?? '').trim() || 'deepseek-flash',
     targetReasoningEffort: (env.TARGET_REASONING_EFFORT ?? '').trim() || 'high',
     targetReasoningTimeoutMs: Number(env.TARGET_REASONING_TIMEOUT_MS) > 0

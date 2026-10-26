@@ -109,10 +109,13 @@ Hub 侧新增网关或 Agent ID 时，编辑 `config/execution-agent-allowlist.j
 | `TARGET_QUERY_BASE_URL` | 是 | 中台只读查询地址 |
 | `TARGET_QUERY_APP_KEY` | 是 | 只读应用 Key |
 | `TARGET_QUERY_APP_SECRET` | 是 | 只读应用 Secret |
-| `TARGET_REASONING_URL` | 否 | 中台推理地址；留空则返回“未接通” |
-| `TARGET_REASONING_MODEL` | 否 | 推理模型，默认 `deepseek-flash` |
-| `TARGET_REASONING_EFFORT` | 否 | 思考强度，默认 `high` |
-| `TARGET_REASONING_TIMEOUT_MS` | 否 | 推理超时，默认 `180000` |
+| `TARGET_REASONING_URL` | 否 | 中台推理 analyze 地址（`.../external/reasoning/analyze`）；留空则返回“未接通” |
+| `TARGET_REASONING_APP_KEY` | 否 | 中台推理专用 app_key（HMAC 鉴权用） |
+| `TARGET_REASONING_APP_SECRET` | 否 | 中台推理专用 app_secret（HMAC 鉴权用） |
+| `TARGET_REASONING_TOKEN` | 否 | 非中台上游的 Bearer 兼容项；中台正式环境不使用 |
+| `TARGET_REASONING_MODEL` | 否 | 保留兼容；模型由中台服务端配置，请求不携带 |
+| `TARGET_REASONING_EFFORT` | 否 | 保留兼容；思考强度由中台服务端配置 |
+| `TARGET_REASONING_TIMEOUT_MS` | 否 | 推理超时，默认 `180000`（中台服务端 170s） |
 
 ## 4. Hub 侧会看到什么
 

@@ -55,8 +55,8 @@
       "id": "unknown-order-boundary",
       "name": "不存在订单（边界）",
       "required": false,
-      "expect_confidence": "any",
-      "note": "人工核对：必须明确说明查无此单或数据不足，不得回答“无风险”。",
+      "expect_error_code": "NOT_FOUND",
+      "note": "中台应返回信封 404（无可用证据），并明确说明不代表无风险。",
       "input": {
         "prompt": "分析订单 HJY00000000-000 的交付风险。",
         "task_type": "order_delivery_analysis",

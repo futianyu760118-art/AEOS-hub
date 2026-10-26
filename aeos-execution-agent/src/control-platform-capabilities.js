@@ -61,6 +61,8 @@ export function registerControlPlatformCapabilities(config) {
       url: config.targetReasoningUrl,
       agentId: config.targetReasoningAgentId,
       token: config.targetReasoningToken,
+      appKey: config.targetReasoningAppKey,
+      appSecret: config.targetReasoningAppSecret,
       model: config.targetReasoningModel,
       reasoningEffort: config.targetReasoningEffort,
       timeoutMs: config.targetReasoningTimeoutMs,
