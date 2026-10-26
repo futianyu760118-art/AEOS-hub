@@ -21,9 +21,11 @@ test('借调详情提供运行详情与链路跳转，不再重复执行步骤',
   assert.doesNotMatch(app, /id="borrow-steps"/);
 });
 
-test('链路追踪页时间线已接入', () => {
+test('链路追踪页时间线已接入，run 明细移至 AI 观测', () => {
   assert.match(app, /function renderTrace/);
   assert.match(app, /trace-timeline/);
+  assert.match(app, /btn-trace-open-run/);
+  assert.doesNotMatch(app, /class="trace-runs"/);
 });
 
 test('时间线只读：没有写请求', () => {

@@ -7697,6 +7697,7 @@ function renderTrace(trace) {
   const runs = Array.isArray(trace.runs) ? trace.runs : [];
   const cost = usage.reduce((sum, item) => sum + Number(item.cost || 0), 0);
   const queryRuns = runs.filter((item) => String(item.capability || '').startsWith('query')).length;
+  const lastRun = runs[runs.length - 1] ?? null;
   const summary = `
     <section class="surface">
       <div class="surface-head">
@@ -7704,10 +7705,11 @@ function renderTrace(trace) {
       </div>
       <div class="harbor-metrics usage-metrics">
         <div><span>借调单</span><strong>${borrow ? esc(borrow.status) : '无'}</strong><small>${borrow ? esc(`${borrow.fromSystem} → ${borrow.providerSystem || '—'}`) : '直接派单 / 编排'}</small></div>
-        <div><span>执行 run</span><strong>${runs.length}</strong><small>查询 ${queryRuns} · 推理 ${runs.length - queryRuns}</small></div>
+        <div><span>执行环节</span><strong>${runs.length}</strong><small>查询 ${queryRuns} · 推理 ${runs.length - queryRuns}</small></div>
         <div><span>证据引用</span><strong>${(trace.evidenceRefs || []).length}</strong><small>evidence_refs</small></div>
         <div><span>总成本</span><strong>${cost ? `¥${cost.toFixed(4)}` : '—'}</strong><small>${usage.length} 条用量记录</small></div>
       </div>
+      ${runs.length ? `<div class="trace-actions"><button id="btn-trace-open-run" class="btn secondary compact" type="button">查看执行详情${runs.length > 1 ? `（${runs.length} 个 run）` : ''} → AI 观测</button></div>` : ''}
     </section>`;
 
   const timelineItems = (trace.timeline || []).map((item) => `
@@ -7720,20 +7722,6 @@ function renderTrace(trace) {
     <section class="surface">
       <div class="surface-head"><div><h2>时间线</h2><p>借调、执行、用量与审计按时间排序</p></div></div>
       <ul class="trace-timeline">${timelineItems || '<li class="trace-entry">暂无事件</li>'}</ul>
-    </section>`;
-
-  const runItems = runs.map((run) => `
-    <div class="trace-run">
-      <div class="trace-run-head"><strong>${esc(run.capability)}</strong><span class="mono">${esc(run.runId)}</span></div>
-      <div class="trace-run-meta">${esc(run.agentId)} · ${esc(run.state)} · 置信度 ${esc(run.dataConfidence || '—')} · ${run.conclusions} 条结论${run.taskId ? ` · task_id=${esc(run.taskId)}` : ''}${run.caller ? ` · 发起 ${esc(run.caller.userId || run.caller.agentId || run.caller.systemId)}` : ''}</div>
-      ${run.summary ? `<p>${esc(run.summary)}</p>` : ''}
-      ${run.error ? `<p class="trace-error">${esc(run.error.code)}: ${esc(run.error.message)}</p>` : ''}
-      ${run.evidenceRefs?.length ? `<div class="trace-refs">${run.evidenceRefs.slice(0, 8).map((ref) => `<code>${esc(ref)}</code>`).join('')}</div>` : ''}
-    </div>`).join('');
-  const runSection = `
-    <section class="surface">
-      <div class="surface-head"><div><h2>执行 run</h2><p>查询与推理的实际执行记录；推理 run 的 task_id 与 runId 一致</p></div></div>
-      <div class="trace-runs">${runItems || '<div class="dashboard-loading">没有关联的执行 run</div>'}</div>
     </section>`;
 
   const usageRows = usage.map((item) => `
@@ -7757,8 +7745,12 @@ function renderTrace(trace) {
       </div>
     </section>`;
 
-  root.innerHTML = summary + timeline + runSection + usageSection;
+  root.innerHTML = summary + timeline + usageSection;
   refreshIcons();
+  $('#btn-trace-open-run')?.addEventListener('click', () => {
+    if (lastRun) openExecutionRun(lastRun.runId);
+    else showView('ai-obs');
+  });
 }
 
 localizeStaticDocument();
