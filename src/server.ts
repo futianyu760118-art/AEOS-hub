@@ -82,7 +82,8 @@ import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
-import { authorizeCapability, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
+import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
+import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
 import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
 import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
@@ -126,6 +127,8 @@ import {
   aggregateUsageByAgent,
   aggregateUsageBySystem,
   aggregateUsageByConsumerSystem,
+  aggregateUsageByCallerAgent,
+  aggregateUsageByCallerUser,
   listUsageEvents,
   type UsageEventAppendInput,
 } from './usage-ledger-store.ts';
@@ -257,7 +260,8 @@ const executionPlane = new ExecutionPlaneRegistry({
   },
 });
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
-const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
+// 执行面三张配置（准入/授权/选路）变更审计：首次只建基线，之后按文件哈希写 evidence。
+createExecutionPolicyAuditor({ appendEvidence }).start();const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
 const catalogApi = new CatalogApi((tenantId) => {
   const allSystems = listSystems();
   const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
@@ -1914,6 +1918,56 @@ const server = createServer(async (req, res) => {
     sendJson(res, 200, trace);
     return;
   }
+  // ---------- 执行 run 召回（系统 token，只读试点内的取消链路） ----------
+  const systemRecallMatch = url.pathname.match(/^\/api\/system\/execution\/runs\/([^/]+)\/recall$/);
+  if (systemRecallMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const headerValue = (name: string): string => {
+      const value = req.headers[name];
+      return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+    };
+    const systemId = decodeSystemIdHeader(headerValue('x-aeos-system-id'));
+    const token = headerValue('x-aeos-system-token');
+    if (!systemId || !token || !verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token)) {
+      sendJson(res, 401, { error: 'authentication required' });
+      return;
+    }
+    const runId = decodeURIComponent(systemRecallMatch[1] ?? '').trim();
+    if (!runId) { sendJson(res, 400, { error: 'runId 无效' }); return; }
+    const run = executionPlane.getRun(runId);
+    if (!run) { sendJson(res, 404, { error: 'run not found' }); return; }
+    const agent = executionPlane.list().agents.find((item) => item.agentId === run.agentId);
+    const agentSystem = agent ? agent.systemId ?? agent.sourceSystem : null;
+    if (!agent || agentSystem !== systemId) {
+      sendJson(res, 403, { error: 'run not visible to this system' });
+      return;
+    }
+    if (run.state === 'completed' || run.state === 'failed' || run.state === 'recalled') {
+      sendJson(res, 409, { error: `run 已结束：${run.state}`, state: run.state });
+      return;
+    }
+    if (agent.currentRunId !== runId) {
+      sendJson(res, 409, { error: 'run 已不是当前执行任务', currentRunId: agent.currentRunId });
+      return;
+    }
+    const result = executionPlane.recall(run.agentId);
+    try {
+      appendEvidence({
+        kind: 'app_event',
+        actor_id: `execution-token:system:${systemId}`,
+        actor_type: 'system',
+        object_ref: `hub://execution-run/${encodeURIComponent(runId)}`,
+        source_system: systemId,
+        correlation_id: 'execution-run-recalled',
+        summary: 'execution run recalled',
+        payload: { runId, agentId: run.agentId, recalled: result.recalled },
+      });
+    } catch {
+      // 审计失败不改变召回结果。
+    }
+    sendJson(res, 200, { runId, recalled: result.recalled, state: executionPlane.getRun(runId)?.state ?? null });
+    return;
+  }
   const publicAsset = isPublicLoginResource(url.pathname, req.method);
   if (!authGateway.canAccess(url.pathname, req.method, req.headers.cookie)) {
     sendJson(res, 401, { error: 'authentication required' });
@@ -2671,6 +2725,8 @@ const server = createServer(async (req, res) => {
       byAgent: aggregateUsageByAgent(requestTenantId),
       bySystem: aggregateUsageBySystem(requestTenantId),
       byConsumerSystem: aggregateUsageByConsumerSystem(requestTenantId),
+      byCallerAgent: aggregateUsageByCallerAgent(requestTenantId),
+      byCallerUser: aggregateUsageByCallerUser(requestTenantId),
     });
     return;
   }
@@ -2872,11 +2928,76 @@ executionWss.on('connection', (ws, request) => {
           send(ws, { type: 'error', code: 'AGENT_NOT_ALLOWED', message: '该执行面 Agent 未在允许列表中，禁止注册' });
           return;
         }
+        // 注册时按授权表校验自报能力：enforce 下只登记已授权能力；全部未授权则拒绝注册。
+        const declaredCapabilities = Array.isArray(msg.capabilities) ? msg.capabilities : [];
+        let acceptedCapabilities = declaredCapabilities;
+        if (identity.systemId && declaredCapabilities.length) {
+          const declaredNames = declaredCapabilities
+            .map((capability) => capability && typeof capability === 'object' ? (capability as Record<string, unknown>).name : null)
+            .filter((name): name is string => typeof name === 'string' && Boolean(name.trim()));
+          const capabilityFilter = filterRegistrationCapabilities(loadExecutionAgentPermissions(), {
+            systemId: identity.systemId,
+            agentId: requestedAgentId,
+            tenantId: resolveTenantId(identity.systemId, listSystems()),
+            capabilities: declaredNames,
+          });
+          if (capabilityFilter.denied.length) {
+            console.warn(`[execution-plane] 注册能力未授权：${requestedAgentId} -> ${capabilityFilter.denied.join(', ')}（${capabilityFilter.enforcement}）`);
+          }
+          if (capabilityFilter.enforcement === 'enforce') {
+            if (!capabilityFilter.allowed.length) {
+              try {
+                appendEvidence({
+                  kind: 'app_event',
+                  actor_id: `execution-token:system:${identity.systemId}`,
+                  actor_type: 'system',
+                  object_ref: 'hub://execution-agent/registration',
+                  source_system: identity.systemId,
+                  correlation_id: 'execution-register-rejected',
+                  summary: 'execution agent registration rejected',
+                  payload: {
+                    reason: 'CAPABILITY_FORBIDDEN',
+                    agentId: requestedAgentId.slice(0, 160),
+                    denied: capabilityFilter.denied,
+                  },
+                });
+              } catch {
+                // 审计失败不改变拒绝结果。
+              }
+              send(ws, { type: 'error', code: 'CAPABILITY_FORBIDDEN', message: '该 Agent 声明的能力均未获授权，禁止注册' });
+              return;
+            }
+            acceptedCapabilities = declaredCapabilities.filter((capability) => {
+              const name = capability && typeof capability === 'object' ? (capability as Record<string, unknown>).name : null;
+              return typeof name === 'string' && capabilityFilter.allowed.includes(name);
+            });
+            if (capabilityFilter.denied.length) {
+              try {
+                appendEvidence({
+                  kind: 'app_event',
+                  actor_id: `execution-token:system:${identity.systemId}`,
+                  actor_type: 'system',
+                  object_ref: 'hub://execution-agent/registration',
+                  source_system: identity.systemId,
+                  correlation_id: 'execution-register-filtered',
+                  summary: 'execution agent capabilities filtered by permission table',
+                  payload: {
+                    agentId: requestedAgentId.slice(0, 160),
+                    allowed: capabilityFilter.allowed,
+                    denied: capabilityFilter.denied,
+                  },
+                });
+              } catch {
+                // 审计失败不阻断注册。
+              }
+            }
+          }
+        }
         const reply = executionPlane.onRegister({
           agentId: msg.agentId,
           name: msg.name,
           version: msg.version,
-          capabilities: msg.capabilities,
+          capabilities: acceptedCapabilities,
           sourceSystem: msg.sourceSystem,
           local: isLoopbackExecutionPeer(peerAddress),
           simulated: msg.simulated,

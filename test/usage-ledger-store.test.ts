@@ -126,6 +126,26 @@ test('消费者字段落库并按消费者聚合', (t) => {
   assert.equal(rows[0].tokensIn, 120);
 });
 
+test('按调用方 Agent / 用户聚合，忽略无 caller 的事件', (t) => {
+  const { store } = fixture(t);
+  store.append(input({ callerAgentId: 'AG-1', callerUserId: 'u-1', tokensIn: 10, tokensOut: 5, cost: 0.1 }));
+  store.append(input({ callerAgentId: 'AG-1', callerUserId: 'u-1', tokensIn: 20, tokensOut: 5, cost: 0.2 }));
+  store.append(input({ callerAgentId: 'AG-2', callerUserId: 'u-2', tokensIn: 1, tokensOut: 1, cost: 0.05 }));
+  store.append(input({ runId: 'exec-run-no-caller' }));
+
+  const byAgent = store.aggregateByCallerAgent();
+  assert.equal(byAgent.length, 2);
+  assert.equal(byAgent[0].callerId, 'AG-1');
+  assert.equal(byAgent[0].events, 2);
+  assert.equal(byAgent[0].tokensIn, 30);
+  assert.ok(Math.abs(byAgent[0].cost - 0.3) < 1e-9);
+
+  const byUser = store.aggregateByCallerUser();
+  assert.equal(byUser.length, 2);
+  assert.equal(byUser[0].callerId, 'u-1');
+  assert.equal(byUser[0].events, 2);
+});
+
 test('list 按新到旧返回明细', (t) => {
   const { store } = fixture(t);
   store.append(input({ runId: 'exec-run-1', tokensIn: 1 }));

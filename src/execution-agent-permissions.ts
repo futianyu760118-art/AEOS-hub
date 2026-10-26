@@ -112,3 +112,28 @@ export function grantedCapabilities(
       && (grant.tenantId === null || grant.tenantId === tenantId))
     .flatMap((grant) => grant.capabilities))];
 }
+
+export type RegistrationCapabilityFilter = {
+  allowed: string[];
+  denied: string[];
+  enforcement: 'observe' | 'enforce';
+};
+
+/** 注册时按授权表过滤自报能力：enforce 下拒绝未授权能力，observe 下只标记。 */
+export function filterRegistrationCapabilities(
+  policy: ExecutionAgentPermissions,
+  query: { systemId: string; agentId: string; tenantId?: string | null; capabilities: string[] },
+): RegistrationCapabilityFilter {
+  const allowed: string[] = [];
+  const denied: string[] = [];
+  for (const capability of [...new Set(query.capabilities.map((item) => item.trim()).filter(Boolean))]) {
+    const decision = authorizeCapability(policy, {
+      systemId: query.systemId,
+      agentId: query.agentId,
+      capability,
+      tenantId: query.tenantId,
+    });
+    (decision.allowed ? allowed : denied).push(capability);
+  }
+  return { allowed, denied, enforcement: policy.enforcement };
+}

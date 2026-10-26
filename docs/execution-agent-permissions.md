@@ -56,6 +56,8 @@
 - 跨系统借调（`borrow-order-service` 派单）；
 - 能力模板调用。
 
+另外，**注册时**会按授权表过滤 Agent 自报能力：enforce 下只登记已授权能力，全部未授权则拒绝注册并写审计；observe 下只告警。
+
 未授权时：
 
 - `enforce`：抛 `CAPABILITY_FORBIDDEN`，借调单落 `failed`，错误码 `CAPABILITY_FORBIDDEN`（HTTP 403）；

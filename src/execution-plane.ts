@@ -425,7 +425,10 @@ export class ExecutionPlaneRegistry {
   }
 
   private timeoutForRun(run: ExecutionRunRecord): number {
-    if (run.state === 'dispatched') return this.dispatchTimeoutMs;
+    // 推理任务在首次 run_update 之前就可能持续几十秒，不能套通用 30s 派单超时。
+    if (run.state === 'dispatched') {
+      return isReasoningCapability(run.capability) ? this.reasoningTimeoutMs : this.dispatchTimeoutMs;
+    }
     return isReasoningCapability(run.capability) ? this.reasoningTimeoutMs : this.queryTimeoutMs;
   }
 

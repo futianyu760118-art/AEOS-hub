@@ -15,6 +15,11 @@ const CAPABILITIES = [{
   description: '只读查询',
   inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
   constraints: { readOnly: true },
+}, {
+  name: 'reason_control_platform',
+  description: '只读推理',
+  inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
+  constraints: { readOnly: true },
 }];
 
 function fixture(
@@ -137,6 +142,16 @@ test('派单后超过 dispatchTimeoutMs 无响应，标记 DISPATCH_TIMEOUT', (t
   assert.equal(registry.list().agents[0].runtimeStatus, 'error');
   const states = events.filter((event) => event.kind === 'state').map((event) => (event.value as ExecutionRunStateEvent).state);
   assert.deepEqual(states, ['failed']);
+});
+
+test('推理 run 在 dispatched 状态使用推理超时，不被 30s 派单超时误杀', (t) => {
+  const { registry, clock } = fixture(t, { dispatchTimeoutMs: 1_000, reasoningTimeoutMs: 240_000 });
+  const runId = registry.dispatch('agent-1', 'reason_control_platform', { prompt: '分析订单' }).runId;
+  clock.current = new Date('2026-10-19T09:00:31.000Z');
+  assert.equal(registry.markRunTimeouts(), 0);
+  clock.current = new Date('2026-10-19T09:04:01.000Z');
+  assert.equal(registry.markRunTimeouts(), 1);
+  assert.equal(registry.getRun(runId)?.error?.code, 'DISPATCH_TIMEOUT');
 });
 
 test('执行中超过 queryTimeoutMs，标记 RUN_TIMEOUT', (t) => {

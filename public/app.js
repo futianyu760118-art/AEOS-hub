@@ -863,10 +863,12 @@ function formatUsageCost(value) {
 
 function usageTableHtml(rows, key, emptyText) {
   if (!rows.length) return `<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>${esc(emptyText)}</small></div>`;
-  const head = key === 'agentId' ? 'Agent' : '系统';
+  const head = { agentId: 'Agent', systemId: '系统', callerAgentId: '调用方 Agent', callerUserId: '调用方用户' }[key] || key;
   const body = rows.map((row) => {
     const raw = row[key];
-    const label = key === 'agentId' ? usageAgentLabel(raw) : usageSystemLabel(raw);
+    const label = key === 'agentId' || key === 'callerAgentId'
+      ? usageAgentLabel(raw)
+      : key === 'systemId' ? usageSystemLabel(raw) : raw;
     const tokens = (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0);
     const queryOnly = (Number(row.events) || 0) > 0
       && Number(row.queryEvents) === Number(row.events)
@@ -936,6 +938,8 @@ function renderUsage() {
   if (!root) return;
   const byAgent = Array.isArray(usageSummary?.byAgent) ? usageSummary.byAgent : [];
   const bySystem = Array.isArray(usageSummary?.bySystem) ? usageSummary.bySystem : [];
+  const byCallerAgent = Array.isArray(usageSummary?.byCallerAgent) ? usageSummary.byCallerAgent : [];
+  const byCallerUser = Array.isArray(usageSummary?.byCallerUser) ? usageSummary.byCallerUser : [];
   const totalCost = byAgent.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
   const totalTokens = byAgent.reduce((sum, row) => sum + (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0), 0);
   const totalEvents = byAgent.reduce((sum, row) => sum + (Number(row.events) || 0), 0);
@@ -946,7 +950,7 @@ function renderUsage() {
   setText('#usage-total-events', formatTokenCount(totalEvents));
   setText('#usage-agent-count', formatTokenCount(byAgent.length));
 
-  root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按 Agent</h2><p>每个智能体消耗的成本与 Token</p></div></div>${usageTableHtml(byAgent, 'agentId', '中枢或执行面还没有产生可记账的模型调用')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本与 Token</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section>`;
+  root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按 Agent</h2><p>每个智能体消耗的成本与 Token</p></div></div>${usageTableHtml(byAgent, 'agentId', '中枢或执行面还没有产生可记账的模型调用')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本与 Token</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>SPC 用户 Agent 维度的成本与 Token（来自 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：借调请求尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>SPC 用户维度的成本与 Token（来自 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：借调请求尚未携带 caller')}</section>`;
   refreshIcons(root);
 }
 

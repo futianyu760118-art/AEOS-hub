@@ -50,6 +50,8 @@ allowlist 负责安全边界，routing policy 负责流量分配；以后新增/
 
 配置按 mtime 热加载，改完不需要重启 Hub。配置损坏时回落默认值（无规则 + first-online），不阻断派单。
 
+准入 / 授权 / 选路三张配置都由 Hub 的文件哈希监听器监控，变更会写入 evidence（`execution-policy-changed`，含 revision 与前后哈希）。
+
 ## 四、当前策略
 
 - `control-platform`：优先 `gateway-control-platform`（统一网关，兼查询与推理）；

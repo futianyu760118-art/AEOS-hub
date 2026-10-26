@@ -12,12 +12,18 @@ test('执行步骤 API 与时间线已接入', () => {
   assert.match(app, /async function fetchRunEvents/);
   assert.match(app, /function executionTimelineHtml/);
   assert.match(app, /function attachExecutionSteps/);
-  assert.match(app, /function loadBorrowSteps/);
+  assert.match(app, /function renderAiRunDetail/);
 });
 
-test('借调详情包含执行步骤区域', () => {
-  assert.match(app, /id="borrow-steps"/);
-  assert.match(app, /btn-borrow-steps-refresh/);
+test('借调详情提供运行详情与链路跳转，不再重复执行步骤', () => {
+  assert.match(app, /btn-borrow-open-run/);
+  assert.match(app, /btn-borrow-open-trace/);
+  assert.doesNotMatch(app, /id="borrow-steps"/);
+});
+
+test('链路追踪页时间线已接入', () => {
+  assert.match(app, /function renderTrace/);
+  assert.match(app, /trace-timeline/);
 });
 
 test('时间线只读：没有写请求', () => {

@@ -110,6 +110,7 @@ Hub 的 dispatch 消息新增两个字段：
 | 用量台账 | `traceId`、`callerAgentId`、`callerUserId`、`consumerSystemId`、`borrowOrderId` |
 | 审计 evidence | `caller`、`traceId` |
 | 链路追踪 | 借调、run、用量、时间线均展示调用方 |
+| 取消 | `POST /api/system/execution/runs/{runId}/recall`（系统令牌，提供方系统）；Hub 将 run 置 `recalled`、借调单 `cancelled`，并通知执行面上游取消 |
 | Hub 页面直接派单 | 自动填 `caller.systemId=aeos-hub` + 当前登录用户 |
 
 实测（Hub 侧）：
@@ -138,7 +139,8 @@ SPC 需要准备：
 3. 不传 caller → 行为与之前一致；
 4. SPC 网关能读取 dispatch 消息中的 `caller` / `traceId`，并路由到对应用户 Agent；
 5. traceId 与 SPC `trace_id` 一致；
-6. 网关找不到用户 Agent 时拒绝并审计，不回退全量。
+6. 网关找不到用户 Agent 时拒绝并审计，不回退全量；
+7. 取消：调用召回后借调单为 `cancelled`，中台任务 `status=cancelled`（实测 `task_id` 与 runId 一致）。
 
 ## 七、身份与配置（重要）
 

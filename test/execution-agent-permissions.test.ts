@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   authorizeCapability,
+  filterRegistrationCapabilities,
   grantedCapabilities,
   loadExecutionAgentPermissions,
   type ExecutionAgentPermissions,
@@ -89,6 +90,27 @@ test('grantedCapabilities 返回去重后的授权能力', () => {
     ['query_control_platform', 'reason_control_platform'],
   );
   assert.deepEqual(grantedCapabilities(policy(), { systemId: 'control-platform', agentId: 'unknown', tenantId: 'tenant-demo' }), []);
+});
+
+test('注册时按授权表过滤自报能力', () => {
+  const filtered = filterRegistrationCapabilities(policy(), {
+    systemId: 'control-platform',
+    agentId: 'gateway-control-platform',
+    tenantId: 'tenant-demo',
+    capabilities: ['query_control_platform', 'reason_control_platform', 'update_control_platform_order'],
+  });
+  assert.deepEqual(filtered.allowed, ['query_control_platform', 'reason_control_platform']);
+  assert.deepEqual(filtered.denied, ['update_control_platform_order']);
+  assert.equal(filtered.enforcement, 'enforce');
+
+  const unknown = filterRegistrationCapabilities(policy(), {
+    systemId: 'control-platform',
+    agentId: 'unknown-agent',
+    tenantId: 'tenant-demo',
+    capabilities: ['query_control_platform'],
+  });
+  assert.deepEqual(unknown.allowed, []);
+  assert.deepEqual(unknown.denied, ['query_control_platform']);
 });
 
 test('配置按 mtime 热加载；损坏时回落 observe + deny', (t) => {

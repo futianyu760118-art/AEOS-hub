@@ -120,6 +120,18 @@ export interface UsageByConsumerSystemRow {
   events: number;
 }
 
+/** 按调用方（SPC 用户 Agent / 用户）聚合；仅统计带 caller 字段的事件。 */
+export interface UsageByCallerRow {
+  callerId: string;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  events: number;
+  queryEvents: number;
+  modelEvents: number;
+  lastAt: string | null;
+}
+
 function latestTimestamp(current: string | null, candidate: string | null | undefined): string | null {
   if (!candidate) return current;
   if (!current) return candidate;
@@ -319,6 +331,39 @@ export class UsageLedgerStore {
     return [...byConsumer.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
   }
 
+  private aggregateByCaller(
+    tenantId: string | undefined,
+    pick: (event: UsageEvent) => string | null,
+  ): UsageByCallerRow[] {
+    const byCaller = new Map<string, UsageByCallerRow>();
+    for (const event of this.eventsForTenant(tenantId)) {
+      const callerId = pick(event);
+      if (!callerId) continue;
+      const row = byCaller.get(callerId) ?? {
+        callerId, tokensIn: 0, tokensOut: 0, cost: 0, events: 0, queryEvents: 0, modelEvents: 0, lastAt: null,
+      };
+      row.tokensIn += event.tokensIn;
+      row.tokensOut += event.tokensOut;
+      row.cost += event.cost;
+      row.events += 1;
+      if (isQueryUsage(event)) row.queryEvents += 1;
+      else row.modelEvents += 1;
+      row.lastAt = latestTimestamp(row.lastAt, event.endedAt);
+      byCaller.set(callerId, row);
+    }
+    return [...byCaller.values()].sort((a, b) => b.cost - a.cost || b.tokensIn + b.tokensOut - (a.tokensIn + a.tokensOut));
+  }
+
+  /** 按 SPC 用户 Agent 聚合。 */
+  aggregateByCallerAgent(tenantId?: string): UsageByCallerRow[] {
+    return this.aggregateByCaller(tenantId, (event) => event.callerAgentId);
+  }
+
+  /** 按 SPC 用户聚合。 */
+  aggregateByCallerUser(tenantId?: string): UsageByCallerRow[] {
+    return this.aggregateByCaller(tenantId, (event) => event.callerUserId);
+  }
+
   list(limit = 200, tenantId?: string): UsageEvent[] {
     const events = [...this.eventsForTenant(tenantId)].reverse();
     const bounded = Math.max(0, Math.min(Math.trunc(limit), 1000));
@@ -346,6 +391,14 @@ export function aggregateUsageBySystem(tenantId?: string): UsageBySystemRow[] {
 
 export function aggregateUsageByConsumerSystem(tenantId?: string): UsageByConsumerSystemRow[] {
   return defaultStore.aggregateByConsumerSystem(tenantId);
+}
+
+export function aggregateUsageByCallerAgent(tenantId?: string): UsageByCallerRow[] {
+  return defaultStore.aggregateByCallerAgent(tenantId);
+}
+
+export function aggregateUsageByCallerUser(tenantId?: string): UsageByCallerRow[] {
+  return defaultStore.aggregateByCallerUser(tenantId);
 }
 
 export function listUsageEvents(limit = 200, tenantId?: string): UsageEvent[] {

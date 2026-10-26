@@ -103,3 +103,9 @@ POST /api/system/borrow-orders
 3. 不传 caller → 行为与之前完全一致（字段为 null）；
 4. dispatch 消息包含 `traceId` 与 `caller`，SPC 网关可读取；
 5. 单测：`npm run test:borrow`、`npm run test:execution`、`npm run test:trace`。
+
+## 八、配套能力（2026-10-26）
+
+- **用量按调用方聚合**：`/api/usage/summary` 新增 `byCallerAgent` / `byCallerUser`；用量页新增两个视图，可按 SPC Agent / 用户看 Token 与成本；
+- **召回**：`POST /api/system/execution/runs/{runId}/recall`（系统令牌，仅提供方系统）；Hub 将 run 置 `recalled`、借调单 `cancelled`，并通知执行面上游取消；
+- **配置变更审计**：准入 / 授权 / 选路三张配置按文件哈希监听，变更写 evidence（`execution-policy-changed`，含 revision 与前后哈希）。
