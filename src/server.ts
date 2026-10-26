@@ -93,6 +93,7 @@ import { BorrowOrderService, BorrowOrderServiceError, borrowOrderSummary } from 
 import { CatalogApi } from './catalog-api.ts';
 import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
 import { verifySystemToken } from './system-token.ts';
+import { buildTrace, readEvidenceEntries } from './trace.ts';
 import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 import {
   ExecutionIdentityError,
@@ -1865,6 +1866,42 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // ---------- 统一链路查询（系统 token，只读，限参与方） ----------
+  const systemTraceMatch = url.pathname.match(/^\/api\/system\/trace\/([^/]+)$/);
+  if (systemTraceMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const headerValue = (name: string): string => {
+      const value = req.headers[name];
+      return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+    };
+    const systemId = decodeSystemIdHeader(headerValue('x-aeos-system-id'));
+    const token = headerValue('x-aeos-system-token');
+    if (!systemId || !token || !verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token)) {
+      sendJson(res, 401, { error: 'authentication required' });
+      return;
+    }
+    const traceId = decodeURIComponent(systemTraceMatch[1] ?? '').trim();
+    if (!traceId || traceId.length > 200) { sendJson(res, 400, { error: 'traceId 无效' }); return; }
+    const agents = executionPlane.list().agents;
+    const systemOfAgent = (agentId: string): string | null => {
+      const agent = agents.find((item) => item.agentId === agentId);
+      return agent ? agent.systemId ?? agent.sourceSystem : null;
+    };
+    const trace = buildTrace(traceId, {
+      borrowOrderById: (orderId) => borrowOrderStore.get(orderId),
+      borrowOrders: () => borrowOrderStore.load().orders,
+      runById: (runId) => executionPlane.getRun(runId),
+      usageEvents: () => listUsageEvents(5_000),
+      evidenceEntries: () => readEvidenceEntries(),
+    });
+    const participated = trace.borrowOrder?.fromSystem === systemId
+      || trace.borrowOrder?.providerSystem === systemId
+      || trace.runs.some((run) => systemOfAgent(run.agentId) === systemId)
+      || trace.usage.some((event) => event.systemId === systemId || event.consumerSystemId === systemId);
+    if (!participated) { sendJson(res, 403, { error: 'trace not visible to this system' }); return; }
+    sendJson(res, 200, trace);
+    return;
+  }
   const publicAsset = isPublicLoginResource(url.pathname, req.method);
   if (!authGateway.canAccess(url.pathname, req.method, req.headers.cookie)) {
     sendJson(res, 401, { error: 'authentication required' });
@@ -2579,6 +2616,32 @@ const server = createServer(async (req, res) => {
     const order = orderId ? borrowOrderStore.get(orderId) : null;
     if (!order) { sendJson(res, 404, { error: 'borrow order not found' }); return; }
     sendJson(res, 200, { order });
+    return;
+  }
+  // ---------- 统一链路查询（登录用户，只读） ----------
+  const traceMatch = url.pathname.match(/^\/api\/trace\/([^/]+)$/);
+  if (traceMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const traceId = decodeURIComponent(traceMatch[1] ?? '').trim();
+    if (!traceId || traceId.length > 200) { sendJson(res, 400, { error: 'traceId 无效' }); return; }
+    const trace = buildTrace(traceId, {
+      borrowOrderById: (orderId) => {
+        const order = borrowOrderStore.get(orderId);
+        return order && order.tenantId === requestTenantId ? order : null;
+      },
+      borrowOrders: () => borrowOrderStore.load().orders.filter((order) => order.tenantId === requestTenantId),
+      runById: (runId) => executionPlane.getRun(runId),
+      usageEvents: () => listUsageEvents(5_000, requestTenantId),
+      evidenceEntries: () => readEvidenceEntries().filter((entry) => entry.tenant_id === requestTenantId),
+    });
+    const tenantAgents = new Set(executionPlane.list().agents
+      .filter((agent) => resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId)
+      .map((agent) => agent.agentId));
+    if (trace.runs.some((run) => !tenantAgents.has(run.agentId))) {
+      sendJson(res, 404, { error: 'trace not found' });
+      return;
+    }
+    sendJson(res, 200, trace);
     return;
   }
   if (url.pathname === '/api/usage/summary') {

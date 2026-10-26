@@ -45,11 +45,12 @@
     "check:types": "tsc --noEmit",
     "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",
     "setup:quality-agents": "node scripts/ensure-quality-agents.ts",
-    "test": "npm run test:daily-questions && npm run test:conversations && npm run test:registry && npm run test:dashboard && npm run test:attention-search && npm run test:production && npm run test:pagination && npm run test:harbor && npm run test:usage && npm run test:router && npm run test:pricing && npm run test:systems && npm run test:domains && npm run test:catalog && npm run test:borrow && npm run test:orchestration && npm run test:ops && npm run test:events && npm run test:assistant && npm run test:control && npm run test:squad && npm run test:operating-center && npm run test:collaboration && npm run test:execution && npm run test:mcp-policy && npm run test:runtime && npm run test:security && npm run test:auth && npm run test:evidence-contract && npm run test:result-contract && npm run test:mcp",
+    "test": "npm run test:daily-questions && npm run test:conversations && npm run test:registry && npm run test:dashboard && npm run test:attention-search && npm run test:production && npm run test:pagination && npm run test:harbor && npm run test:usage && npm run test:router && npm run test:pricing && npm run test:systems && npm run test:domains && npm run test:catalog && npm run test:borrow && npm run test:orchestration && npm run test:ops && npm run test:events && npm run test:assistant && npm run test:control && npm run test:squad && npm run test:operating-center && npm run test:collaboration && npm run test:execution && npm run test:mcp-policy && npm run test:runtime && npm run test:security && npm run test:auth && npm run test:evidence-contract && npm run test:result-contract && npm run test:trace && npm run test:mcp",
     "demo": "node src/demo-run.ts",
     "web": "node src/server.ts",
     "web:lan": "node src/server.ts --lan",
-    "doctor": "codex doctor"
+    "doctor": "codex doctor",
+    "test:trace": "node --test test/trace.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
