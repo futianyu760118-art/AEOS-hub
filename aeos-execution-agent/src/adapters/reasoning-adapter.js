@@ -32,6 +32,60 @@ function normalizeConfidence(value, fallback) {
   return value === 'high' || value === 'medium' || value === 'low' ? value : fallback;
 }
 
+const TOKEN_ALIASES = {
+  tokensIn: ['tokensIn', 'input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens'],
+  cachedTokens: ['cachedTokens', 'cached_tokens', 'prompt_cache_hit_tokens', 'cache_hit_tokens'],
+  tokensOut: ['tokensOut', 'output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens'],
+  cost: ['cost', 'costCny', 'total_cost', 'totalCost'],
+};
+
+function pickNumber(source, keys) {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+
+function pickString(source, keys) {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 160);
+  }
+  return null;
+}
+
+/**
+ * 从上游返回里提取用量（可选能力）：支持 usage 嵌在顶层或 result 内，
+ * 字段兼容 Hub run_complete.usage 的命名与常见模型 API 的命名。
+ * 没有可用字段时返回 null，不伪造 0 成本。
+ */
+export function normalizeUpstreamUsage(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const payload = body.result && typeof body.result === 'object' && !Array.isArray(body.result)
+    ? body.result
+    : body;
+  const sources = [body.usage, payload.usage, body, payload]
+    .filter((source) => source && typeof source === 'object' && !Array.isArray(source));
+  if (!sources.length) return null;
+  const pick = (keys) => {
+    for (const source of sources) {
+      const value = pickNumber(source, keys);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const modelId = sources
+    .map((source) => pickString(source, ['modelId', 'model']))
+    .find(Boolean) ?? null;
+  const tokensIn = pick(TOKEN_ALIASES.tokensIn) ?? 0;
+  const cachedTokens = pick(TOKEN_ALIASES.cachedTokens) ?? 0;
+  const tokensOut = pick(TOKEN_ALIASES.tokensOut) ?? 0;
+  const cost = pick(TOKEN_ALIASES.cost) ?? 0;
+  if (!modelId && tokensIn === 0 && cachedTokens === 0 && tokensOut === 0 && cost === 0) return null;
+  return { modelId, tokensIn, cachedTokens, tokensOut, cost };
+}
+
 /** 把中台返回归一化为 Hub 期望的结论结构；缺证据/缺时间一律降为低置信度。 */
 export function normalizeReasoningResult(body) {
   const payload = body && typeof body === 'object' && body.result && typeof body.result === 'object'
@@ -132,7 +186,16 @@ export function createReasoningAdapter(config = {}) {
             : 'UPSTREAM_ERROR';
         throw errorWithCode(code, `推理接口返回 HTTP ${response.status}: ${detail.slice(0, 200)}`);
       }
-      return normalizeReasoningResult(await response.json());
+      const body = await response.json();
+      const result = normalizeReasoningResult(body);
+      // 上游带用量时随 run_complete 一并回传（Hub 会记入用量台账并按模型目录补算成本）；
+      // 没带就保持普通返回，行为与之前一致。
+      const usage = normalizeUpstreamUsage(body);
+      if (usage && typeof ctx?.sendComplete === 'function') {
+        ctx.sendComplete(result, usage);
+        return undefined;
+      }
+      return result;
     } catch (error) {
       if (controller.signal.aborted) throw errorWithCode('REASONING_ABORTED', '推理请求已中止或超时');
       if (error && typeof error === 'object' && error.code) throw error;

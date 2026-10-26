@@ -193,6 +193,29 @@ test('handler 完成后发送 run_complete 并释放 activeRun', async () => {
   assert.deepEqual(sent[sent.length - 1], { type: 'heartbeat', status: 'idle', currentRunId: null });
 });
 
+test('handler 用 sendComplete 携带 usage 时，run_complete 带上用量且不重复发送', async () => {
+  const sent = [];
+  const core = new ExecutionAgentCore({}, {
+    reason_x: async (_input, ctx) => {
+      ctx.sendComplete({ summary: '已分析' }, { modelId: 'deepseek-flash', tokensIn: 10, cachedTokens: 2, tokensOut: 5, cost: 0 });
+      return { summary: '迟到的返回' };
+    },
+  }, () => {});
+  core.send = (message) => sent.push(message);
+  core.handleMessage(JSON.stringify({ type: 'dispatch', runId: 'run-usage', capability: 'reason_x', input: {}, timeoutMs: 100 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const completes = sent.filter((message) => message.type === 'run_complete');
+  assert.equal(completes.length, 1);
+  assert.deepEqual(completes[0], {
+    type: 'run_complete',
+    runId: 'run-usage',
+    result: { summary: '已分析' },
+    usage: { modelId: 'deepseek-flash', tokensIn: 10, cachedTokens: 2, tokensOut: 5, cost: 0 },
+  });
+  assert.equal(core.activeRun, null);
+});
+
 test('handler 超时发送 run_failed 并释放 activeRun', async () => {
   const sent = [];
   const core = new ExecutionAgentCore({}, { query_x: () => new Promise(() => {}) }, () => {});

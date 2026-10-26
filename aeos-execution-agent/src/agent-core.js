@@ -121,11 +121,11 @@ export class ExecutionAgentCore {
       sendProgress: (detail) => {
         if (!ctx.aborted) this.send({ type: 'run_update', runId, state: 'running', detail });
       },
-      sendComplete: (result) => {
+      sendComplete: (result, usage) => {
         if (ctx.aborted) return;
         ctx.aborted = true;
         finish();
-        this.send({ type: 'run_complete', runId, result });
+        this.send(usage ? { type: 'run_complete', runId, result, usage } : { type: 'run_complete', runId, result });
       },
       sendFailed: (code, message) => {
         if (ctx.aborted) return;

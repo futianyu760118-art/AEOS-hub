@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { createReasoningAdapter, normalizeReasoningResult } from '../src/adapters/reasoning-adapter.js';
+import { createReasoningAdapter, normalizeReasoningResult, normalizeUpstreamUsage } from '../src/adapters/reasoning-adapter.js';
 
 async function startServer(handler, t) {
   const server = createServer(handler);
@@ -114,4 +114,74 @@ test('未配置 URL 返回未接通且不伪造', async () => {
   assert.match(result.summary, /未接通/);
   assert.equal(result.data_confidence, 'low');
   assert.ok(result.conclusions[0].evidence_refs.length > 0);
+});
+
+test('上游返回 usage 时随 sendComplete 回传', async (t) => {
+  const { url } = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      summary: '存在缺料风险',
+      conclusions: [{
+        matter: '关键物料未齐套',
+        evidence_refs: ['control-platform://kitting/1'],
+        confidence: 'high',
+      }],
+      data_as_of: '2026-10-26T08:00:00+08:00',
+      data_confidence: 'high',
+      usage: { model: 'deepseek-flash', input_tokens: 1_000, cached_tokens: 300, output_tokens: 200 },
+    }));
+  }, t);
+  const reason = createReasoningAdapter({ url, timeoutMs: 1_000 });
+  const calls = [];
+  const returned = await reason(
+    { prompt: '分析订单交付风险', task_type: 'order_delivery_analysis' },
+    { sendComplete: (result, usage) => calls.push({ result, usage }) },
+  );
+
+  assert.equal(returned, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].result.data_confidence, 'high');
+  assert.deepEqual(calls[0].usage, {
+    modelId: 'deepseek-flash',
+    tokensIn: 1_000,
+    cachedTokens: 300,
+    tokensOut: 200,
+    cost: 0,
+  });
+});
+
+test('usage 嵌在 result 信封内也能提取', () => {
+  const usage = normalizeUpstreamUsage({
+    result: {
+      conclusions: [],
+      usage: { modelId: 'deepseek-v4-flash', prompt_tokens: 12, completion_tokens: 3, cost: 0.004 },
+    },
+  });
+  assert.deepEqual(usage, {
+    modelId: 'deepseek-v4-flash',
+    tokensIn: 12,
+    cachedTokens: 0,
+    tokensOut: 3,
+    cost: 0.004,
+  });
+});
+
+test('没有 usage 时不调用 sendComplete，按原样返回结果', async (t) => {
+  const { url } = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      summary: '结论',
+      conclusions: [{ matter: '事项', evidence_refs: ['control-platform://x/1'], confidence: 'high' }],
+      data_as_of: '2026-10-26T08:00:00+08:00',
+      data_confidence: 'high',
+    }));
+  }, t);
+  const reason = createReasoningAdapter({ url, timeoutMs: 1_000 });
+  let called = false;
+  const result = await reason(
+    { prompt: 'x', task_type: 'order_delivery_analysis' },
+    { sendComplete: () => { called = true; } },
+  );
+  assert.equal(called, false);
+  assert.equal(result.data_confidence, 'high');
 });
