@@ -7,7 +7,7 @@
 
 ---
 
-## 当前进展（2026-10-23）
+## 当前进展（2026-10-26 更新）
 
 Hub 侧已完成：
 
@@ -17,7 +17,9 @@ Hub 侧已完成：
 - 支持 `AbortSignal`：Hub 召回/超时会中止上游请求；
 - 校验 `evidence_refs` / `data_as_of`：缺失时降为 `data_confidence: low` 并返回 `validation_warnings`；
 - 5xx / 401 分别映射为 `UPSTREAM_UNAVAILABLE` / `UPSTREAM_AUTH_FAILED`；
-- 本地 mock 测试覆盖：契约请求、缺证据降级、5xx、超时、调用方中止。
+- 上游响应带 `usage` 时自动随 `run_complete` 回传（Hub 记用量、缺成本时按模型目录补算），字段兼容 `input_tokens` / `output_tokens` / `cached_tokens` / `cost` 及 Hub 命名；
+- 联调自检：`cd aeos-execution-agent && npm run reasoning:check`（`--dry-run` / `--case` / `--json`），见 `docs/reasoning-acceptance-cases.md`；
+- 本地 mock 测试覆盖：契约请求、缺证据降级、5xx、超时、调用方中止、usage 透传。
 
 真实链路已在网关验证：
 
@@ -227,7 +229,7 @@ export function createReasoningAdapter(config) {
 
 | 增强 | 改哪里 | 效果 |
 |---|---|---|
-| 上报 Token/成本 | `agent-core.js` 的 `sendComplete(result)` 增加 `usage` 参数，`run_complete` 带上 `usage` | 用量台账出现推理调用成本 |
+| 上报 Token/成本 | 推荐：在推理响应里返回 `usage` 对象（`model` / `input_tokens` / `output_tokens` / `cached_tokens` / `cost`，`cost` 可省）；适配器已自动透传到 `run_complete.usage` | 用量台账出现推理调用成本，Hub 缺成本时按模型目录补算 |
 | 上报执行步骤 | 在 adapter 里按 `docs/execution-step-events.md` 发 `run_event` | Hub 时间线看到模型调用/工具调用 |
 | 自定义错误码 | 扩展 `agent-core.js` 的失败映射 | Hub 显示更精确的失败原因 |
 
@@ -238,10 +240,11 @@ export function createReasoningAdapter(config) {
 ### 联调步骤
 
 1. 中台把真实推理接口配置到执行面 Agent；
-2. 启动后，Hub 执行面显示 `reason_control_platform` 在线；
-3. 在 Hub 执行面问一句分析类问题，例如"分析订单交付风险"；
-4. Hub 意图解析为 reasoning，派单给中台；
-5. 返回结果出现在 Hub 会话中。
+2. Hub 侧跑 `cd aeos-execution-agent && npm run reasoning:check`，逐条核对契约与验收标准（`--json` 便于回传失败项）；
+3. 启动后，Hub 执行面显示 `reason_control_platform` 在线；
+4. 在 Hub 执行面问一句分析类问题，例如"分析订单交付风险"；
+5. Hub 意图解析为 reasoning，派单给中台；
+6. 返回结果出现在 Hub 会话中。
 
 ### 验收标准
 
@@ -283,7 +286,9 @@ export function createReasoningAdapter(config) {
 
 ## 十、配套文档
 
+- 对接待办一页版：`docs/control-platform-open-items.md`
+- 联调自检与验收集：`docs/reasoning-acceptance-cases.md`
 - 推理任务书（15 项明细）：`docs/control-platform-reasoning-task.md`
 - 执行面通信协议：`docs/execution-plane-agent-contract.md`
 - 执行步骤上报（可选）：`docs/execution-step-events.md`
-- 参考实现：`aeos-execution-agent/src/adapters/reasoning-adapter.js`（当前为占位）
+- 参考实现：`aeos-execution-agent/src/adapters/reasoning-adapter.js`（已支持真实 HTTP 契约与 usage 透传）
