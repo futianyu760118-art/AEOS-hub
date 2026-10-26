@@ -1,5 +1,7 @@
 # 中台执行面推理智能体接入任务书
 
+> 存档：2026-10-16 发出的任务书。2026-10-26 中台已回复 15 项契约，最新契约与 Hub 实现见 `docs/control-platform-reasoning-integration.md`。
+
 致：公司中控平台（目标系统）团队
 自：AEOS Hub 管理面
 

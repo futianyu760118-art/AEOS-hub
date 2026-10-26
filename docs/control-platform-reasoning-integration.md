@@ -1,294 +1,206 @@
 # 中台推理能力接入说明（reason_control_platform）
 
-> 日期：2026-10-23  
-> 发送对象：公司中控平台执行面智能体 / 推理服务开发同学  
-> Hub 侧状态：能力声明、派单、结果校验、用量台账、执行步骤均已就绪；推理适配器已按期望契约实现  
-> 当前状态：**未配置真实推理 URL 时仍返回“未接通”；等待中台提供接口契约并填入 `TARGET_REASONING_*`**
+> 日期：2026-10-26（中台回复版）
+> 发送对象：公司中控平台执行面智能体 / 推理服务开发同学
+> Hub 侧状态：**契约已对齐，适配器已按中台回复实现并通过单测**；等待中台发放推理专用 `app_key/app_secret`、放行 18085 端口
+> 中台回复原文：`AEOS-Hub-推理能力接入回复-对外版-20261026.md`
 
 ---
 
-## 当前进展（2026-10-26 更新）
+## 一、结论
 
-Hub 侧已完成：
-
-- `reasoning-adapter.js` 支持按期望契约 POST 真实推理接口；
-- 支持 `TARGET_REASONING_URL` / `TARGET_REASONING_TOKEN` / `TARGET_REASONING_AGENT_ID`；
-- 支持 `TARGET_REASONING_MODEL`（默认 `deepseek-flash`）、`TARGET_REASONING_EFFORT`（默认 `high`）、`TARGET_REASONING_TIMEOUT_MS`（默认 `180000`）；
-- 支持 `AbortSignal`：Hub 召回/超时会中止上游请求；
-- 校验 `evidence_refs` / `data_as_of`：缺失时降为 `data_confidence: low` 并返回 `validation_warnings`；
-- 5xx / 401 分别映射为 `UPSTREAM_UNAVAILABLE` / `UPSTREAM_AUTH_FAILED`；
-- 上游响应带 `usage` 时自动随 `run_complete` 回传（Hub 记用量、缺成本时按模型目录补算），字段兼容 `input_tokens` / `output_tokens` / `cached_tokens` / `cost` 及 Hub 命名；
-- 联调自检：`cd aeos-execution-agent && npm run reasoning:check`（`--dry-run` / `--case` / `--json`），见 `docs/reasoning-acceptance-cases.md`；
-- 本地 mock 测试覆盖：契约请求、缺证据降级、5xx、超时、调用方中止、usage 透传。
-
-真实链路已在网关验证：
-
-- 查询能力：借调单 `borrow-ede5ab15...` 状态 `completed`；
-- 推理能力（未配置 URL）：借调单 `borrow-e72eee0e...` 状态 `completed`，返回“未接通”且 `data_confidence: low`，未伪造结论。
-
-**中台仍需提供：** 第四节 15 项接口契约；填入 `TARGET_REASONING_*` 后即可联调真实推理。
+1. 中台提供 3 个只读端点：`analyze` / `cancel` / `task`，HMAC-SHA256 鉴权，信封响应 `{code,message,data}`。
+2. **接入方式：改造 Hub 自己的 `reasoning-adapter.js`，不部署中台 Sidecar。**
+   - 现有 `gateway-control-platform` 单网关已同时承载查询与推理，减少一个进程与一套身份；
+   - 中台 Sidecar 的 `HEALTH_CHECK_PORT=8790` 与 Hub UI 端口冲突。
+3. 按中台回复第 3 节完成 4 处改造：HMAC 三头、`task_id=runId`、信封解包、召回同时调用 cancel。
+4. 额外处理：空结论、`usage` 透传、`llm.called` 元信息、404/409/490/429 错误映射。
+5. 未配置 URL 时仍返回“未接通”占位，不伪造结论。
 
 ---
 
-## 一、一句话结论
+## 二、接口契约（中台回复版）
 
-Hub 已经准备好接推理能力，适配器也已按期望契约实现；缺的是中台提供真实推理接口地址、鉴权、请求/返回结构和错误码，并填入 `TARGET_REASONING_*`。
+### 2.1 地址
 
-在**未配置 `TARGET_REASONING_URL`** 时，Hub 发起“分析”类问题链路会走通，但返回的是：
-
-```
-推理能力尚未接通中台大模型（占位实现）
-data_confidence: low
-```
-
-这不是真实分析结论。
-
----
-
-## 二、先分清两条链路
-
-| | **推理能力（本文档）** | **中台智能助手（另一条）** |
-|---|---|---|
-| 谁发起 | Hub 派单给中台执行面 Agent | 中台自己的用户在中台界面聊天 |
-| 路径 | Hub → WS dispatch → 中台执行面 Agent → 中台大模型 | 中台前端 → 中台后端 assistant → 大模型直连 |
-| 能力名 | `reason_control_platform` | 无（用 `assistant-events` 留痕） |
-| 返回什么 | 结构化结论 + evidence_refs | 会话/工具调用摘要 |
-| Hub 能否看到 | 能，作为任务结果 | 只能看到中台主动上报的摘要 |
-
-**中台智能助手已经有大模型，但它不会自动变成执行面的推理能力。** 需要在执行面 Agent 的推理适配器里调用它，或者调用中台自己的推理服务。
-
-**本次统一口径：推理能力使用 DeepSeek V4.1-Flash，不使用 V4-Pro。**
-
-| 项目 | 约定 |
+| 环境 | URL |
 |---|---|
-| 模型 ID（推荐） | `deepseek-flash` |
-| 旧模型名 | `deepseek-v4-flash`（仍可用，Hub 也能计价） |
-| 价格（高峰） | 输入 ¥2/百万、缓存命中 ¥0.04/百万、输出 ¥8/百万 |
-| 空闲时段 | 高峰价的一半 |
-| 上下文 | 1,048,576 tokens |
-| 思考强度 | `reasoning_effort` 可用 `low/high/max`，默认 `high` |
+| 生产（main 主机，端口 18085） | `http://150.158.13.110:18085/api/v1/external/reasoning/analyze` |
+| UAT / 联调（dev compose，端口 8000） | `http://<UAT主机>:8000/api/v1/external/reasoning/analyze`（**地址待中台确认**） |
+| 取消 | `POST {BASE}/api/v1/external/reasoning/tasks/{task_id}/cancel` |
+| 状态 | `GET {BASE}/api/v1/external/reasoning/tasks/{task_id}` |
+| OpenAPI | `GET {BASE}/api/v1/external/openapi.json` |
 
----
+生产端口 18085 需放行；最终地址以运维/网关配置为准。
 
-## 三、Hub 侧已经准备好的
+### 2.2 鉴权（HMAC-SHA256）
 
-- `reason_control_platform` 能力声明与输入/输出 schema；
-- Hub 派单、召回、超时控制；
-- 结果校验：没有 `evidence_refs` 的结论会被标记 `data_confidence: low` 并附校验说明，不会静默通过；
-- 用量台账：`run_complete.usage` 可记录 Token/成本（可选）；
-- 执行步骤：`run_event` 可记录内部步骤（可选）；
-- 浏览器里能看到任务结果与分析结论。
+```text
+X-App-Key:    <app_key>
+X-Timestamp:  <整数秒级时间戳，与服务端偏差 ≤ 300s>
+X-Signature:  hex(HMAC-SHA256(app_secret, timestamp + app_key + endpoint_code + query_string))
+```
 
----
+- `endpoint_code`：`reasoning.analyze` / `reasoning.cancel` / `reasoning.task`；
+- POST body 不参与签名；`query_string` 为空；`task_id` 是路径参数，不参与签名；
+- 中台**不接受** `Authorization: Bearer`。
 
-## 四、中台需要提供的信息（15 项）
-
-### 接口与身份
-
-| # | 项 | 说明 |
-|---|---|---|
-| 1 | 推理接口地址 | 生产/UAT 各一份完整 URL |
-| 2 | 鉴权方式 | Token / HMAC / OAuth2 / 其他 |
-| 3 | 调用方 Agent ID / 应用 ID | 中台侧身份 |
-
-### 请求与返回
-
-| # | 项 | 说明 |
-|---|---|---|
-| 4 | 请求参数结构 | 字段、类型、必填、长度限制 |
-| 5 | 返回参数结构 | 字段、类型、嵌套、示例 |
-| 6 | 是否支持流式输出 | SSE / 分块 / 一次性返回 |
-| 7 | 会话 ID 与上下文规则 | 是否多轮、保留多久 |
-
-### 运行与治理
-
-| # | 项 | 说明 |
-|---|---|---|
-| 8 | 超时时间 | 请求超时、推理超时 |
-| 9 | 取消接口 | 如何中止进行中的推理 |
-| 10 | 错误码表 | 完整错误码及含义 |
-| 11 | evidence_refs 生成规则 | 结论如何附带可验证证据 |
-| 12 | 可调用的工具白名单 | 只读工具清单 |
-| 13 | 只读保证 | 明确声明不会执行写操作 |
-| 14 | data_as_of / data_confidence 规则 | 数据时间与置信度如何返回 |
-| 15 | 并发与限流 | QPS、并发上限、限流策略 |
-
----
-
-## 五、期望的输入 / 输出契约
-
-### 输入（Hub 派单的 `input`）
+### 2.3 请求
 
 ```json
 {
   "prompt": "分析订单 HJY20260903-261 的交付风险",
   "task_type": "order_delivery_analysis",
   "context": { "businessObjectRef": "business://order/HJY20260903-261" },
-  "constraints": { "read_only": true, "require_evidence": true }
+  "constraints": { "read_only": true, "require_evidence": true },
+  "task_id": "exec-run-<uuid>",
+  "request_id": "req-abc"
 }
 ```
 
-### 输出（`run_complete.result`）
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `prompt` | 是 | ≤2000；空/超长 → HTTP 422 |
+| `task_type` | 是 | `order_delivery_analysis` / `material_kitting_analysis` / `quality_analysis` / `production_analysis` |
+| `context.businessObjectRef` | 是 | `business://<order\|product\|batch>/<键>` |
+| `constraints.read_only` | 否 | 必须为 true（缺省 true） |
+| `constraints.require_evidence` | 否 | 缺省 true：无有效证据的结论被剔除 |
+| `task_id` | 否 | **Hub 传 runId**（`exec-run-<uuid>`，45 字符 ≤64）；同 id 幂等 |
+| `request_id` | 否 | ≤128，响应回显；Hub 有则透传 |
+
+`model` / `reasoning_effort` 不属于契约，由中台服务端配置；Hub 已不再发送。多余字段被忽略。
+
+### 2.4 响应
 
 ```json
 {
-  "summary": "存在缺料导致的延期风险",
-  "conclusions": [
-    {
-      "matter": "关键物料尚未齐套",
-      "evidence_refs": ["control-platform://material-kitting/shortages/HJY20260903-261"],
-      "risk": "预计影响交付 3 天",
-      "recommendation": "建议采购负责人核实到货承诺，需人工确认",
-      "confidence": "high"
-    }
-  ],
-  "data_as_of": "2026-10-19T16:30:00+08:00",
-  "data_confidence": "high"
-}
-```
-
-**硬性要求：**
-
-- 每条结论必须有 `evidence_refs`，不能为空；
-- 金额、承诺、质量、法律类判断必须标注"需人工确认"；
-- 上游不可用 / 数据过期 / 空结果要分别说明，**不得解释为"没有风险"**；
-- 只读，不得执行写操作；
-- 中台模型回答不能直接当作业务事实。
-
----
-
-## 六、中台需要改哪里
-
-### 位置
-
-```
-aeos-execution-agent/src/adapters/reasoning-adapter.js
-```
-
-把现在的占位实现替换成真实调用；`agent-core.js`、WebSocket 协议、Hub 都不需要改（最小路径）。
-
-### 参考实现（Node.js）
-
-```js
-export function createReasoningAdapter(config) {
-  return async function reason(input, ctx) {
-    const controller = new AbortController();
-    const watcher = setInterval(() => {
-      if (ctx.aborted) controller.abort();
-    }, 500);
-
-    try {
-      const response = await fetch(config.url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${config.token}`,
-        },
-        body: JSON.stringify({
-          prompt: input.prompt,
-          task_type: input.task_type,
-          context: input.context ?? {},
-          constraints: input.constraints ?? { read_only: true, require_evidence: true },
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`推理接口返回 ${response.status}: ${detail.slice(0, 200)}`);
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task_id": "exec-run-...",
+    "status": "succeeded",
+    "summary": "存在缺料导致的延期风险",
+    "conclusions": [
+      {
+        "matter": "关键物料尚未齐套",
+        "evidence_refs": ["control-platform://kitting/result/HJY20260903-261:1"],
+        "risk": "预计影响交付3天",
+        "recommendation": "建议采购负责人核实到货承诺，需人工确认",
+        "confidence": "high"
       }
-
-      const data = await response.json();
-      return {
-        summary: data.summary ?? '',
-        conclusions: (data.conclusions ?? []).map((item) => ({
-          matter: item.matter ?? '',
-          evidence_refs: item.evidence_refs ?? [],
-          risk: item.risk ?? '',
-          recommendation: item.recommendation ?? '',
-          confidence: item.confidence ?? 'low',
-        })),
-        data_as_of: data.data_as_of ?? new Date().toISOString(),
-        data_confidence: data.data_confidence ?? 'low',
-      };
-    } finally {
-      clearInterval(watcher);
-    }
-  };
+    ],
+    "dropped_conclusions": 0,
+    "evidence_refs": ["control-platform://order/HJY20260903-261/line/1"],
+    "data_as_of": "2026-10-26T14:30:00+08:00",
+    "data_confidence": "high",
+    "stale": false,
+    "warnings": [],
+    "llm": { "called": true, "provider": "openai", "model": "deepseek-flash", "latency_ms": 4200 },
+    "usage": { "modelId": "deepseek-flash", "tokensIn": 1234, "cachedTokens": 0, "tokensOut": 456 },
+    "duration_ms": 5300,
+    "idempotent_replay": false,
+    "request_id": "req-abc"
+  }
 }
 ```
 
-要点：
+- `code=0` 时 `data` 即 `run_complete.result`；
+- `conclusions` 可能为空（全部被证据校验剔除），看 `dropped_conclusions` 与 `warnings`，**不得解释为“无风险”**；
+- `data_as_of` 为 ISO 8601，带 `+08:00`；≤6h high、≤24h medium、>24h low + `STALE_DATA`。
 
-- 第二个参数是 `ctx`，用 `ctx.aborted` 判断是否被 Hub 召回；
-- 上游请求要传 `AbortController`，保证召回能真正中止；
-- 出错直接抛异常，Hub 会回 `run_failed`；
-- 不要伪造没有证据的结论。
+### 2.5 错误码
 
-### 可选增强
+| 层 | 返回 | 含义 | Hub 映射 |
+|---|---|---|---|
+| HTTP | 401 | 缺认证头 | `UPSTREAM_AUTH_FAILED` |
+| HTTP | 403 | 签名错 / 未授权 endpoint / IP | `FORBIDDEN` |
+| HTTP | 422 | 参数校验失败 | `INVALID_ARGUMENT` |
+| HTTP | 429 | 频率或并发超限（带 `Retry-After`） | `RATE_LIMITED` |
+| 信封 | 400 | `INVALID_REQUEST` | `INVALID_ARGUMENT` |
+| 信封 | 404 | `EMPTY_RESULT` / `NOT_FOUND`（不代表无风险） | `NOT_FOUND` |
+| 信封 | 409 | `TASK_IN_PROGRESS` | `TASK_IN_PROGRESS` |
+| 信封 | 490 | `TASK_CANCELLED` | `TASK_CANCELLED` |
+| 信封 | 503 | 大模型未配置 / 调用失败 | `UPSTREAM_UNAVAILABLE` |
+| 信封 | 504 | 服务端推理超时（170s） | `UPSTREAM_TIMEOUT` |
+| 信封 | 500 | 服务端内部错误 | `INTERNAL_ERROR` |
 
-| 增强 | 改哪里 | 效果 |
-|---|---|---|
-| 上报 Token/成本 | 推荐：在推理响应里返回 `usage` 对象（`model` / `input_tokens` / `output_tokens` / `cached_tokens` / `cost`，`cost` 可省）；适配器已自动透传到 `run_complete.usage` | 用量台账出现推理调用成本，Hub 缺成本时按模型目录补算 |
-| 上报执行步骤 | 在 adapter 里按 `docs/execution-step-events.md` 发 `run_event` | Hub 时间线看到模型调用/工具调用 |
-| 自定义错误码 | 扩展 `agent-core.js` 的失败映射 | Hub 显示更精确的失败原因 |
+注意：`400/404/409/490/503/504/500` 是 **HTTP 200 + 信封 code**。
 
----
+### 2.6 取消
 
-## 七、验证与验收
-
-### 联调步骤
-
-1. 中台把真实推理接口配置到执行面 Agent；
-2. Hub 侧跑 `cd aeos-execution-agent && npm run reasoning:check`，逐条核对契约与验收标准（`--json` 便于回传失败项）；
-3. 启动后，Hub 执行面显示 `reason_control_platform` 在线；
-4. 在 Hub 执行面问一句分析类问题，例如"分析订单交付风险"；
-5. Hub 意图解析为 reasoning，派单给中台；
-6. 返回结果出现在 Hub 会话中。
-
-### 验收标准
-
-1. 结果包含 `conclusions` 和 `evidence_refs`，`data_confidence` 不是 low；
-2. 无 `evidence_refs` 的结论被 Hub 标记低置信度；
-3. Hub 召回时，中台上游推理请求被真正中止；
-4. 超时、失败、上游不可用分别返回明确错误；
-5. 中台日志能证明**实际调用了中台大模型/推理智能体**，而不是直查 REST 后伪装；
-6. （可选）用量台账出现推理 Token/成本；
-7. （可选）执行步骤时间线出现模型调用过程。
+- Hub 召回或超时时：先 Abort 本地请求，**同时** `POST /tasks/{task_id}/cancel`（HMAC，`reasoning.cancel`）；
+- cancel 是尽力而为，失败不覆盖主流程；
+- 只 Abort 本地请求不会终止中台服务端任务。
 
 ---
 
-## 八、工作量与分工
+## 三、Hub 侧实现（已完成）
 
-| 工作 | 负责方 | 预计 |
-|---|---|---|
-| 提供 15 项接口契约 | 中台 | 0.5 天 |
-| 替换 reasoning-adapter 占位实现 | 中台 | 0.5–1 天 |
-| 只读/证据/超时/召回校验 | 中台 | 0.5 天 |
-| 联调与验收 | 中台 + Hub | 0.5 天 |
-| Hub 侧改动 | Hub | 最小路径无需改动 |
-| 合计 | | **1–2 天 + 半天联调** |
+`aeos-execution-agent/src/adapters/reasoning-adapter.js`：
 
----
-
-## 九、常见问题
-
-| 问题 | 回答 |
+| 改造 | 实现 |
 |---|---|
-| 能直接复用中台智能助手吗？ | 可以，但要在**执行面推理适配器**里调用它；Hub 不会直接调中台内部 assistant 接口 |
-| 中台大模型用 V4-Flash，Hub 能计价吗？ | 能。模型 ID 用 `deepseek-flash`；旧名 `deepseek-v4-flash` 也已加入价目，两者都能记成本 |
-| 不上报 usage 行不行？ | 行，推理能力仍可用，但用量台账不会记录这次推理的费用 |
-| 不上报 run_event 行不行？ | 行，Hub 仍能看到任务结果，只是看不到内部步骤 |
-| 现在能先联调吗？ | 可以先用模拟器验证链路；真实推理要等中台适配器接入 |
-| 返回格式不对会怎样？ | Hub 不会丢弃结果，但会标记 `data_confidence: low` 并附校验说明 |
+| HMAC 三头 | 有 `app_key/app_secret` 时自动签名；无则回退 Bearer（仅兼容非中台上游） |
+| `task_id` | 取 `ctx.runId`；`request_id` 有则透传 |
+| 信封解包 | `code=0` 取 `data`；非 0 按错误码表抛错；兼容裸结果 |
+| 取消 | `ctx.signal` 中止或超时时调用 cancel 端点，独立 5s 超时 |
+| 空结论 | 返回空 `conclusions`、`data_confidence: low`，附“不代表无风险”校验说明，不抛错 |
+| usage | 从 `data.usage` 提取并随 `run_complete` 回传，Hub 缺成本时按目录补算 |
+| 元信息 | 通过 `ctx.onUpstreamMeta` 暴露 `llm.called` / `duration_ms` / `idempotent_replay` / `stale` |
+| 模型 | 请求不再携带 `model` / `reasoning_effort`，由中台服务端配置 |
+
+配置项：
+
+```dotenv
+TARGET_REASONING_URL=<中台 analyze 地址>
+TARGET_REASONING_APP_KEY=<中台发放>
+TARGET_REASONING_APP_SECRET=<中台发放>
+TARGET_REASONING_TIMEOUT_MS=180000
+```
+
+`TARGET_REASONING_TOKEN` 仅保留给非中台上游；`TARGET_REASONING_MODEL/EFFORT` 保留兼容但不再发送。
 
 ---
 
-## 十、配套文档
+## 四、验收标准
+
+| # | 标准 | 验证方式 | Hub 侧状态 |
+|---|---|---|---|
+| 1 | 结果含 `conclusions` / `evidence_refs` / `data_as_of`，`data_confidence` 非 low | `npm run reasoning:check` | 已实现 |
+| 2 | 无 `evidence_refs` 的结论被标记低置信度 | 单测 + 自检 | 已实现 |
+| 3 | Hub 召回时中台任务被真正中止 | 单测（cancel 请求）+ 中台审计 `cancelled` | 已实现 |
+| 4 | 超时/失败/上游不可用分别返回明确错误 | 单测（403/429/信封 404/409/490/503/504） | 已实现 |
+| 5 | 中台日志能证明实际调用大模型 | 自检检查 `llm.called=true` + 审计 `llm_called=1` | 已实现 |
+| 6 | 用量台账出现 Token/成本 | 自检展示 usage；Hub 台账记 `reported` | 已实现 |
+| 7 | 执行步骤时间线出现模型调用过程 | 中台 Sidecar 场景；Hub 直连模式暂为部分 | 部分 |
+
+---
+
+## 五、联调步骤
+
+1. 中台创建推理专用 API Key（勾选 3 个 endpoint），安全渠道交付 `app_key/app_secret`；
+2. 中台配置真实大模型（`REASONING_MODEL=deepseek-flash`）并放行 18085；
+3. Hub 侧写入 `TARGET_REASONING_*`，重启网关（守护任务自动拉起）；
+4. `cd aeos-execution-agent && npm run reasoning:check`，按项核对，失败项用 `--json` 回传；
+5. 登录 Hub → 执行面问分析类问题 → 确认页面出现结论与 evidence_refs；
+6. 双方核对：`task_id` 等于 Hub `runId`、`llm.called=true`、召回时中台审计为 `cancelled`。
+
+---
+
+## 六、待确认
+
+1. UAT 最终地址与端口；
+2. 生产 18085 放行时间；
+3. `app_key/app_secret` 交付方式与生效时间；
+4. 是否需要 Hub 按次指定 `model/reasoning_effort`（当前接受服务端配置）。
+
+---
+
+## 七、配套文档
 
 - 对接待办一页版：`docs/control-platform-open-items.md`
+- 对中台确认稿：`docs/control-platform-reasoning-reply-confirmation.md`
 - 联调自检与验收集：`docs/reasoning-acceptance-cases.md`
-- 推理任务书（15 项明细）：`docs/control-platform-reasoning-task.md`
 - 执行面通信协议：`docs/execution-plane-agent-contract.md`
 - 执行步骤上报（可选）：`docs/execution-step-events.md`
-- 参考实现：`aeos-execution-agent/src/adapters/reasoning-adapter.js`（已支持真实 HTTP 契约与 usage 透传）
+- 适配器实现：`aeos-execution-agent/src/adapters/reasoning-adapter.js`
