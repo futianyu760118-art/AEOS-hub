@@ -183,6 +183,8 @@ TARGET_REASONING_TIMEOUT_MS=180000
 - `llm.called=true`，模型 `deepseek-flash`，`usage` 正常返回（如订单用例 in=5540 / cached=384 / out=3495）；
 - 不存在订单返回信封 `404`，明确“不代表无风险”；
 - **页面端到端（13:28）**：Hub 执行面提问 → 路由 `gateway-control-platform` → 中台 UAT；run `exec-run-f05288cc-…`，6 条结论、`data_confidence=high`、25.2s；用量台账 `reported`，`deepseek-flash` in=5533 / cached=384 / out=4445，Hub 补算成本 ¥0.0229；
+- **最高风险编排（13:41）**：查询 run 0.28s → 推理 run 21.6s，同网关先查后推，6 条结论、high，成本 ¥0.0198；
+- **借调闭环（13:44）**：`borrow-8f21bcff-…` 由 `aeos-hub` 发起 → `control-platform`，29.3s 完成，6 条结论、high；用量台账带 `consumerSystemId=aeos-hub` + `borrowOrderId`，成本 ¥0.0254；evidence 的 created/dispatched/completed 均带 runId；
 - **观察**：质量用例中，中台证据集未包含检验记录/不良率等质量数据，模型明确说明证据不足而非编造；建议中台补该订单的质量证据覆盖。
 
 ---
