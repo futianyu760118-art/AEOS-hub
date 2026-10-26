@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "revision": 1,
+  "updatedAt": "2026-10-26T06:10:00.000Z",
+  "fallback": "first-online",
+  "rules": [
+    {
+      "systemId": "control-platform",
+      "capability": "*",
+      "agents": ["gateway-control-platform"]
+    },
+    {
+      "systemId": "hengjian-plm",
+      "capability": "*",
+      "agents": ["runtime-execution-query"]
+    }
+  ]
+}

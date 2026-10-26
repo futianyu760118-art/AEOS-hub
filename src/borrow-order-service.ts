@@ -10,6 +10,7 @@ import {
 } from './execution-plane.ts';
 import { isBorrowCapabilityAllowed } from './borrow-policy.ts';
 import { buildUnifiedCapabilityCatalog, type UnifiedCapability } from './capability-catalog.ts';
+import { findRoutingRule, loadExecutionRoutingPolicy } from './execution-routing-policy.ts';
 import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 import { listSystems } from './system-registry.ts';
 import {
@@ -324,7 +325,17 @@ export class BorrowOrderService {
         : '没有其他系统的在线只读提供方', { reason: onlySameSystem ? 'only_same_system' : 'no_online_read_only_provider' });
     }
 
+    // 选路策略优先于健康度：规则内 Agent 按声明顺序排前，其余再按空闲/最近心跳排序。
+    const routingPolicy = loadExecutionRoutingPolicy();
+    const policyRank = (entry: UnifiedCapability): number => {
+      const rule = findRoutingRule(routingPolicy, entry.providerSystemId, capability);
+      if (!rule) return Number.MAX_SAFE_INTEGER;
+      const index = rule.agents.indexOf(entry.providerAgentId);
+      return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+    };
     const chosen = eligible.slice().sort((left, right) => {
+      const rankDiff = policyRank(left) - policyRank(right);
+      if (rankDiff !== 0) return rankDiff;
       const leftAgent = agentById.get(left.providerAgentId);
       const rightAgent = agentById.get(right.providerAgentId);
       if (!leftAgent || !rightAgent) return left.providerAgentId.localeCompare(right.providerAgentId);

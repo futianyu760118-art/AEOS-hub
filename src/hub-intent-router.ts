@@ -1,6 +1,7 @@
 // Hub 中枢对话的通用意图识别：业务域 + 动作 + 可用 Agent。
 // 只做识别与路由建议，不虚构未接入的 Agent；最高风险订单仍走已有编排。
 import type { ExecutionAgentRecord } from './execution-plane.ts';
+import { orderAgentsByPolicy, type ExecutionRoutingPolicy } from './execution-routing-policy.ts';
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -132,14 +133,16 @@ export function recognizeHubIntent(text: string): HubIntent {
   };
 }
 
-export function selectAgentForIntent(intent: HubIntent, agents: ExecutionAgentRecord[]): HubAgentSelection | null {
+export function selectAgentForIntent(intent: HubIntent, agents: ExecutionAgentRecord[], policy?: ExecutionRoutingPolicy): HubAgentSelection | null {
   if (intent.action === 'chat') return null;
   const needsReasoning = intent.action === 'highest-risk' || intent.action === 'reasoning';
   const capability = intent.domain === 'plm'
     ? (needsReasoning ? 'reason_plm' : 'query_plm')
     : (needsReasoning ? 'reason_control_platform' : 'query_control_platform');
   const systemId = intent.domain === 'plm' ? 'hengjian-plm' : 'control-platform';
-  const agent = agents.find((candidate) => candidate.connectionStatus === 'online'
+  // 先按 routing policy 排序（规则内 Agent 优先），再套用在线/注销/能力过滤。
+  const ordered = orderAgentsByPolicy(agents, { systemId, capability, policy });
+  const agent = ordered.find((candidate) => candidate.connectionStatus === 'online'
     && !candidate.deregisteredAt
     && !candidate.simulated
     && (candidate.systemId === systemId || candidate.sourceSystem === systemId)

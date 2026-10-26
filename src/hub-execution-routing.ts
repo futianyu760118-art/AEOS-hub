@@ -1,13 +1,19 @@
 // Hub 中枢对话 → 执行面 Agent 的窄路由规则与结果格式化。
 import type { ExecutionAgentRecord } from './execution-plane.ts';
 import type { HighestRiskOrderResult } from './execution-orchestrator.ts';
+import { orderAgentsByPolicy, type ExecutionRoutingPolicy } from './execution-routing-policy.ts';
 
 export function isHighestRiskOrderQuestion(text: string): boolean {
   return /(风险最高|最高风险|风险最高的订单|今日.*风险|当前.*风险最高)/i.test(String(text || ''));
 }
 
-export function selectHubReasoningAgent(agents: ExecutionAgentRecord[]): ExecutionAgentRecord | null {
-  return agents.find((agent) => agent.connectionStatus === 'online'
+export function selectHubReasoningAgent(agents: ExecutionAgentRecord[], policy?: ExecutionRoutingPolicy): ExecutionAgentRecord | null {
+  const ordered = orderAgentsByPolicy(agents, {
+    systemId: 'control-platform',
+    capability: 'reason_control_platform',
+    policy,
+  });
+  return ordered.find((agent) => agent.connectionStatus === 'online'
     && !agent.deregisteredAt
     && !agent.simulated
     && (agent.systemId === 'control-platform' || agent.sourceSystem === 'control-platform')

@@ -8,6 +8,7 @@ import {
   selectAgentForIntent,
 } from '../src/hub-intent-router.ts';
 import type { ExecutionAgentRecord } from '../src/execution-plane.ts';
+import type { ExecutionRoutingPolicy } from '../src/execution-routing-policy.ts';
 
 const NOW = '2026-10-20T08:00:00.000Z';
 
@@ -54,6 +55,23 @@ test('按意图选择在线 Agent；缺失时返回 null', () => {
   assert.equal(selectAgentForIntent(reasoningIntent, [QUERY, REASON, PLM])?.agentId, 'r');
   assert.equal(selectAgentForIntent(recognizeHubIntent('PLM 研发项目进展'), [QUERY, REASON, PLM])?.agentId, 'p');
   assert.equal(selectAgentForIntent(reasoningIntent, [agent({ ...QUERY, connectionStatus: 'offline' })]), null);
+});
+
+test('路由策略优先选择规则内 Agent', () => {
+  const backup = agent({
+    agentId: 'r2',
+    name: '备用推理智能体',
+    capabilities: [{ name: 'reason_control_platform', description: '', constraints: { readOnly: true } }],
+  });
+  const policy: ExecutionRoutingPolicy = {
+    version: 1,
+    revision: 1,
+    updatedAt: '2026-10-26T06:10:00.000Z',
+    fallback: 'first-online',
+    rules: [{ systemId: 'control-platform', capability: 'reason_control_platform', agents: ['r2'] }],
+  };
+  const intent = recognizeHubIntent('分析订单交期风险');
+  assert.equal(selectAgentForIntent(intent, [REASON, backup], policy)?.agentId, 'r2');
 });
 
 test('识别问题中是否已带业务标识', () => {
