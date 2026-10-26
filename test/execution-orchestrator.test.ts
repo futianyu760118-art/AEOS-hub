@@ -31,19 +31,30 @@ const REASON_AGENT = agent({
   name: '推理智能体',
   capabilities: [{ name: 'reason_control_platform', description: '', constraints: { readOnly: true } }],
 });
+const GATEWAY_AGENT = agent({
+  agentId: 'gateway-agent',
+  name: '统一网关',
+  capabilities: [
+    { name: 'query_control_platform', description: '', inputSchema: { type: 'object', properties: { path: { type: 'string', enum: ['/external/orders/list', '/external/material-kitting/results'] } } } },
+    { name: 'reason_control_platform', description: '', constraints: { readOnly: true } },
+  ],
+});
 
-function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; emptyOrders?: boolean } = {}) {
+function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean } = {}) {
   const runs = new Map<string, ExecutionRunRecord>();
   let sequence = 0;
   const audits: EvidenceInput[] = [];
+  const agents = options.singleGateway
+    ? [GATEWAY_AGENT]
+    : options.noQueryAgent ? [REASON_AGENT] : [QUERY_AGENT, REASON_AGENT];
   const plane = {
-    list: () => ({ agents: options.noQueryAgent ? [REASON_AGENT] : [QUERY_AGENT, REASON_AGENT], runs: [] }),
+    list: () => ({ agents, runs: [] }),
     dispatch: (agentId: string, capability: string, input: unknown) => {
       const runId = `run-${++sequence}`;
       const run: ExecutionRunRecord = { runId, agentId, capability, input, state: 'dispatched', startedAt: NOW, endedAt: null };
       runs.set(runId, run);
       setTimeout(() => {
-        if (agentId === 'query-agent') {
+        if (capability.startsWith('query')) {
           if (options.failQuery) {
             run.state = 'failed';
             run.error = { code: 'UPSTREAM_UNAVAILABLE', message: '查询不可达' };
@@ -101,6 +112,14 @@ test('最高风险订单编排：查询后自动带 businessObjectRef 调推理'
   assert.deepEqual(result.result, { summary: '推理完成', conclusions: [] });
   assert.equal(audits.length, 1);
   assert.equal((audits[0]?.payload as Record<string, unknown>).orderNo, 'HJ-RED-BIG');
+});
+
+test('统一网关：同一 Agent 兼查询与推理时允许编排', async () => {
+  const { orchestrator } = planeFixture({ singleGateway: true });
+  const result = await orchestrator.highestRiskOrder({ reasoningAgentId: 'gateway-agent', text: '分析今天风险最高的订单' });
+  assert.equal(result.queryRunId, 'run-1');
+  assert.equal(result.reasoningRunId, 'run-2');
+  assert.equal(result.order.orderNo, 'HJ-RED-BIG');
 });
 
 test('查询失败时不派推理', async () => {

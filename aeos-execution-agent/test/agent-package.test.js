@@ -133,6 +133,9 @@ test('中台网关注册查询与推理两条能力', () => {
   const names = capabilityDefinitions().map((capability) => capability.name);
   assert.ok(names.includes('query_control_platform'));
   assert.ok(names.includes('reason_control_platform'));
+  const reason = capabilityDefinitions().find((capability) => capability.name === 'reason_control_platform');
+  assert.deepEqual(reason.inputSchema.required, ['prompt', 'task_type', 'context']);
+  assert.deepEqual(reason.inputSchema.properties.context.required, ['businessObjectRef']);
 });
 
 test('中台查询适配器拒绝白名单外 path 与缺 path', async () => {

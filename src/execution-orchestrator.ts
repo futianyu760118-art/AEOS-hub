@@ -202,12 +202,12 @@ export class ExecutionOrchestrator {
     if (!reasonCapability) throw new ExecutionOrchestrationError('CAPABILITY_UNSUPPORTED', '推理智能体未声明推理能力', { status: 409 });
 
     const reasonerSystem = reasoner.systemId ?? reasoner.sourceSystem;
-    const queryer = agents.find((agent) => agent.agentId !== reasoner.agentId
-      && agent.connectionStatus === 'online'
-      && !agent.deregisteredAt
-      && !agent.simulated
-      && (agent.systemId ?? agent.sourceSystem) === reasonerSystem
-      && capabilityName(agent, 'query'));
+    const sameSystem = (agent: ExecutionAgentRecord) => (agent.systemId ?? agent.sourceSystem) === reasonerSystem;
+    const available = (agent: ExecutionAgentRecord) => agent.connectionStatus === 'online' && !agent.deregisteredAt && !agent.simulated;
+    const canQuery = (agent: ExecutionAgentRecord) => available(agent) && sameSystem(agent) && Boolean(capabilityName(agent, 'query'));
+    // 优先用独立的查询智能体；统一网关模式下同一个 Agent 同时声明查询与推理，允许复用自身。
+    const queryer = agents.find((agent) => agent.agentId !== reasoner.agentId && canQuery(agent))
+      ?? (canQuery(reasoner) ? reasoner : undefined);
     if (!queryer) {
       throw new ExecutionOrchestrationError('QUERY_AGENT_UNAVAILABLE', '同系统内没有可用的查询智能体', { status: 409 });
     }

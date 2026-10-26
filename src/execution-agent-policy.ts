@@ -26,11 +26,7 @@ export const DEFAULT_EXECUTION_AGENT_ALLOWLIST: ExecutionAgentAllowlist = {
   revision: 1,
   updatedAt: '2026-10-23T00:00:00.000Z',
   allowlist: {
-    'control-platform': [
-      'runtime-control-platform-query',
-      'runtime-control-platform-reasoning',
-      'gateway-control-platform',
-    ],
+    'control-platform': ['gateway-control-platform'],
     'hengjian-plm': ['runtime-execution-query'],
   },
 };

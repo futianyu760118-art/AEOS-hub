@@ -11,9 +11,9 @@ import {
   loadExecutionAgentAllowlist,
 } from '../src/execution-agent-policy.ts';
 
-test('默认允许查询/推理/中台网关/PLM 执行面 Agent', () => {
-  assert.equal(isExecutionAgentAllowed('control-platform', 'runtime-control-platform-query'), true);
-  assert.equal(isExecutionAgentAllowed('control-platform', 'runtime-control-platform-reasoning'), true);
+test('默认只允许统一网关与 PLM 执行面 Agent', () => {
+  assert.equal(isExecutionAgentAllowed('control-platform', 'runtime-control-platform-query'), false);
+  assert.equal(isExecutionAgentAllowed('control-platform', 'runtime-control-platform-reasoning'), false);
   assert.equal(isExecutionAgentAllowed('control-platform', 'gateway-control-platform'), true);
   assert.equal(isExecutionAgentAllowed('hengjian-plm', 'runtime-execution-query'), true);
 });

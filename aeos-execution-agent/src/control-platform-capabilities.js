@@ -40,8 +40,15 @@ export function registerControlPlatformCapabilities(config) {
       properties: {
         prompt: { type: 'string', maxLength: 2000 },
         task_type: { type: 'string' },
+        // 中台契约要求必须指定分析对象；声明为必填，Hub 侧在派单前和 UI 侧都会拦截空 context。
+        context: {
+          type: 'object',
+          properties: { businessObjectRef: { type: 'string' } },
+          required: ['businessObjectRef'],
+        },
+        constraints: { type: 'object' },
       },
-      required: ['prompt', 'task_type'],
+      required: ['prompt', 'task_type', 'context'],
     },
     outputSchema: {
       type: 'object',
@@ -56,7 +63,7 @@ export function registerControlPlatformCapabilities(config) {
         },
       },
     },
-    constraints: { readOnly: true, requireEvidence: true },
+    constraints: { readOnly: true, requireEvidence: true, requireBusinessObjectRef: true },
     handler: createReasoningAdapter({
       url: config.targetReasoningUrl,
       agentId: config.targetReasoningAgentId,
