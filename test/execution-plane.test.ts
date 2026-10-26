@@ -189,6 +189,8 @@ test('派单下发 dispatch 并创建 run', (t) => {
     runId,
     capability: 'query_control_platform',
     input: { path: '/external/material-kitting/shortages', params: { demand_no: 'X' } },
+    traceId: runId,
+    caller: null,
   });
   const run = h.registry.list().runs.find((r) => r.runId === runId);
   assert.equal(run?.state, 'dispatched');
@@ -329,10 +331,14 @@ test('dispatch 可指定 traceId，run 与用量按 traceId 关联', (t) => {
     },
     () => {},
   );
-  const { runId } = registry.dispatch('agent-query-trace', 'query_control_platform', { path: '/external/orders/list', params: {} }, { traceId: 'borrow-trace-1' });
+  const caller = { systemId: 'control-platform', agentId: 'AG-000001', userId: 'u-1', taskId: 'AT-1', traceId: 'trace-1' };
+  const { runId } = registry.dispatch('agent-query-trace', 'query_control_platform', { path: '/external/orders/list', params: {} }, { traceId: 'borrow-trace-1', caller });
   assert.equal(registry.getRun(runId)?.traceId, 'borrow-trace-1');
+  assert.deepEqual(registry.getRun(runId)?.caller, caller);
   registry.onRunComplete('agent-query-trace', { runId, result: { rows: [] }, usage: { modelId: 'deepseek-chat', tokensIn: 1, tokensOut: 1 } });
   assert.equal(usageEvents[0]?.traceId, 'borrow-trace-1');
+  assert.equal(usageEvents[0]?.callerAgentId, 'AG-000001');
+  assert.equal(usageEvents[0]?.callerUserId, 'u-1');
 });
 
 test('注册身份来自认证上下文：规范 systemId 覆盖自报值并进入用量归属', (t) => {

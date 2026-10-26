@@ -42,6 +42,9 @@ export const UsageEventSchema = z.object({
   // 借调归属：systemId/agentId 是执行方；以下三个字段描述请求方（消费方）。
   consumerSystemId: identifierSchema.nullable().default(null),
   consumerAgentId: identifierSchema.nullable().default(null),
+  /** 调用方（SPC 用户/Agent）归属；与 consumer 互补，历史记录为 null。 */
+  callerAgentId: identifierSchema.nullable().default(null),
+  callerUserId: identifierSchema.nullable().default(null),
   borrowOrderId: identifierSchema.nullable().default(null),
   tokensIn: z.number().int().nonnegative(),
   // 输入 Token 中命中缓存的部分（用于按缓存价计费与后续重算）。
@@ -74,6 +77,8 @@ export interface UsageEventAppendInput {
   traceId?: string | null;
   consumerSystemId?: string | null;
   consumerAgentId?: string | null;
+  callerAgentId?: string | null;
+  callerUserId?: string | null;
   borrowOrderId?: string | null;
   tokensIn: number;
   cachedTokens?: number;
@@ -228,6 +233,8 @@ export class UsageLedgerStore {
       traceId: typeof input.traceId === 'string' && input.traceId.trim() ? input.traceId.trim() : null,
       consumerSystemId: typeof input.consumerSystemId === 'string' && input.consumerSystemId.trim() ? input.consumerSystemId.trim() : null,
       consumerAgentId: typeof input.consumerAgentId === 'string' && input.consumerAgentId.trim() ? input.consumerAgentId.trim() : null,
+      callerAgentId: typeof input.callerAgentId === 'string' && input.callerAgentId.trim() ? input.callerAgentId.trim() : null,
+      callerUserId: typeof input.callerUserId === 'string' && input.callerUserId.trim() ? input.callerUserId.trim() : null,
       borrowOrderId: typeof input.borrowOrderId === 'string' && input.borrowOrderId.trim() ? input.borrowOrderId.trim() : null,
       tokensIn: input.tokensIn,
       cachedTokens: input.cachedTokens ?? 0,

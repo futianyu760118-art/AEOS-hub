@@ -12,6 +12,7 @@ function borrow(overrides: Record<string, unknown> = {}): BorrowOrderRecord {
   return {
     orderId: 'borrow-1', tenantId: 'tenant-demo', requestId: 'p4-reason-1', requestHash: 'a'.repeat(64),
     fromSystem: 'aeos-hub', fromAgentId: null, capability: 'reason_control_platform',
+    caller: { systemId: 'aeos-hub', agentId: 'AG-1', userId: 'u-1', taskId: 'AT-1', traceId: 'borrow-1' },
     capabilityVersion: '1.0.0', inputSchemaHash: null, outputSchemaHash: null,
     input: { prompt: '分析订单', task_type: 'order_delivery_analysis', context: { businessObjectRef: 'business://order/O-1' } },
     toSystem: 'control-platform', toAgent: null, providerSystem: 'control-platform',
@@ -26,6 +27,7 @@ function borrow(overrides: Record<string, unknown> = {}): BorrowOrderRecord {
 function run(overrides: Record<string, unknown> = {}): ExecutionRunRecord {
   return {
     runId: 'exec-run-1', traceId: 'borrow-1', agentId: 'gateway-control-platform', capability: 'reason_control_platform',
+    caller: { systemId: 'aeos-hub', agentId: 'AG-1', userId: 'u-1', taskId: 'AT-1', traceId: 'borrow-1' },
     input: {}, state: 'completed', startedAt: '2026-10-26T05:43:56.100Z', endedAt: '2026-10-26T05:44:25.000Z',
     result: {
       summary: '存在风险', data_confidence: 'high',
@@ -39,6 +41,7 @@ function usage(overrides: Record<string, unknown> = {}): UsageEvent {
   return {
     id: 'usage-1', tenantId: 'tenant-demo', agentId: 'gateway-control-platform', systemId: 'control-platform',
     modelId: 'deepseek-flash', runId: 'exec-run-1', traceId: 'borrow-1', consumerSystemId: 'aeos-hub',
+    callerAgentId: 'AG-1', callerUserId: 'u-1',
     borrowOrderId: 'borrow-1', tokensIn: 100, cachedTokens: 10, tokensOut: 50, cost: 0.01,
     metering: 'reported', usageKind: 'model', startedAt: NOW, endedAt: '2026-10-26T05:44:25.000Z',
     ...overrides,
@@ -78,7 +81,11 @@ test('按借调单号构建：borrow + run + usage + evidence + 时间线', () =
   const trace = buildTrace('borrow-1', sources());
   assert.equal(trace.resolvedBy, 'borrow-order');
   assert.equal(trace.borrowOrder?.orderId, 'borrow-1');
+  assert.equal(trace.borrowOrder?.caller?.userId, 'u-1');
   assert.equal(trace.runs.length, 1);
+  assert.equal(trace.runs[0]?.caller?.agentId, 'AG-1');
+  assert.equal(trace.usage[0]?.callerAgentId, 'AG-1');
+  assert.equal(trace.usage[0]?.callerUserId, 'u-1');
   assert.equal(trace.runs[0]?.taskId, 'exec-run-1');
   assert.equal(trace.runs[0]?.conclusions, 1);
   assert.equal(trace.usage.length, 1);

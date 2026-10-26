@@ -1222,6 +1222,7 @@ function renderBorrowDetail() {
       <div><span>借调单</span><strong class="mono">${esc(order.orderId)}</strong></div>
       <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
       <div><span>发起方</span><strong>${esc(order.fromSystem)}${order.fromAgentId ? ` · ${esc(order.fromAgentId)}` : ''}</strong></div>
+      ${order.caller ? `<div><span>调用方</span><strong>${esc([order.caller.userId, order.caller.agentId, order.caller.taskId].filter(Boolean).join(' · ') || order.caller.systemId)}</strong></div>` : ''}
       <div><span>提供方</span><strong>${esc(order.providerSystem || '—')}${order.providerAgentId ? ` · ${esc(order.providerAgentId)}` : ''}</strong></div>
       <div><span>能力</span><strong>${esc(borrowCapabilityLabel(order.capability))}<br/><small class="mono">${esc(order.capability)}</small></strong></div>
       <div><span>能力版本</span><strong class="mono">${esc(order.capabilityVersion || '未指定（按能力名匹配）')}</strong></div>
@@ -7720,7 +7721,7 @@ function renderTrace(trace) {
   const runItems = runs.map((run) => `
     <div class="trace-run">
       <div class="trace-run-head"><strong>${esc(run.capability)}</strong><span class="mono">${esc(run.runId)}</span></div>
-      <div class="trace-run-meta">${esc(run.agentId)} · ${esc(run.state)} · 置信度 ${esc(run.dataConfidence || '—')} · ${run.conclusions} 条结论${run.taskId ? ` · task_id=${esc(run.taskId)}` : ''}</div>
+      <div class="trace-run-meta">${esc(run.agentId)} · ${esc(run.state)} · 置信度 ${esc(run.dataConfidence || '—')} · ${run.conclusions} 条结论${run.taskId ? ` · task_id=${esc(run.taskId)}` : ''}${run.caller ? ` · 发起 ${esc(run.caller.userId || run.caller.agentId || run.caller.systemId)}` : ''}</div>
       ${run.summary ? `<p>${esc(run.summary)}</p>` : ''}
       ${run.error ? `<p class="trace-error">${esc(run.error.code)}: ${esc(run.error.message)}</p>` : ''}
       ${run.evidenceRefs?.length ? `<div class="trace-refs">${run.evidenceRefs.slice(0, 8).map((ref) => `<code>${esc(ref)}</code>`).join('')}</div>` : ''}
@@ -7739,14 +7740,15 @@ function renderTrace(trace) {
       <td class="num">${item.tokensIn} / ${item.tokensOut}</td>
       <td class="num">${item.cost ? `¥${Number(item.cost).toFixed(4)}` : '—'}</td>
       <td>${esc(item.consumerSystemId || '—')}</td>
+      <td>${esc(item.callerUserId || item.callerAgentId || '—')}</td>
     </tr>`).join('');
   const usageSection = `
     <section class="surface">
       <div class="surface-head"><div><h2>用量</h2><p>执行方与请求方归属</p></div></div>
       <div class="trace-scroll trace-usage-scroll">
         <table class="trace-table">
-          <thead><tr><th>时间</th><th>模型/类型</th><th>计量</th><th class="num">Token in / out</th><th class="num">成本</th><th>请求方</th></tr></thead>
-          <tbody>${usageRows || '<tr><td colspan="6">没有用量记录</td></tr>'}</tbody>
+          <thead><tr><th>时间</th><th>模型/类型</th><th>计量</th><th class="num">Token in / out</th><th class="num">成本</th><th>请求方</th><th>调用方</th></tr></thead>
+          <tbody>${usageRows || '<tr><td colspan="7">没有用量记录</td></tr>'}</tbody>
         </table>
       </div>
     </section>`;

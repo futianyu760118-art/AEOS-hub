@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { CallerContextSchema, type CallerContext } from './caller-context.ts';
 import { atomicWrite } from './atomic-file.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,6 +50,8 @@ export const BorrowOrderRecordSchema = z.object({
   requestHash: z.string().regex(/^[a-f0-9]{64}$/, 'requestHash 必须是 64 位十六进制'),
   fromSystem: identifierSchema,
   fromAgentId: optionalIdentifierSchema,
+  /** 调用方上下文：SPC 用户/Agent/任务/链路；历史记录为 null。 */
+  caller: CallerContextSchema.nullable().default(null),
   capability: trimmedString(100, 1),
   capabilityVersion: trimmedString(40).nullable().default(null),
   inputSchemaHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
@@ -87,6 +90,7 @@ export interface CreateBorrowOrderRecordInput {
   requestHash: string;
   fromSystem: string;
   fromAgentId: string | null;
+  caller?: CallerContext | null;
   capability: string;
   capabilityVersion?: string | null;
   inputSchemaHash?: string | null;
@@ -209,6 +213,7 @@ export class BorrowOrderStore {
       requestHash: input.requestHash,
       fromSystem: input.fromSystem,
       fromAgentId: input.fromAgentId,
+      caller: input.caller ?? null,
       capability: input.capability,
       capabilityVersion: input.capabilityVersion ?? null,
       inputSchemaHash: input.inputSchemaHash ?? null,

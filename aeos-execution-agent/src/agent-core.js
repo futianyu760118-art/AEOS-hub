@@ -116,6 +116,8 @@ export class ExecutionAgentCore {
     };
     const ctx = {
       runId,
+      traceId: msg.traceId ?? null,
+      caller: msg.caller ?? null,
       aborted: false,
       signal: controller.signal,
       sendProgress: (detail) => {

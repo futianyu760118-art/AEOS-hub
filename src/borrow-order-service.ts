@@ -11,6 +11,7 @@ import {
 import { isBorrowCapabilityAllowed } from './borrow-policy.ts';
 import { buildUnifiedCapabilityCatalog, type UnifiedCapability } from './capability-catalog.ts';
 import { findRoutingRule, loadExecutionRoutingPolicy } from './execution-routing-policy.ts';
+import { parseCallerContext, type CallerContext } from './caller-context.ts';
 import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 import { listSystems } from './system-registry.ts';
 import {
@@ -27,7 +28,7 @@ import type { UsageEventAppendInput } from './usage-ledger-store.ts';
 const DEFAULT_TENANT = DEFAULT_TENANT_ID;
 const DEFAULT_OPEN_ORDER_LIMIT = 50;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
-const ALLOWED_CREATE_FIELDS = new Set(['requestId', 'capability', 'capabilityVersion', 'inputSchemaHash', 'outputSchemaHash', 'input', 'toSystem', 'toAgent', 'fromAgentId']);
+const ALLOWED_CREATE_FIELDS = new Set(['requestId', 'capability', 'capabilityVersion', 'inputSchemaHash', 'outputSchemaHash', 'input', 'toSystem', 'toAgent', 'fromAgentId', 'caller']);
 const TERMINAL: ReadonlySet<BorrowOrderStatus> = new Set(['completed', 'failed', 'cancelled']);
 
 export class BorrowOrderServiceError extends Error {
@@ -237,6 +238,7 @@ export class BorrowOrderService {
         payload: {
           action,
           traceId: order?.orderId ?? null,
+          caller: order?.caller ?? null,
           orderId: order?.orderId ?? null,
           requestId: order?.requestId ?? null,
           capability: order?.capability ?? extra.capability ?? null,
@@ -371,6 +373,17 @@ export class BorrowOrderService {
     const toSystem = optionalText(body.toSystem, 'toSystem');
     const toAgent = optionalText(body.toAgent, 'toAgent');
     const fromAgentId = optionalText(body.fromAgentId, 'fromAgentId');
+    let caller: CallerContext | null = null;
+    if (body.caller !== undefined) {
+      try {
+        caller = parseCallerContext(body.caller);
+      } catch (error) {
+        throw new BorrowOrderServiceError('INVALID_ARGUMENT', 400, `caller 无效：${(error as Error).message}`);
+      }
+      if (caller && caller.systemId !== fromSystem) {
+        throw new BorrowOrderServiceError('INVALID_ARGUMENT', 400, 'caller.systemId 必须等于发起系统');
+      }
+    }
     const rawInput = body.input === undefined ? {} : body.input;
     if (!isPlainObject(rawInput)) {
       throw new BorrowOrderServiceError('INVALID_ARGUMENT', 400, 'input 必须是 JSON 对象');
@@ -404,6 +417,7 @@ export class BorrowOrderService {
       outputSchemaHash: selectors.outputSchemaHash,
       fromSystem,
       fromAgentId,
+      caller,
       capability,
       input: rawInput,
       toSystem,
@@ -413,7 +427,10 @@ export class BorrowOrderService {
     });
     const createdAudit = this.audit('created', order);
     try {
-      const dispatched = this.executionPlane.dispatch(provider.agentId, capability, rawInput, { traceId: order.orderId });
+      const dispatched = this.executionPlane.dispatch(provider.agentId, capability, rawInput, {
+        traceId: order.orderId,
+        caller: order.caller ?? { systemId: order.fromSystem, agentId: null, userId: null, taskId: null, traceId: null },
+      });
       this.runToOrder.set(dispatched.runId, order.orderId);
       const updated = this.store.update(order.orderId, {
         status: 'dispatched',
@@ -591,6 +608,8 @@ export class BorrowOrderService {
       consumerSystemId: order.fromSystem,
       consumerAgentId: order.fromAgentId ?? null,
       borrowOrderId: order.orderId,
+      callerAgentId: order.caller?.agentId ?? null,
+      callerUserId: order.caller?.userId ?? null,
     };
   }
 

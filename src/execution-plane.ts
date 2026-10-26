@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { validateAgainstSchema, type Schema } from './schema-validation.ts';
+import type { CallerContext } from './caller-context.ts';
 import { type QueryIntent } from './execution-intent-types.ts';
 import type { UsageEventAppendInput } from './usage-ledger-store.ts';
 import type { ExecutionRegistrationIdentity } from './execution-identity.ts';
@@ -61,6 +62,8 @@ export interface ExecutionRunRecord {
   runId: string;
   /** 链路 ID：借调单号或编排 requestId；未指定时等于 runId。历史记录可能没有该字段。 */
   traceId?: string;
+  /** 调用方上下文（SPC 用户/Agent/任务）；历史记录可能没有该字段。 */
+  caller?: CallerContext | null;
   agentId: string;
   capability: string;
   input: unknown;
@@ -597,6 +600,8 @@ export class ExecutionPlaneRegistry {
       modelId: usage.modelId,
       runId: run.runId,
       traceId: run.traceId ?? run.runId,
+      callerAgentId: run.caller?.agentId ?? null,
+      callerUserId: run.caller?.userId ?? null,
       tokensIn: usage.tokensIn,
       cachedTokens: usage.cachedTokens,
       tokensOut: usage.tokensOut,
@@ -627,7 +632,7 @@ export class ExecutionPlaneRegistry {
   }
 
   // ---------- 管理面 → 执行面 ----------
-  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string } = {}): { runId: string; state: ExecutionRunState } {
+  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string; caller?: CallerContext | null } = {}): { runId: string; state: ExecutionRunState } {
     const entry = this.requireAgent(agentId);
     if (entry.record.connectionStatus !== 'online') {
       throw new ExecutionPlaneError('AGENT_OFFLINE', `执行面 ${agentId} 不在线，无法派单`);
@@ -663,6 +668,7 @@ export class ExecutionPlaneRegistry {
     const run: ExecutionRunRecord = {
       runId,
       traceId,
+      caller: options.caller ?? null,
       agentId,
       capability,
       input: input ?? null,
@@ -673,7 +679,7 @@ export class ExecutionPlaneRegistry {
     this.runs.set(runId, run);
     entry.record.currentRunId = runId;
     entry.record.runtimeStatus = 'working';
-    entry.send({ type: 'dispatch', runId, capability, input: input ?? null });
+    entry.send({ type: 'dispatch', runId, capability, input: input ?? null, traceId, caller: run.caller ?? null });
     this.persist();
     return { runId, state: run.state };
   }

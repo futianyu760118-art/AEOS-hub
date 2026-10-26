@@ -33,19 +33,19 @@ function agent(overrides: Partial<ExecutionAgentRecord> = {}): ExecutionAgentRec
 function makePlane(initialAgents: ExecutionAgentRecord[]) {
   const agents = initialAgents;
   const runs = new Map<string, ExecutionRunRecord>();
-  const dispatches: Array<{ agentId: string; capability: string; input: unknown }> = [];
+  const dispatches: Array<{ agentId: string; capability: string; input: unknown; caller?: unknown }> = [];
   let counter = 0;
   return {
     agents,
     runs,
     dispatches,
     list: () => ({ agents, runs: [...runs.values()] }),
-    dispatch: (agentId: string, capability: string, input: unknown) => {
+    dispatch: (agentId: string, capability: string, input: unknown, options?: { traceId?: string; caller?: unknown }) => {
       const target = agents.find((item) => item.agentId === agentId);
       if (!target || target.connectionStatus !== 'online') throw new ExecutionPlaneError('AGENT_OFFLINE', 'offline');
       const runId = `run-${++counter}`;
       runs.set(runId, { runId, agentId, capability, input, state: 'dispatched', startedAt: '2026-10-19T09:00:00.000Z', endedAt: null });
-      dispatches.push({ agentId, capability, input });
+      dispatches.push({ agentId, capability, input, caller: options?.caller ?? null });
       return { runId, state: 'dispatched' as const };
     },
     getRun: (runId: string) => runs.get(runId),
@@ -75,6 +75,39 @@ function body(overrides: Record<string, unknown> = {}) {
 function expectCode(code: string) {
   return (error: unknown) => error instanceof BorrowOrderServiceError && error.code === code;
 }
+
+test('调用方上下文随借调单保存并进入派单与用量归属', (t) => {
+  const { service, plane } = fixture(t);
+  const caller = { systemId: 'erp', agentId: 'AG-000001', userId: 'u-1', taskId: 'AT-1', traceId: 'trace-1' };
+  const { order } = service.create({ fromSystem: 'erp', body: body({ caller }) });
+  assert.deepEqual(order.caller, caller);
+  assert.deepEqual(plane.dispatches[0]?.caller, caller);
+
+  const attribution = service.attributeUsage({
+    agentId: 'agent-1',
+    systemId: '公司中控平台',
+    modelId: null,
+    runId: order.runId,
+    tokensIn: 0,
+    cachedTokens: 0,
+    tokensOut: 0,
+    cost: 0,
+    metering: 'missing',
+    usageKind: 'query',
+    startedAt: '2026-10-19T09:00:00.000Z',
+    endedAt: '2026-10-19T09:00:01.000Z',
+  });
+  assert.equal(attribution.callerAgentId, 'AG-000001');
+  assert.equal(attribution.callerUserId, 'u-1');
+});
+
+test('caller.systemId 与发起系统不一致时拒绝', (t) => {
+  const { service } = fixture(t);
+  assert.throws(
+    () => service.create({ fromSystem: 'erp', body: body({ caller: { systemId: 'other', userId: 'u-1' } }) }),
+    expectCode('INVALID_ARGUMENT'),
+  );
+});
 
 test('创建即派单：选中跨系统只读提供方并记录 runId', (t) => {
   const { service, plane } = fixture(t);

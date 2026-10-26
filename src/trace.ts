@@ -21,6 +21,7 @@ export type TraceRun = {
   runId: string;
   traceId: string;
   taskId: string | null;
+  caller: { systemId: string; agentId: string | null; userId: string | null; taskId: string | null; traceId: string | null } | null;
   agentId: string;
   capability: string;
   state: string;
@@ -36,6 +37,8 @@ export type TraceRun = {
 export type TraceUsage = {
   runId: string | null;
   traceId: string | null;
+  callerAgentId: string | null;
+  callerUserId: string | null;
   systemId: string;
   consumerSystemId: string | null;
   borrowOrderId: string | null;
@@ -153,6 +156,7 @@ function runToTrace(run: ExecutionRunRecord): TraceRun {
   return {
     runId: run.runId,
     traceId: run.traceId ?? run.runId,
+    caller: run.caller ?? null,
     // 推理能力的 task_id 与 runId 一致（适配器按 ctx.runId 传给中台），这里显式标出来。
     taskId: run.capability.startsWith('reason') ? run.runId : null,
     agentId: run.agentId,
@@ -178,6 +182,7 @@ function borrowToSummary(order: BorrowOrderRecord) {
     providerAgentId: order.providerAgentId,
     capability: order.capability,
     runId: order.runId,
+    caller: order.caller ?? null,
     input: order.input,
     error: order.error ? { code: order.error.code, message: order.error.message } : null,
     createdAt: order.createdAt,
@@ -245,6 +250,8 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
     .map((event): TraceUsage => ({
       runId: event.runId,
       traceId: event.traceId ?? null,
+      callerAgentId: event.callerAgentId ?? null,
+      callerUserId: event.callerUserId ?? null,
       systemId: event.systemId,
       consumerSystemId: event.consumerSystemId,
       borrowOrderId: event.borrowOrderId,
@@ -267,7 +274,7 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
       at: borrow.createdAt,
       kind: 'borrow',
       title: `借调单创建：${borrow.fromSystem} → ${borrow.providerSystem ?? borrow.toSystem ?? '?'}`,
-      detail: `${borrow.capability} · ${borrow.orderId}`,
+      detail: `${borrow.capability} · ${borrow.orderId}${borrow.caller?.userId || borrow.caller?.agentId ? ` · 发起人 ${borrow.caller?.userId ?? borrow.caller?.agentId}` : ''}`,
     });
     if (borrow.dispatchedAt) {
       timeline.push({ at: borrow.dispatchedAt, kind: 'borrow', title: '派单到执行面', detail: borrow.runId ?? borrow.providerAgentId ?? '' });

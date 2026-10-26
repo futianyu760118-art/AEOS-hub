@@ -2543,7 +2543,15 @@ const server = createServer(async (req, res) => {
       const input = await readJsonBody(req);
       const capability = typeof input.capability === 'string' ? input.capability.trim() : '';
       if (!capability) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capability 不能为空');
-      sendJson(res, 200, executionPlane.dispatch(agentId, capability, input.input));
+      sendJson(res, 200, executionPlane.dispatch(agentId, capability, input.input, {
+        caller: {
+          systemId: 'aeos-hub',
+          agentId: null,
+          userId: requestActorContext?.actorId ?? null,
+          taskId: null,
+          traceId: null,
+        },
+      }));
     } catch (error) {
       const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
       sendJson(res, status, { error: (error as Error).message, ...(error instanceof ExecutionPlaneError ? { code: error.code } : {}) });
