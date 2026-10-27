@@ -2616,3 +2616,5 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .usage-table.compact .harbor-row { min-width: 420px; grid-template-columns: minmax(180px, 1fr) 110px 90px; }
 .catalog-show-hidden { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); white-space: nowrap; }
 .catalog-show-hidden input { accent-color: var(--accent, #1f4e79); }
+.execution-cancel-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.execution-elapsed { color: var(--text-3); font-size: 12px; }

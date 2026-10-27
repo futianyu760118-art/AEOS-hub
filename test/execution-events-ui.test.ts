@@ -21,6 +21,12 @@ test('借调详情提供运行详情与链路跳转，不再重复执行步骤',
   assert.doesNotMatch(app, /id="borrow-steps"/);
 });
 
+test('执行面等待中显示进度并支持取消', () => {
+  assert.match(app, /execution-cancel-row/);
+  assert.match(app, /取消分析/);
+  assert.match(app, /\/recall/);
+});
+
 test('链路追踪页时间线已接入，run 明细移至 AI 观测', () => {
   assert.match(app, /function renderTrace/);
   assert.match(app, /trace-timeline/);

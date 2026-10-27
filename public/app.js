@@ -2128,7 +2128,7 @@ async function dispatchExecution(agentId, capability, input, pendingText) {
       if (pending) pending.textEl.textContent = humanizeError(body.code, body.error || `派单失败（HTTP ${response.status}）`);
       return;
     }
-    pollExecutionRun(body.runId, pending);
+    pollExecutionRun(body.runId, pending, agentId);
   } catch (error) {
     if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
   }
@@ -2385,8 +2385,53 @@ async function dispatchHighestRiskOrderOrchestration(text) {
   }
 }
 
-function pollExecutionRun(runId, pending) {
+function pollExecutionRun(runId, pending, agentId) {
   const deadline = Date.now() + 60_000;
+  const startedAt = Date.now();
+  let elapsedTimer = null;
+  let cancelRow = null;
+  const cleanupPendingControls = () => {
+    if (elapsedTimer) clearInterval(elapsedTimer);
+    elapsedTimer = null;
+    if (cancelRow) cancelRow.remove();
+    cancelRow = null;
+  };
+  if (pending && agentId) {
+    cancelRow = document.createElement('div');
+    cancelRow.className = 'execution-cancel-row';
+    const elapsedEl = document.createElement('span');
+    elapsedEl.className = 'execution-elapsed';
+    elapsedEl.textContent = '已等待 0s';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn ghost compact';
+    cancelBtn.textContent = '取消分析';
+    cancelBtn.addEventListener('click', async () => {
+      if (cancelBtn.disabled) return;
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = '取消中…';
+      try {
+        const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/recall`, { method: 'POST' });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = '取消分析';
+          pending.textEl.textContent = humanizeError(body.code || 'EXECUTION_FAILED', body.error || `取消失败（HTTP ${response.status}）`);
+          return;
+        }
+        pending.textEl.textContent = '正在取消…';
+      } catch (error) {
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = '取消分析';
+        pending.textEl.textContent = `取消失败：${error?.message || error}`;
+      }
+    });
+    cancelRow.append(elapsedEl, cancelBtn);
+    pending.inner.appendChild(cancelRow);
+    elapsedTimer = setInterval(() => {
+      elapsedEl.textContent = `已等待 ${Math.round((Date.now() - startedAt) / 1000)}s`;
+    }, 1000);
+  }
   const tick = async () => {
     let runs = [];
     try {
@@ -2395,6 +2440,7 @@ function pollExecutionRun(runId, pending) {
     } catch { /* 忽略轮询错误，下一轮重试 */ }
     const run = runs.find((item) => item.runId === runId);
     if (run && ['completed', 'failed', 'recalled'].includes(run.state)) {
+      cleanupPendingControls();
       if (pending) {
         if (run.state === 'completed') {
           const agent = executionAgents.find((item) => item.agentId === run.agentId);
@@ -2426,7 +2472,10 @@ function pollExecutionRun(runId, pending) {
       return;
     }
     if (Date.now() < deadline) setTimeout(tick, 500);
-    else if (pending) pending.textEl.textContent = '查询超时，请稍后重试';
+    else {
+      cleanupPendingControls();
+      if (pending) pending.textEl.textContent = '查询超时，请稍后重试';
+    }
   };
   tick();
 }
