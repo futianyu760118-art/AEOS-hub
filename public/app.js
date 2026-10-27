@@ -2369,6 +2369,7 @@ async function dispatchHighestRiskOrderOrchestration(text) {
     const orderLine = `已定位当前风险最高订单：${order.orderNo || '—'}（风险等级：${order.riskLevel || '未知'}）\n\n`;
     if (pending) {
       streamTextInto(pending.textEl, orderLine + summary);
+      appendResultActions(pending.inner, orderLine + summary);
       const details = document.createElement('details');
       details.className = 'execution-raw';
       const summaryEl = document.createElement('summary');
@@ -2397,6 +2398,64 @@ async function dispatchHighestRiskOrderOrchestration(text) {
         : `编排失败：${error?.message || error}`;
     }
   }
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for browsers/contexts without clipboard permission.
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function downloadTextFile(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function appendResultActions(container, text) {
+  if (!container || !text || !text.trim()) return;
+  const row = document.createElement('div');
+  row.className = 'execution-result-actions';
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'btn ghost compact';
+  copyBtn.textContent = '复制结论';
+  copyBtn.addEventListener('click', async () => {
+    const ok = await copyToClipboard(text);
+    copyBtn.textContent = ok ? '已复制' : '复制失败';
+    window.setTimeout(() => { copyBtn.textContent = '复制结论'; }, 1_500);
+  });
+  const exportBtn = document.createElement('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'btn ghost compact';
+  exportBtn.textContent = '导出结论';
+  exportBtn.addEventListener('click', () => {
+    downloadTextFile(text, `分析结论-${new Date().toISOString().slice(0, 10)}.txt`);
+  });
+  row.append(copyBtn, exportBtn);
+  container.appendChild(row);
 }
 
 function appendTraceLink(container, runId, label = '查看处理记录') {
@@ -2485,6 +2544,7 @@ function pollExecutionRun(runId, pending, agentId) {
             : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {}, intent);
           pending.textEl.textContent = '';
           streamTextInto(pending.textEl, summary);
+          appendResultActions(pending.inner, summary);
           if (run.result !== undefined && run.result !== null) {
             const details = document.createElement('details');
             details.className = 'execution-raw';

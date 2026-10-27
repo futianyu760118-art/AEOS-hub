@@ -2619,3 +2619,4 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-cancel-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .execution-elapsed { color: var(--text-3); font-size: 12px; }
 .execution-trace-link { margin-top: 8px; }
+.execution-result-actions { display: flex; gap: 8px; margin-top: 10px; }

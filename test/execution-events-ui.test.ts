@@ -27,6 +27,9 @@ test('执行面等待中显示进度并支持取消', () => {
   assert.match(app, /\/recall/);
   assert.match(app, /execution-trace-link/);
   assert.match(app, /查看处理记录/);
+  assert.match(app, /appendResultActions/);
+  assert.match(app, /复制结论/);
+  assert.match(app, /导出结论/);
 });
 
 test('链路追踪页时间线已接入，run 明细移至 AI 观测', () => {
