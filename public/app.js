@@ -2344,6 +2344,7 @@ async function sendExecutionQuery() {
 
 async function dispatchHighestRiskOrderOrchestration(text) {
   const pending = appendExecutionMessage('agent', '正在查询当前风险最高的订单，并交给推理智能体分析（可能需要 10–30 秒）…', null);
+  const controls = attachExecutionCancelControls(pending, selectedExecutionAgent);
   try {
     const response = await fetch('/api/execution/highest-risk-order', {
       method: 'POST',
@@ -2352,10 +2353,17 @@ async function dispatchHighestRiskOrderOrchestration(text) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      controls.cleanup();
       const suffix = data.requestId ? `（requestId: ${data.requestId}）` : '';
-      if (pending) pending.textEl.textContent = `${data.error || `编排失败（HTTP ${response.status}）`}${suffix}`;
+      if (pending) {
+        pending.textEl.textContent = controls.wasCancelled()
+          ? '分析已取消'
+          : `${humanizeError(data.code, data.error || `编排失败（HTTP ${response.status}）`)}${suffix}`;
+        appendTraceLink(pending.inner, data.reasoningRunId || data.queryRunId);
+      }
       return;
     }
+    controls.cleanup();
     const order = data.order || {};
     const summary = data.result !== undefined ? summarizeReasoningResult(data.result) : '推理完成，但没有返回可解析的结论。';
     const orderLine = `已定位当前风险最高订单：${order.orderNo || '—'}（风险等级：${order.riskLevel || '未知'}）\n\n`;
@@ -2378,60 +2386,87 @@ async function dispatchHighestRiskOrderOrchestration(text) {
       details.appendChild(dataEl);
       pending.inner.appendChild(details);
       if (data.reasoningRunId) attachExecutionSteps(pending.inner, data.reasoningRunId);
+      appendTraceLink(pending.inner, data.reasoningRunId || data.queryRunId);
     }
     await loadExecution();
   } catch (error) {
-    if (pending) pending.textEl.textContent = `编排失败：${error?.message || error}`;
+    controls.cleanup();
+    if (pending) {
+      pending.textEl.textContent = controls.wasCancelled()
+        ? '分析已取消'
+        : `编排失败：${error?.message || error}`;
+    }
   }
 }
 
-function pollExecutionRun(runId, pending, agentId) {
-  const deadline = Date.now() + 60_000;
-  const startedAt = Date.now();
+function appendTraceLink(container, runId, label = '查看处理记录') {
+  if (!container || !runId) return;
+  const row = document.createElement('div');
+  row.className = 'execution-trace-link';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn ghost compact';
+  button.textContent = label;
+  button.addEventListener('click', () => openTraceFor(runId));
+  row.appendChild(button);
+  container.appendChild(row);
+}
+
+function attachExecutionCancelControls(pending, agentId) {
   let elapsedTimer = null;
   let cancelRow = null;
-  const cleanupPendingControls = () => {
+  let cancelled = false;
+  const startedAt = Date.now();
+  const cleanup = () => {
     if (elapsedTimer) clearInterval(elapsedTimer);
     elapsedTimer = null;
     if (cancelRow) cancelRow.remove();
     cancelRow = null;
   };
-  if (pending && agentId) {
-    cancelRow = document.createElement('div');
-    cancelRow.className = 'execution-cancel-row';
-    const elapsedEl = document.createElement('span');
-    elapsedEl.className = 'execution-elapsed';
-    elapsedEl.textContent = '已等待 0s';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'btn ghost compact';
-    cancelBtn.textContent = '取消分析';
-    cancelBtn.addEventListener('click', async () => {
-      if (cancelBtn.disabled) return;
-      cancelBtn.disabled = true;
-      cancelBtn.textContent = '取消中…';
-      try {
-        const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/recall`, { method: 'POST' });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          cancelBtn.disabled = false;
-          cancelBtn.textContent = '取消分析';
-          pending.textEl.textContent = humanizeError(body.code || 'EXECUTION_FAILED', body.error || `取消失败（HTTP ${response.status}）`);
-          return;
-        }
-        pending.textEl.textContent = '正在取消…';
-      } catch (error) {
+  if (!pending || !agentId) return { cleanup, wasCancelled: () => cancelled };
+
+  cancelRow = document.createElement('div');
+  cancelRow.className = 'execution-cancel-row';
+  const elapsedEl = document.createElement('span');
+  elapsedEl.className = 'execution-elapsed';
+  elapsedEl.textContent = '已等待 0s';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn ghost compact';
+  cancelBtn.textContent = '取消分析';
+  cancelBtn.addEventListener('click', async () => {
+    if (cancelBtn.disabled) return;
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = '取消中…';
+    try {
+      const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/recall`, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
         cancelBtn.disabled = false;
         cancelBtn.textContent = '取消分析';
-        pending.textEl.textContent = `取消失败：${error?.message || error}`;
+        pending.textEl.textContent = humanizeError(body.code || 'EXECUTION_FAILED', body.error || `取消失败（HTTP ${response.status}）`);
+        return;
       }
-    });
-    cancelRow.append(elapsedEl, cancelBtn);
-    pending.inner.appendChild(cancelRow);
-    elapsedTimer = setInterval(() => {
-      elapsedEl.textContent = `已等待 ${Math.round((Date.now() - startedAt) / 1000)}s`;
-    }, 1000);
-  }
+      cancelled = true;
+      pending.textEl.textContent = '正在取消…';
+    } catch (error) {
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = '取消分析';
+      pending.textEl.textContent = `取消失败：${error?.message || error}`;
+    }
+  });
+  cancelRow.append(elapsedEl, cancelBtn);
+  pending.inner.appendChild(cancelRow);
+  elapsedTimer = setInterval(() => {
+    elapsedEl.textContent = `已等待 ${Math.round((Date.now() - startedAt) / 1000)}s`;
+  }, 1000);
+  return { cleanup, wasCancelled: () => cancelled };
+}
+
+function pollExecutionRun(runId, pending, agentId) {
+  const deadline = Date.now() + 60_000;
+  const controls = attachExecutionCancelControls(pending, agentId);
+  const cleanupPendingControls = controls.cleanup;
   const tick = async () => {
     let runs = [];
     try {
@@ -2468,6 +2503,7 @@ function pollExecutionRun(runId, pending, agentId) {
         } else {
           pending.textEl.textContent = '分析已取消';
         }
+        appendTraceLink(pending.inner, runId);
       }
       return;
     }

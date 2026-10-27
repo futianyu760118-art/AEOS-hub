@@ -2618,3 +2618,4 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .catalog-show-hidden input { accent-color: var(--accent, #1f4e79); }
 .execution-cancel-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .execution-elapsed { color: var(--text-3); font-size: 12px; }
+.execution-trace-link { margin-top: 8px; }

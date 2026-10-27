@@ -2618,7 +2618,28 @@ const server = createServer(async (req, res) => {
     try {
       const agentId = decodeURIComponent(executionRecallMatch[1] ?? '').trim();
       if (!agentId) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'agentId 无效');
-      sendJson(res, 200, executionPlane.recall(agentId));
+      const result = executionPlane.recall(agentId);
+      if (result.recalled) {
+        try {
+          appendEvidence({
+            kind: 'app_event',
+            actor_id: requestActorContext?.actorId ? `human:${requestActorContext.actorId}` : 'execution-ui',
+            actor_type: requestActorContext ? 'human' : 'system',
+            object_ref: `hub://execution-run/${encodeURIComponent(result.runId ?? agentId)}`,
+            source_system: 'aeos-hub',
+            correlation_id: 'execution-run-recalled',
+            summary: 'execution run recalled from UI',
+            payload: {
+              runId: result.runId,
+              agentId,
+              actor: requestActorContext?.actorId ?? null,
+            },
+          });
+        } catch {
+          // 审计失败不改变召回结果。
+        }
+      }
+      sendJson(res, 200, result);
     } catch (error) {
       const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
       sendJson(res, status, { error: (error as Error).message });
