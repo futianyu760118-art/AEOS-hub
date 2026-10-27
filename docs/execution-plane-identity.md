@@ -26,7 +26,8 @@ x-aeos-system-token: <deriveSystemToken(EXECUTION_PLANE_TOKEN, "control-platform
 x-aeos-execution-token: <EXECUTION_PLANE_TOKEN>
 ```
 
-- 默认允许；设置 `EXECUTION_LEGACY_ROOT_ENABLED=0` 后拒绝
+- 非 M01 环境默认允许；M01 默认拒绝（`deploy/m01/.env` 中 `EXECUTION_LEGACY_ROOT_ENABLED=0`）
+- 设置 `EXECUTION_LEGACY_ROOT_ENABLED=1` 可临时恢复；设为其他值启动会报错
 - 每次注册写一条审计 Evidence：`correlation_id = execution-register-legacy`
 - 自报名称能通过 `sourceSystemAliases` 匹配系统登记时，自动归一到 `systemId`
 
@@ -64,6 +65,9 @@ x-aeos-execution-token: <EXECUTION_PLANE_TOKEN>
    - 系统令牌连接：`authMode = system-token`，`sourceSystem = <systemId>`
    - legacy 连接：`authMode = legacy-root`，能在 Evidence 中看到注册审计
 5. 观察 2 周后设置 `EXECUTION_LEGACY_ROOT_ENABLED=0`，只允许系统令牌。
+   - M01 已在 `deploy/m01/.env` 设置 `EXECUTION_LEGACY_ROOT_ENABLED=0`，且 `scripts/run-m01-hub.ps1` 在缺失时同样按 `0` 处理；
+   - 2026-10-27 已验证：网关 `gateway-control-platform` 以 `system-token` 重连，旧根令牌连接被 `401` 拒绝；
+   - 仅本地开发/模拟器需要旧根令牌时，显式设置 `EXECUTION_LEGACY_ROOT_ENABLED=1`。
 
 开发环境模拟器：
 

@@ -53,6 +53,13 @@ $env:M01_AUDIENCE = 'aeos-hub-web'
 $env:AEOS_M01_ALLOWED_ROLES = 'manager,supervisor,operator,owner,analyst'
 $env:EXECUTION_PLANE_TOKEN = $settings['EXECUTION_PLANE_TOKEN']
 
+# 执行面身份：M01 默认只接受每系统令牌；如需临时兼容旧根令牌，在 deploy/m01/.env 显式设为 1。
+$legacyRootEnabled = if ($settings.ContainsKey('EXECUTION_LEGACY_ROOT_ENABLED')) { $settings['EXECUTION_LEGACY_ROOT_ENABLED'].Trim() } else { '0' }
+if ($legacyRootEnabled -ne '0' -and $legacyRootEnabled -ne '1') {
+  throw 'EXECUTION_LEGACY_ROOT_ENABLED must be 0 or 1 in deploy/m01/.env.'
+}
+$env:EXECUTION_LEGACY_ROOT_ENABLED = $legacyRootEnabled
+
 # 可选：企业微信群机器人告警 webhook。未配置时告警只写页面与日志。
 if ($settings.ContainsKey('WECOM_ALERT_WEBHOOK') -and -not [string]::IsNullOrWhiteSpace($settings['WECOM_ALERT_WEBHOOK'])) {
   $env:WECOM_ALERT_WEBHOOK = $settings['WECOM_ALERT_WEBHOOK']
