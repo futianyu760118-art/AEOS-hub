@@ -75,14 +75,22 @@ docker compose -f docker-compose.gateway.yml up -d
 
 网关主动出方向连接 Hub，通常不需要映射入站端口。
 
-### 2.6 Windows 登录自启与守护
+### 2.6 Windows 登录自启与守护（A+C）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-gateway-autostart.ps1
 ```
 
-- 用户登录后由计划任务启动守护脚本；网关退出或崩溃会自动重启；
+安装两个计划任务：
+
+| 任务 | 作用 |
+|---|---|
+| `AEOS-Hub-ControlPlatformGateway` | 登录时前台运行 `node --env-file=.env src/gateway-main.js`；进程退出后 Task Scheduler 每分钟重试 |
+| `AEOS-Hub-ControlPlatformGateway-Keeper` | 每分钟检查一次；没有网关进程且任务不在运行时启动网关任务 |
+
+- 网关不再由 `Start-Process` 子进程托管，任务主进程就是网关，避免任务退出时把子进程一起带走；
 - 守护日志：`gateway-watchdog.log`；网关输出：`gateway.out.*.log` / `gateway.err.*.log`；
+- 维护暂停：在 `aeos-execution-agent/` 下创建空文件 `gateway.pause`，网关与巡检都不会启动；删除后 1 分钟内自动恢复；
 - 卸载：
 
 ```powershell
