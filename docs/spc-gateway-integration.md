@@ -166,4 +166,6 @@ SPC 需要准备：
 
 ---
 
+验收用例与通过标准见 [`docs/spc-gateway-acceptance.md`](spc-gateway-acceptance.md)。
+
 AEOS Hub 管理面 · 2026-10-26
