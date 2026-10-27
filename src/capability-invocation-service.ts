@@ -114,7 +114,7 @@ const DEFAULT_TEMPLATES: CapabilityQueryTemplate[] = [
     description: '按中台冻结白名单查询订单、齐套、物料、供应商、质量、生产等只读数据。',
     domain: 'control-platform',
     providerSystem: 'control-platform',
-    providerAgentId: 'runtime-control-platform-query',
+    providerAgentId: 'gateway-control-platform',
     readOnly: true,
     requestTemplate: {
       path: '{{path}}',

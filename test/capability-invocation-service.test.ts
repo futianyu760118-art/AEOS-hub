@@ -31,7 +31,7 @@ function agent(): ExecutionAgentRecord {
 
 function controlQueryAgent(): ExecutionAgentRecord {
   return {
-    agentId: 'runtime-control-platform-query',
+    agentId: 'gateway-control-platform',
     name: '公司中台查询智能体',
     version: '1.0.0',
     capabilities: [{
@@ -170,7 +170,7 @@ test('PLM 可通过 query_control_platform 模板回查中台', (t) => {
 
   assert.equal(result.order.status, 'dispatched');
   assert.equal(result.order.providerSystem, 'control-platform');
-  assert.equal(result.order.providerAgentId, 'runtime-control-platform-query');
+  assert.equal(result.order.providerAgentId, 'gateway-control-platform');
   assert.deepEqual(plane.dispatches.at(-1)?.input, {
     path: '/external/orders/list',
     params: { page: 1, page_size: 5 },

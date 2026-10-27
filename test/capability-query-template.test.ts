@@ -82,7 +82,7 @@ test('path 可引用受 schema 枚举保护的参数', () => {
     title: '查询中台只读业务数据',
     domain: 'control-platform',
     providerSystem: 'control-platform',
-    providerAgentId: 'runtime-control-platform-query',
+    providerAgentId: 'gateway-control-platform',
     readOnly: true,
     requestTemplate: { path: '{{path}}', params: '{{params}}' },
     parameterSchema: {

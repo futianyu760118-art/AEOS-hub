@@ -6343,7 +6343,7 @@ function harborAgentActivity(agent) {
 
 const CATALOG_LEVEL_LABELS = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
 const CATALOG_DOMAIN_LABELS = { order: '订单交付', kitting: '物料齐套', quality: '质量异常', production: '生产进度', 'cross-domain': '跨系统协同' };
-// Hub 侧保留中枢 Agent（跨系统协同），隐藏当前没有实际业务入口的 10 个 L1 编队 Agent。
+// Hub 侧保留中枢 Agent（跨系统协同），默认隐藏 10 个 L1 编队 Agent 与 2 个旧直连执行体镜像。
 // 只影响 AI 港湾目录展示，不删除数据、不影响执行面或已有引用。
 const HIDDEN_HUB_AGENT_IDS = new Set([
   'agent-bcaa0313-4b26-4db2-bb22-2ad88d7d826e',
@@ -6356,10 +6356,13 @@ const HIDDEN_HUB_AGENT_IDS = new Set([
   'agent-ce5fbb98-972a-4fc6-b749-c03f167d400d',
   'agent-d5fed80d-dd24-4677-ae0e-49c6c99ec186',
   'agent-2e8c835f-b6d5-4a93-a9f6-e52b265d30bf',
+  // 旧直连执行体的港湾镜像：已被统一网关取代，默认不在目录展示。
+  'agent-control-platform-query',
+  'agent-control-platform-reasoning',
 ]);
 
-function isCatalogAgentHidden(agent, system) {
-  return system?.id === 'aeos-hub' && HIDDEN_HUB_AGENT_IDS.has(agent?.id);
+function isCatalogAgentHidden(agent) {
+  return HIDDEN_HUB_AGENT_IDS.has(agent?.id);
 }
 
 function visibleHarborAgents() {

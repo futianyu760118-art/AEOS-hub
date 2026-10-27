@@ -16,6 +16,10 @@ for (const raw of process.argv.slice(2)) {
 }
 const file = resolve(String(args.get('file') || join(root, 'data', 'ai-harbor.json')));
 const apply = args.get('apply') === true;
+if (!args.has('legacy')) {
+  console.error('该脚本用于旧直连执行体的港湾镜像，已被统一网关 gateway-control-platform 取代；如确需重放历史档案，请加 --legacy。');
+  process.exit(1);
+}
 
 function hubListening(): Promise<boolean> {
   return new Promise((done) => {
