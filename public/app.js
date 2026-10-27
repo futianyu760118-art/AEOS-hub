@@ -2452,25 +2452,28 @@ function prependResultMeta(container, result) {
   container.insertBefore(meta, container.firstChild);
 }
 
-function appendResultActions(container, text) {
+function appendResultActions(container, text, options = {}) {
   if (!container || !text || !text.trim()) return;
+  const copyLabel = options.copyLabel || '复制结论';
+  const exportLabel = options.exportLabel || '导出结论';
+  const filenamePrefix = options.filenamePrefix || '分析结论';
   const row = document.createElement('div');
   row.className = 'execution-result-actions';
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
   copyBtn.className = 'btn ghost compact';
-  copyBtn.textContent = '复制结论';
+  copyBtn.textContent = copyLabel;
   copyBtn.addEventListener('click', async () => {
     const ok = await copyToClipboard(text);
     copyBtn.textContent = ok ? '已复制' : '复制失败';
-    window.setTimeout(() => { copyBtn.textContent = '复制结论'; }, 1_500);
+    window.setTimeout(() => { copyBtn.textContent = copyLabel; }, 1_500);
   });
   const exportBtn = document.createElement('button');
   exportBtn.type = 'button';
   exportBtn.className = 'btn ghost compact';
-  exportBtn.textContent = '导出结论';
+  exportBtn.textContent = exportLabel;
   exportBtn.addEventListener('click', () => {
-    downloadTextFile(text, `分析结论-${new Date().toISOString().slice(0, 10)}.txt`);
+    downloadTextFile(text, `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.txt`);
   });
   row.append(copyBtn, exportBtn);
   container.appendChild(row);
@@ -7251,7 +7254,14 @@ function connect() {
         if (message.convId !== curConvId) break;
         const wrap = appendMsg('agent', '');
         const bubble = $('.bubble', wrap);
-        if (bubble) bubble.innerHTML = md(message.text);
+        if (bubble) {
+          bubble.innerHTML = md(message.text);
+          appendResultActions(bubble, message.text, {
+            copyLabel: '复制回答',
+            exportLabel: '导出回答',
+            filenamePrefix: '智能助手回答',
+          });
+        }
         wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 智能助手 · 分析工作台`));
         els.empty.classList.add('hidden');
         finishThinking();
