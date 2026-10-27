@@ -2369,6 +2369,7 @@ async function dispatchHighestRiskOrderOrchestration(text) {
     const orderLine = `已定位当前风险最高订单：${order.orderNo || '—'}（风险等级：${order.riskLevel || '未知'}）\n\n`;
     if (pending) {
       streamTextInto(pending.textEl, orderLine + summary);
+      prependResultMeta(pending.inner, data.result);
       appendResultActions(pending.inner, orderLine + summary);
       const details = document.createElement('details');
       details.className = 'execution-raw';
@@ -2432,6 +2433,23 @@ function downloadTextFile(text, filename) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function prependResultMeta(container, result) {
+  if (!container || !result || typeof result !== 'object') return;
+  const dataAsOf = typeof result.data_as_of === 'string' ? result.data_as_of.trim() : '';
+  const confidence = typeof result.data_confidence === 'string' ? result.data_confidence.trim() : '';
+  if (!dataAsOf && !confidence) return;
+  const confidenceLabel = { high: '高', medium: '中', low: '低' }[confidence] || confidence;
+  const tone = confidence === 'high' ? 'ok' : confidence === 'medium' ? 'warn' : 'danger';
+  const text = [
+    dataAsOf ? `数据截至 ${formatDateTimeText(dataAsOf)}` : '',
+    confidence ? `置信度 ${confidenceLabel}` : '',
+  ].filter(Boolean).join(' · ');
+  const meta = document.createElement('div');
+  meta.className = `execution-data-meta ${tone}`;
+  meta.textContent = confidence === 'low' ? `${text}（数据置信度不足，请人工复核）` : text;
+  container.insertBefore(meta, container.firstChild);
 }
 
 function appendResultActions(container, text) {
@@ -2544,6 +2562,7 @@ function pollExecutionRun(runId, pending, agentId) {
             : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {}, intent);
           pending.textEl.textContent = '';
           streamTextInto(pending.textEl, summary);
+          prependResultMeta(pending.inner, run.result);
           appendResultActions(pending.inner, summary);
           if (run.result !== undefined && run.result !== null) {
             const details = document.createElement('details');

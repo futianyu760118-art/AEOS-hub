@@ -2620,3 +2620,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-elapsed { color: var(--text-3); font-size: 12px; }
 .execution-trace-link { margin-top: 8px; }
 .execution-result-actions { display: flex; gap: 8px; margin-top: 10px; }
+.execution-data-meta { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; font-size: 11px; margin-bottom: 8px; }
+.execution-data-meta.ok { background: #ecfdf3; color: #067647; }
+.execution-data-meta.warn { background: #fffaeb; color: #b54708; }
+.execution-data-meta.danger { background: #fef3f2; color: #b42318; }

@@ -30,6 +30,8 @@ test('执行面等待中显示进度并支持取消', () => {
   assert.match(app, /appendResultActions/);
   assert.match(app, /复制结论/);
   assert.match(app, /导出结论/);
+  assert.match(app, /execution-data-meta/);
+  assert.match(app, /prependResultMeta/);
 });
 
 test('链路追踪页时间线已接入，run 明细移至 AI 观测', () => {
