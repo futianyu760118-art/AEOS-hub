@@ -308,7 +308,8 @@ const commands = [
 
 // Local experience review: keep module implementations intact while temporarily
 // removing their routes from the decision-maker interface.
-const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects']);
+// 跨系统查询：新架构下中枢分析走直接派单，不产生借调单；页面/API/数据保留，仅从导航与命令面板隐藏。
+const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects', 'borrow']);
 const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本' };
 const SPLIT = '::';
 
