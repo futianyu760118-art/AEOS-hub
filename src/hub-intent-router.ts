@@ -43,13 +43,13 @@ const DOMAIN_KEYWORDS: Array<{ domain: Exclude<HubIntentDomain, 'general'>; keyw
 const REASONING_KEYWORDS = ['分析', '评估', '判断', '建议', '预测', '影响', '为什么', '怎么办', '是否', '风险'];
 const QUERY_KEYWORDS = ['查询', '查一下', '查查', '看看', '列出', '多少', '有哪些', '状态', '情况', '进度'];
 const HIGHEST_RISK_PATTERN = /(风险最高|最高风险|风险最高的订单|今日.*风险|当前.*风险最高)/i;
-const IDENTIFIER_PATTERN = /business:\/\/(?:order|product|batch)\/[^\s，。；,;]+|\b(?:HJY\d{8}-\d+|[A-Z]{2,}[-_]\d{2,}(?:[-_]\d+)*)\b/i;
+const IDENTIFIER_PATTERN = /business:\/\/(?:order|product|batch)\/[^\s，。；,;]+|\b(?:HJY\d{8}-\d+|[A-Z]{2,}[-_]\d{2,}(?:[-_]\d+)*|[A-Z]{2,}\d{4,}[-_]\d{2,}(?:[-_]\d+)*)\b/i;
 
 export function extractBusinessIdentifier(text: string): string | null {
   const value = String(text || '');
   const explicit = value.match(/business:\/\/(?:order|product|batch)\/([^\s，。；,;]+)/i);
   if (explicit?.[1]) return explicit[1];
-  const match = value.match(/\b(?:HJY\d{8}-\d+|[A-Z]{2,}[-_]\d{2,}(?:[-_]\d+)*)\b/i);
+  const match = value.match(/\b(?:HJY\d{8}-\d+|[A-Z]{2,}[-_]\d{2,}(?:[-_]\d+)*|[A-Z]{2,}\d{4,}[-_]\d{2,}(?:[-_]\d+)*)\b/i);
   return match?.[0] ?? null;
 }
 

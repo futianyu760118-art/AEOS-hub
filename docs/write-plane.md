@@ -46,9 +46,30 @@
     "idempotencyKey": "可选；缺省由服务端生成"
   }
   ```
+- 交付日期示例：
+  ```json
+  {
+    "operation": "order.update_delivery_date",
+    "orderNo": "HJ202602-0009-0028",
+    "changes": { "deliveryDate": "2026-11-10" }
+  }
+  ```
 - `POST /api/write-requests/{id}/approve`：`{ "note": "可选" }`
 - `POST /api/write-requests/{id}/reject`：`{ "reason": "必填" }`
 - `GET /api/write-requests/{id}`
+
+### 3.1.1 对话内发起（Hub 用户）
+
+用户直接在智能助手里说：
+
+> 改写订单 HJ202602-0009-0028 的交付日期为 2026-11-10
+
+Hub 会解析写意图并回复：
+
+> 即将执行：改写订单 HJ202602-0009-0028 的交付日期为 2026-11-10。
+> 回复“确认”执行，回复“取消”放弃。
+
+用户回复“确认”后，Hub 才创建已批准的写请求并派单；回复“取消”不会修改任何数据。独立的「写操作」页面已隐藏，但接口与台账保留。
 
 ### 3.2 系统 token（其他系统的 Agent）
 
@@ -85,7 +106,7 @@
   "inputSchema": {
     "type": "object",
     "properties": {
-      "operation": { "type": "string", "enum": ["order.update_note", "order.update_status"] },
+      "operation": { "type": "string", "enum": ["order.update_note", "order.update_status", "order.update_delivery_date"] },
       "orderNo": { "type": "string" },
       "changes": { "type": "object" },
       "idempotencyKey": { "type": "string" }
@@ -160,3 +181,4 @@
 6. 同一 `idempotencyKey` 重复提交 → 返回同一请求；内容不同 → 409。
 7. 外部系统提交 → Hub 页面可见并审批；外部系统轮询到最终状态。
 8. 写能力被直接派单（不经审批）→ `WRITE_FORBIDDEN`。
+9. 对话内说“改写某订单的交付日期为 …” → 助手只回复确认提示；回复“确认”后才派单，回复“取消”不产生任何修改。

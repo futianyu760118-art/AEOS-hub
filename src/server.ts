@@ -98,9 +98,10 @@ import { CatalogApi } from './catalog-api.ts';
 import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
 import { verifySystemToken } from './system-token.ts';
 import { parseCallerContext } from './caller-context.ts';
-import { WriteRequestStore } from './write-request-store.ts';
+import { WriteRequestStore, type WriteRequestRecord } from './write-request-store.ts';
 import { WriteRequestError, WriteRequestService } from './write-request-service.ts';
 import { buildConnectivitySummary } from './connectivity-summary.ts';
+import { parseWriteIntent } from './write-intent.ts';
 import { buildTrace, readEvidenceEntries } from './trace.ts';
 import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 import {
@@ -517,6 +518,7 @@ const RUNTIME_WAIT_MS = 120_000;
 const DECISION_DATA_REFRESH_MS = 5 * 60_000;
 const viewOf = new Map<WebSocket, string | null>(); // ws -> 正在查看的 convId
 const actorOf = new Map<WebSocket, string>(); // ws -> 服务端生成的审计 actor
+const actorContextOf = new Map<WebSocket, { actorId: string; roles: string[]; tenantId?: string }>();
 const pendingGuard = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 const pendingApprovals = new Map<string, RuntimeApprovalRequest>();
 const allSockets = new Set<WebSocket>();
@@ -1173,13 +1175,119 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
   }
 }
 
+// ---------- 对话内写操作：自然语言发起 → 对话内确认 → 审批派单 ----------
+const pendingWriteByConversation = new Map<string, { id: string; summary: string }>();
+const writeConversationByRequest = new Map<string, string>();
+
+function describeWriteIntent(intent: { operation: string; orderNo: string; changes: Record<string, string> }): string {
+  const target = `订单 ${intent.orderNo}`;
+  if (intent.operation === 'order.update_delivery_date') return `改写${target}的交付日期为 ${intent.changes.deliveryDate}`;
+  if (intent.operation === 'order.update_note') return `改写${target}的备注为“${intent.changes.remark}”`;
+  if (intent.operation === 'order.update_status') return `更新${target}的状态为 ${intent.changes.status}`;
+  return `对${target}执行 ${intent.operation}`;
+}
+
+function pushAssistantReply(convId: string, text: string): void {
+  appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text });
+  pushConv(convId, { type: 'assistant_reply', convId, text });
+  pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `write-chat-${randomUUID()}`, sessionId: 'hub-write', occurredAt: new Date().toISOString() });
+}
+
+function notifyWriteRecord(record: WriteRequestRecord): void {
+  const convId = writeConversationByRequest.get(record.id);
+  if (!convId) return;
+  writeConversationByRequest.delete(record.id);
+  const orderNo = (record.input as Record<string, unknown> | null)?.orderNo;
+  const text = record.status === 'completed'
+    ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}。`
+    : `写操作失败：${record.error?.message || '未知错误'}`;
+  pushAssistantReply(convId, text);
+}
+
+async function handleConversationalWrite(
+  convId: string,
+  text: string,
+  actor?: { actorId: string; roles: string[]; tenantId?: string },
+): Promise<boolean> {
+  const intent = parseWriteIntent(text);
+  if (!intent) return false;
+  if (!actor) return false;
+  const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
+  const roles = Array.isArray(actor.roles) ? actor.roles : [];
+  const canWrite = roles.includes('manager') || roles.includes('supervisor');
+  const pending = pendingWriteByConversation.get(convId);
+
+  if (intent.kind === 'confirm' || intent.kind === 'cancel') {
+    if (!pending) return false;
+    if (!canWrite) {
+      pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
+      return true;
+    }
+    if (intent.kind === 'cancel') {
+      try {
+        writeRequestService.reject(pending.id, { id: actor.actorId, roles, tenantId }, '用户在对话中取消');
+      } catch {
+        // 已不在待审批状态时忽略。
+      }
+      pendingWriteByConversation.delete(convId);
+      pushAssistantReply(convId, '已取消本次写操作，未修改任何数据。');
+      return true;
+    }
+    writeConversationByRequest.set(pending.id, convId);
+    try {
+      const record = writeRequestService.approve(pending.id, { id: actor.actorId, roles, tenantId });
+      pendingWriteByConversation.delete(convId);
+      if (record.status === 'completed' || record.status === 'failed') {
+        notifyWriteRecord(writeRequestStore.get(record.id) ?? record);
+      } else {
+        pushAssistantReply(convId, `已确认并派单：${pending.summary}。执行完成后会在这里回报结果。`);
+      }
+    } catch (error) {
+      writeConversationByRequest.delete(pending.id);
+      pushAssistantReply(convId, `写操作未能执行：${(error as Error).message}`);
+    }
+    return true;
+  }
+
+  if (!canWrite) {
+    pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
+    return true;
+  }
+
+  const capability = writeRequestService.listCapabilities(tenantId)
+    .find((item) => item.operations.includes(intent.operation));
+  if (!capability) {
+    pushAssistantReply(convId, `中台尚未注册写能力（${intent.operation}），当前无法执行写操作。`);
+    return true;
+  }
+
+  const summary = describeWriteIntent(intent);
+  try {
+    const { record } = writeRequestService.create({
+      tenantId,
+      capability: capability.capability,
+      systemId: capability.systemId,
+      input: { operation: intent.operation, orderNo: intent.orderNo, changes: intent.changes },
+      reason: `对话内发起：${intent.raw}`.slice(0, 500),
+      requestedBy: { kind: 'user', id: actor.actorId },
+      idempotencyKey: `chat-${randomUUID()}`,
+    });
+    pendingWriteByConversation.set(convId, { id: record.id, summary });
+    pushAssistantReply(convId, `即将执行：${summary}。\n回复“确认”执行，回复“取消”放弃。`);
+  } catch (error) {
+    pushAssistantReply(convId, `写操作未能提交：${(error as Error).message}`);
+  }
+  return true;
+}
+
 /**
  * 中枢对话的通用意图路由：识别业务域与动作；最高风险订单走编排，
  * 其他已识别意图返回可用 Agent 与补充信息提示；无法识别时交给 Codex。
  */
-async function routeHubExecutionTurn(convId: string, text: string): Promise<boolean> {
+async function routeHubExecutionTurn(convId: string, text: string, actor?: { actorId: string; roles: string[]; tenantId?: string }): Promise<boolean> {
   const conv = getConv(convId);
   if ((conv?.scope ?? 'hub') !== 'hub') return false;
+  if (await handleConversationalWrite(convId, text, actor)) return true;
   const intent = recognizeHubIntent(text);
   // 范围控制：用户可直接要求“下一条高风险订单”，跳过最近已分析过的订单。
   const wantsNextOrder = /^(下一条|下一个|下个)\s*(高风险)?\s*订单?/.test(text.trim());
@@ -3337,6 +3445,8 @@ executionWss.on('connection', (ws, request) => {
           executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result, usage: msg.usage });
           if (typeof msg.runId === 'string' && msg.runId.trim()) {
             writeRequestService.onRunFinished(msg.runId.trim(), { state: 'completed', result: msg.result });
+            const writeRecord = writeRequestStore.load().find((item) => item.runId === msg.runId);
+            if (writeRecord) notifyWriteRecord(writeRecord);
           }
         }
       } else if (type === 'run_failed') {
@@ -3350,6 +3460,8 @@ executionWss.on('connection', (ws, request) => {
                 ? { code: msg.error.code, message: msg.error.message }
                 : null,
             });
+            const writeRecord = writeRequestStore.load().find((item) => item.runId === msg.runId);
+            if (writeRecord) notifyWriteRecord(writeRecord);
           }
         }
       } else if (type === 'run_event') {
@@ -3406,6 +3518,8 @@ wss.on('connection', (ws, request) => {
   allSockets.add(ws);
   viewOf.set(ws, null);
   actorOf.set(ws, actorId);
+  const actorContext = authGateway.actorFromCookie(request.headers.cookie);
+  if (actorContext) actorContextOf.set(ws, actorContext);
   sessionSockets.attach(sessionId, ws);
   send(ws, { type: 'hello', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), modelOptions: buildModelOptions(), dataDir, evidenceFile });
 
@@ -3528,7 +3642,7 @@ wss.on('connection', (ws, request) => {
           : requestedChoice;
         appendConversationMessage(convId, { id: `user-${randomUUID()}`, role: 'user', text });
         pushConv(convId, { type: 'user_message', convId, text });
-        if (await routeHubExecutionTurn(convId, text)) return;
+        if (await routeHubExecutionTurn(convId, text, actorContextOf.get(ws))) return;
         await startTurn(convId, text, choice, dispatch);
       } else if (type === 'interrupt') {
         const convId = String(msg.conversationId ?? '');
@@ -3650,6 +3764,7 @@ wss.on('connection', (ws, request) => {
     allSockets.delete(ws);
     viewOf.delete(ws);
     actorOf.delete(ws);
+    actorContextOf.delete(ws);
   });
 });
 

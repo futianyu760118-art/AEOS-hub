@@ -56,7 +56,7 @@
     "test:dispatch": "node --test test/conclusion-dispatcher.test.ts",
     "test:cache": "node --test test/recent-analysis-cache.test.ts",
     "test:atomic": "node --test test/atomic-file.test.ts",
-    "test:writes": "node --test test/write-request-service.test.ts test/write-request-ui.test.ts",
+    "test:writes": "node --test test/write-request-service.test.ts test/write-request-ui.test.ts test/write-intent.test.ts",
     "test:policy-audit": "node --test test/execution-policy-audit.test.ts"
   },
   "dependencies": {

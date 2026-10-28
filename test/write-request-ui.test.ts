@@ -13,6 +13,7 @@ test('写操作页面与导航存在', () => {
   assert.match(html, /id="write-pending-list"/);
   assert.match(html, /id="write-history-list"/);
   assert.match(app, /view: 'writes'/);
+  assert.match(app, /LOCALLY_HIDDEN_VIEWS = new Set\(\[[^\]]*'writes'/);
   assert.match(app, /if \(view === 'writes'\) loadWrites\(\)/);
 });
 
