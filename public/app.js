@@ -769,6 +769,7 @@ function syncExecutionRefresh() {
 let executionControlsWired = false;
 let selectedExecutionAgent = null;
 let executionAgents = [];
+let executionRuns = [];
 const collapsedExecutionSystems = new Set();
 // 每个智能体独立一份聊天窗口（线程）：切换时隐藏当前、显示目标，各自历史与进行中的查询都不丢。
 const executionThreads = new Map();
@@ -782,7 +783,19 @@ function wireExecutionControls() {
     $('.execution-chat-layout')?.classList.toggle('collapsed');
   });
   $('#execution-chat-input')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') sendExecutionQuery(); });
+  $('#btn-execution-agent-trace')?.addEventListener('click', () => openLatestTraceForAgent(selectedExecutionAgent));
+  $('#btn-execution-agent-usage')?.addEventListener('click', () => {
+    const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+    if (selectedExecutionAgent) openUsageForAgent(selectedExecutionAgent, agent?.name);
+  });
   $('#execution-agent-list')?.addEventListener('click', (event) => {
+    const systemUsage = event.target.closest('[data-execution-system-usage]');
+    if (systemUsage) {
+      const key = systemUsage.dataset.executionSystemUsage;
+      const group = groupExecutionAgentsBySystem(executionAgents).find((item) => item.key === key);
+      openUsageForSystem(key, group?.label);
+      return;
+    }
     const systemToggle = event.target.closest('[data-execution-system-toggle]');
     if (systemToggle) {
       const key = systemToggle.dataset.executionSystemToggle;
@@ -829,6 +842,7 @@ async function loadExecution() {
     if (usageResponse?.ok) usage = await usageResponse.json().catch(() => null);
   } catch { return; }
   executionAgents = Array.isArray(data?.agents) ? data.agents.filter((agent) => !agent.deregisteredAt) : [];
+  executionRuns = Array.isArray(data?.runs) ? data.runs : [];
   const byAgent = Array.isArray(usage?.byAgent) ? usage.byAgent : [];
   const bySystem = Array.isArray(usage?.bySystem) ? usage.bySystem : [];
   executionUsageByAgent = new Map(byAgent.map((row) => [row.agentId, row]));
@@ -873,12 +887,15 @@ function renderExecutionAgentList(agents) {
   root.innerHTML = groups.map((group) => {
     const collapsed = collapsedExecutionSystems.has(group.key);
     return `<section class="execution-system-group">
-      <button class="execution-system-head" type="button" data-execution-system-toggle="${esc(group.key)}" aria-expanded="${!collapsed}">
-        <i data-lucide="${collapsed ? 'chevron-right' : 'chevron-down'}"></i>
-        <span class="execution-system-name">${esc(group.label)}</span>
-        <span class="execution-system-usage">${esc(executionUsageText(executionUsageBySystem.get(group.key)))}</span>
-        <span class="execution-system-count">${group.onlineCount}/${group.total} 在线</span>
-      </button>
+      <div class="execution-system-head-row">
+        <button class="execution-system-head" type="button" data-execution-system-toggle="${esc(group.key)}" aria-expanded="${!collapsed}">
+          <i data-lucide="${collapsed ? 'chevron-right' : 'chevron-down'}"></i>
+          <span class="execution-system-name">${esc(group.label)}</span>
+          <span class="execution-system-usage">${esc(executionUsageText(executionUsageBySystem.get(group.key)))}</span>
+          <span class="execution-system-count">${group.onlineCount}/${group.total} 在线</span>
+        </button>
+        <button class="execution-system-usage-btn" type="button" data-execution-system-usage="${esc(group.key)}" title="查看该系统成本"><i data-lucide="book-open"></i>成本</button>
+      </div>
       <div class="execution-system-agents${collapsed ? ' hidden' : ''}">${group.agents.map(renderExecutionAgentItem).join('')}</div>
     </section>`;
   }).join('');
@@ -887,11 +904,38 @@ function renderExecutionAgentList(agents) {
 
 let usageSummary = null;
 let usageControlsWired = false;
+let usageFocus = null;
+
+function openLatestTraceForAgent(agentId) {
+  if (!agentId) return;
+  const latest = (executionRuns || [])
+    .filter((run) => run.agentId === agentId)
+    .sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))[0];
+  if (!latest) { toast('该 Agent 还没有执行记录'); return; }
+  openTraceFor(latest.traceId || latest.runId);
+}
+
+function openUsageForAgent(agentId, label) {
+  usageFocus = { kind: 'agent', id: agentId, label: label || usageAgentLabel(agentId) };
+  usageTab = 'system';
+  showView('usage');
+}
+
+function openUsageForSystem(systemId, label) {
+  usageFocus = { kind: 'system', id: systemId, label: label || usageSystemLabel(systemId) };
+  usageTab = 'system';
+  showView('usage');
+}
 
 function wireUsageControls() {
   if (usageControlsWired) return;
   usageControlsWired = true;
   $('#btn-usage-refresh')?.addEventListener('click', () => loadUsage());
+  $('#usage-focus')?.addEventListener('click', (event) => {
+    if (!event.target.closest('[data-usage-focus-clear]')) return;
+    usageFocus = null;
+    renderUsage();
+  });
   $$('.usage-tabs [data-usage-tab]').forEach((button) => {
     button.addEventListener('click', () => {
       usageTab = button.dataset.usageTab === 'caller' ? 'caller' : 'system';
@@ -1103,6 +1147,21 @@ function renderUsage() {
   const byCallerAgent = Array.isArray(usageSummary?.byCallerAgent) ? usageSummary.byCallerAgent : [];
   const byCallerUser = Array.isArray(usageSummary?.byCallerUser) ? usageSummary.byCallerUser : [];
   const displayAgents = usageDisplayAgents(byAgent);
+  const focusAgentId = usageFocus?.kind === 'agent' ? usageFocus.id : null;
+  const focusSystemId = usageFocus?.kind === 'system' ? usageFocus.id : null;
+  const focusedSystemOfAgent = focusAgentId
+    ? (usageAgentSystem.get(focusAgentId) || (focusAgentId === 'agent-aeos-hub' ? 'aeos-hub' : null))
+    : null;
+  const filteredAgents = focusAgentId
+    ? displayAgents.filter((row) => row.agentId === focusAgentId)
+    : focusSystemId
+      ? displayAgents.filter((row) => (usageAgentSystem.get(row.agentId) || (row.agentId === 'agent-aeos-hub' ? 'aeos-hub' : '')) === focusSystemId)
+      : displayAgents;
+  const filteredSystems = focusAgentId
+    ? bySystem.filter((row) => row.systemId === focusedSystemOfAgent)
+    : focusSystemId
+      ? bySystem.filter((row) => row.systemId === focusSystemId)
+      : bySystem;
   const totalCost = byAgent.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
   const totalTokens = byAgent.reduce((sum, row) => sum + (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0), 0);
   const totalEvents = byAgent.reduce((sum, row) => sum + (Number(row.events) || 0), 0);
@@ -1114,6 +1173,16 @@ function renderUsage() {
   setText('#usage-agent-count', formatTokenCount(displayAgents.length));
   setText('#usage-total-tokens', formatTokenCount(totalTokens));
   $('#usage-token-metric')?.classList.toggle('hidden', businessMode);
+  const focusHost = $('#usage-focus');
+  if (focusHost) {
+    if (usageFocus) {
+      focusHost.classList.remove('hidden');
+      focusHost.innerHTML = `<span>仅看：<b>${esc(usageFocus.label)}</b></span><button class="btn ghost compact" type="button" data-usage-focus-clear>清除</button>`;
+    } else {
+      focusHost.classList.add('hidden');
+      focusHost.innerHTML = '';
+    }
+  }
   $$('.usage-tabs [data-usage-tab]').forEach((button) => {
     const active = button.dataset.usageTab === usageTab;
     button.classList.toggle('active', active);
@@ -1123,7 +1192,7 @@ function renderUsage() {
   if (usageTab === 'caller') {
     root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>外部系统用户维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：调用尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>外部系统 Agent 维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：调用尚未携带 caller')}</section>`;
   } else {
-    root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(bySystem, byAgent)}</section>`;
+    root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(filteredSystems, filteredAgents)}</section>`;
   }
   refreshIcons(root);
 }
@@ -2056,6 +2125,7 @@ function selectExecutionAgent(agentId) {
   loadExecution();
   showExecutionThread(agentId);
   const name = executionAgents.find((item) => item.agentId === agentId)?.name || agentId;
+  $('#execution-chat-actions')?.classList.remove('hidden');
   const title = $('#execution-chat-title');
   const subtitle = $('#execution-chat-subtitle');
   if (title) title.textContent = `与「${name}」对话`;
@@ -6348,6 +6418,12 @@ async function loadDashboard(options = {}) {
   }
 }
 
+const REGISTRY_USAGE_SYSTEM = { 'company-control': 'control-platform', 'aeos-hub': 'aeos-hub' };
+
+function registryUsageSystemId(name) {
+  return REGISTRY_USAGE_SYSTEM[String(name || '').toLowerCase()] || null;
+}
+
 function registryStatusIcon(system) {
   if (system.kind === 'mcp') return 'server-cog';
   if (system.id === 'aeos-hub') return 'orbit';
@@ -6408,7 +6484,7 @@ function renderCapabilityRegistry(snapshot) {
     <article>
       <span class="system-icon"><i data-lucide="${registryStatusIcon(system)}"></i></span>
       <div><strong>${esc(system.name)}</strong><small>${esc(system.description)}${system.version ? ` · v${esc(system.version)}` : ''}${esc(businessBoundary)}</small></div>
-      <b class="status-pill ${esc(system.statusTone || 'neutral')}">${esc(system.status || '未知')}</b>
+      <span class="system-actions"><b class="status-pill ${esc(system.statusTone || 'neutral')}">${esc(system.status || '未知')}</b><button class="btn ghost compact registry-system-usage" type="button" data-registry-system-usage="${esc(system.name)}" title="查看该系统成本">成本</button></span>
     </article>`;
   }).join('') : '<div class="registry-loading">暂无已注册系统</div>';
 
@@ -7699,6 +7775,14 @@ els.inboxDetailRead?.addEventListener('click', () => {
 });
 els.inboxDetailModal?.addEventListener('mousedown', (event) => { if (event.target === els.inboxDetailModal) closeInboxDetail(); });
 els.registryRefresh.addEventListener('click', loadCapabilityRegistry);
+els.registrySystemGrid?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-registry-system-usage]');
+  if (!button) return;
+  const name = button.getAttribute('data-registry-system-usage') || '';
+  const systemId = registryUsageSystemId(name);
+  if (!systemId) { toast('该系统暂无 Hub 成本归属'); return; }
+  openUsageForSystem(systemId);
+});
 els.registrySearch?.addEventListener('input', () => { registryFilter.query = els.registrySearch.value; if (registrySnapshot) renderCapabilityRegistry(registrySnapshot); });
 els.registrySourceFilter?.addEventListener('change', () => { registryFilter.source = els.registrySourceFilter.value; if (registrySnapshot) renderCapabilityRegistry(registrySnapshot); });
 els.registryStateFilter?.addEventListener('change', () => { registryFilter.state = els.registryStateFilter.value; if (registrySnapshot) renderCapabilityRegistry(registrySnapshot); });

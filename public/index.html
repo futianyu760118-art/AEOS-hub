@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=p0-business-v23-20261028" />
+  <link rel="stylesheet" href="/style.css?v=p0-business-v25-20261028" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -548,7 +548,7 @@
             </aside>
 
             <section class="surface execution-chat-panel">
-              <div class="surface-head"><div><h2 id="execution-chat-title">对话</h2><p id="execution-chat-subtitle">请先在左侧选择一个智能体</p></div></div>
+              <div class="surface-head"><div><h2 id="execution-chat-title">对话</h2><p id="execution-chat-subtitle">请先在左侧选择一个智能体</p></div><div id="execution-chat-actions" class="execution-chat-actions hidden"><button id="btn-execution-agent-trace" class="btn ghost compact" type="button"><i data-lucide="git-branch"></i>处理记录</button><button id="btn-execution-agent-usage" class="btn ghost compact" type="button"><i data-lucide="book-open"></i>分析成本</button></div></div>
               <div id="execution-messages" class="execution-messages">
                 <div class="harbor-empty"><i data-lucide="messages-square"></i><strong>开始对话</strong><small>选择左侧智能体后，用自然语言提问，例如「查 HJY20260903-261 的缺料」</small></div>
               </div>
@@ -721,6 +721,7 @@
             <button class="active" type="button" data-usage-tab="system" aria-pressed="true">按系统与 Agent</button>
             <button type="button" data-usage-tab="caller" aria-pressed="false">按调用方</button>
           </div>
+          <div id="usage-focus" class="usage-focus hidden"></div>
 
           <div id="usage-list" class="usage-list"><div class="dashboard-loading">正在读取用量台账…</div></div>
         </section>
@@ -892,6 +893,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=p0-business-v24-20261028"></script>
+  <script type="module" src="/app.js?v=p0-business-v25-20261028"></script>
 </body>
 </html>

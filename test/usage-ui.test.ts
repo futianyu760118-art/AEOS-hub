@@ -52,3 +52,15 @@ test('分析工作台展示每个 Agent 的成本与调用次数', () => {
   assert.match(app, /execution-system-usage/);
   assert.match(app, /fetch\('\/api\/usage\/summary'/);
 });
+
+test('系统与 Agent 卡片可跳转到处理记录与分析成本', () => {
+  assert.match(app, /function openLatestTraceForAgent/);
+  assert.match(app, /function openUsageForAgent/);
+  assert.match(app, /function openUsageForSystem/);
+  assert.match(app, /execution-agent-trace/);
+  assert.match(app, /execution-agent-usage/);
+  assert.match(app, /data-execution-system-usage/);
+  assert.match(app, /data-registry-system-usage/);
+  assert.match(app, /usage-focus/);
+  assert.match(app, /data-usage-focus-clear/);
+});

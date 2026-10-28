@@ -1263,6 +1263,8 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .usage-table .harbor-row > span { font-size: 11px; }
 .usage-table .num { text-align: right; font-family: ui-monospace, Consolas, monospace; }
 .usage-tabs { margin: 0 18px 10px; }
+.usage-focus { display: flex; align-items: center; gap: 8px; margin: 0 18px 10px; font-size: 11px; color: var(--text-2); }
+.usage-focus.hidden { display: none; }
 .usage-table.usage-hierarchy .harbor-row { min-width: 760px; grid-template-columns: minmax(220px, 1fr) 100px 100px 110px 80px 150px; }
 .usage-table.usage-hierarchy.compact .harbor-row { min-width: 420px; grid-template-columns: minmax(180px, 1fr) 110px 90px; }
 .usage-system-row > span:first-child { font-weight: 600; }
@@ -2445,6 +2447,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-agent-item:disabled { opacity: 0.5; cursor: not-allowed; }
 .execution-system-group { display: flex; flex-direction: column; gap: 0.3rem; }
 .execution-system-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 5px; border: 0; background: transparent; color: var(--text-3); font-size: 0.72rem; font-weight: 600; text-align: left; cursor: pointer; }
+.execution-system-head-row { display: flex; align-items: center; gap: 4px; }
+.execution-system-head-row .execution-system-head { flex: 1 1 auto; }
+.execution-system-usage-btn { border: 0; background: transparent; color: var(--text-3); font-size: 0.62rem; cursor: pointer; padding: 2px 4px; }
+.execution-system-usage-btn:hover { color: var(--accent); }
+.execution-chat-actions { display: flex; align-items: center; gap: 6px; }
+.execution-chat-actions.hidden { display: none; }
+.system-actions { display: inline-flex; align-items: center; gap: 6px; }
+.registry-system-usage { margin-left: 0; }
 .execution-system-head:hover { color: var(--text-2); }
 .execution-system-head svg { width: 13px; height: 13px; }
 .execution-system-name { color: var(--text-2); }
