@@ -594,3 +594,48 @@ test('审批后写能力可以派单并携带 request_id', (t) => {
   assert.equal(message.request_id, 'write-123');
   assert.equal(h.registry.getRun(runId)?.state, 'dispatched');
 });
+
+function writeRegistry(t: { after: (fn: () => void) => void }, usageEvents: unknown[]): { registry: ExecutionPlaneRegistry; runId: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-write-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    heartbeatTimeoutMs: 15_000,
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => { let n = 0; return () => `w-${++n}`; })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister({
+    agentId: 'agent-write-usage',
+    name: '写智能体',
+    version: '1.0.0',
+    sourceSystem: '公司中控平台',
+    capabilities: [{
+      name: 'write_control_platform',
+      description: '受控写操作',
+      inputSchema: WRITE_SCHEMA,
+      constraints: { readOnly: false, approvalRequired: true },
+    }],
+  }, () => {});
+  const { runId } = registry.dispatch('agent-write-usage', 'write_control_platform', { operation: 'order.update_note' }, { writeApproved: true });
+  return { registry, runId };
+}
+
+test('写操作未上报用量时不记录 0 用量事件', (t) => {
+  const usageEvents: unknown[] = [];
+  const { registry, runId } = writeRegistry(t, usageEvents);
+  registry.onRunComplete('agent-write-usage', { runId, result: { ok: true } });
+  assert.equal(usageEvents.length, 0);
+});
+
+test('写操作上报用量时仍记录', (t) => {
+  const usageEvents: Array<Record<string, unknown>> = [];
+  const { registry, runId } = writeRegistry(t, usageEvents);
+  registry.onRunComplete('agent-write-usage', {
+    runId,
+    result: { ok: true },
+    usage: { modelId: 'deepseek-flash', tokensIn: 1, tokensOut: 2, cost: 0.01 },
+  });
+  assert.equal(usageEvents.length, 1);
+  assert.equal(usageEvents[0]?.metering, 'reported');
+});

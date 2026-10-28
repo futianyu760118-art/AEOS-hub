@@ -668,6 +668,8 @@ export class ExecutionPlaneRegistry {
     // 每次 run_complete 落一条用量事件（设计稿 §3.2）；未上报用量时明确标记 metering='missing'。
     const usage = normalizeUsage(input.usage);
     const hasUsage = usage.modelId !== null || usage.tokensIn > 0 || usage.tokensOut > 0 || usage.cost > 0;
+    // 写操作不调用模型：未上报用量属正常，不落 0 用量事件，避免显示“未上报/0”。
+    if (cap?.constraints?.readOnly === false && !hasUsage) return;
     this.onUsageEvent?.({
       agentId,
       systemId: entry.record.systemId ?? (entry.record.sourceSystem.trim() ? entry.record.sourceSystem.trim() : 'unknown'),

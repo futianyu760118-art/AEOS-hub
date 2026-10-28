@@ -8604,9 +8604,11 @@ function renderTrace(trace, runDetails = new Map()) {
       <td>${esc(item.consumerSystemId || '—')}</td>
       <td>${esc(item.callerUserId || item.callerAgentId || '—')}</td>
     </tr>`).join('');
+  const hasWriteRun = runs.some((run) => String(run.capability || '').startsWith('write'));
   const usageSection = `
     <section class="surface">
       <div class="surface-head"><div><h2>用量</h2><p>执行方与请求方归属</p></div></div>
+      ${hasWriteRun && !usage.length ? '<p class="form-hint" style="padding: 0 18px 10px;">写操作不调用模型，不产生 Token 或成本。</p>' : ''}
       <div class="trace-scroll trace-usage-scroll">
         <table class="trace-table">
           <thead><tr><th>时间</th><th>模型/类型</th><th>计量</th><th class="num">Token in / out</th><th class="num">成本</th><th>请求方</th><th>调用方</th></tr></thead>
