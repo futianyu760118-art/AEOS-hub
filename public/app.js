@@ -7929,6 +7929,13 @@ function traceRunTaskShortLabel(run) {
   return TRACE_RUN_TASK_SHORT_LABELS[taskType] || '';
 }
 
+function traceRunObjectLabel(run) {
+  const ref = run?.input?.context?.businessObjectRef;
+  if (typeof ref !== 'string' || !ref.trim()) return '';
+  const parts = ref.trim().split('/');
+  return parts[parts.length - 1] || '';
+}
+
 function humanizeTraceText(value) {
   let text = String(value ?? '');
   for (const [agentId, label] of Object.entries(TRACE_AGENT_LABELS)) text = text.split(agentId).join(label);
@@ -7985,9 +7992,11 @@ async function loadTraceRecent() {
       const latest = group[group.length - 1];
       const fullLabels = [...new Set(group.map(traceRunTaskLabel).filter(Boolean))];
       const shortLabels = [...new Set(group.map(traceRunTaskShortLabel).filter(Boolean))];
-      const title = fullLabels.length > 1
+      const objectLabel = group.map(traceRunObjectLabel).find(Boolean) || '';
+      const baseTitle = fullLabels.length > 1
         ? `经营分析（${shortLabels.join('、')}）`
         : (fullLabels[0] || TRACE_CAPABILITY_LABELS[group[0].capability] || group[0].capability);
+      const title = objectLabel ? `${baseTitle} · ${objectLabel}` : baseTitle;
       const running = group.some((run) => run.state === 'dispatched' || run.state === 'running');
       const failed = group.some((run) => run.state === 'failed' || run.state === 'recalled');
       const status = running ? '运行中' : failed ? '有失败' : '已完成';
