@@ -131,3 +131,20 @@ Hub 侧配套：派单消息新增 `request_id`；处理记录/分发报告展�
 
 - `AGENT_BUSY` 已验证（并发第二笔）；
 - `AGENT_NOT_FOUND` / `TARGET_AGENT_UNAVAILABLE` 未触发（Hub 暂无 `target_agent_ref` 入口）。
+
+## 2026-10-28 写操作全链路验收通过
+
+用户在智能助手对话内完成三个写操作的真实写入（点确认执行）：
+
+| 操作 | 结果 | before → after | handled_by |
+|---|---|---|---|
+| `order.update_note` | 完成 | `""` → `"中台修复后复测"` | `spc-agent-order-write` |
+| `order.update_status` | 完成 | `open/is_closed=0` → `closed/is_closed=1`（后由用户恢复为 open） | 同上 |
+| `order.update_delivery_date` | 完成 | `2026-05-15` → `2026-11-15`（后由用户恢复为 05-15） | 同上 |
+
+- 对话流程：自然语言发起 → 确认按钮 → 派单 → 完成消息展示实际处理方；
+- `resolve-caller` 修复后未再出现；`AGENT_BUSY` 已验证；
+- 写操作不记录 0 用量事件（已清理历史 7 条 0 记录）；
+- 台账/审计：创建 16、批准 9、拒绝 7、完成 8、失败 1。
+
+写平面 P0 验收通过。
