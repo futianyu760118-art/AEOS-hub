@@ -84,3 +84,50 @@
 Hub 侧配套：派单消息新增 `request_id`；处理记录/分发报告展示“实际处理 Agent”。
 
 观察到的 Hub 侧问题：并发创建借调单时偶发 `borrow-orders.json` rename `EPERM`（一次 Kitting 请求 500，重试成功），待加写重试/串行化。
+
+## 2026-10-28 全能力覆盖（查询/分析/写入）
+
+### 查询 `query_control_platform`：18/18
+
+| 端点 | 结果 | 备注 |
+|---|---|---|
+| `/common/ping` | 通过 | |
+| `/external/orders/list` | 通过 | 3269 条 |
+| `/external/order-details/list` | 通过 | 需 `order_no` |
+| `/external/boms/tree` | 通过 | 需 `bom_id`；`order_no`/`product_code`/`bom_no` 会 422 |
+| `/external/materials/list` | 通过 | 数据置信度 medium |
+| `/external/suppliers/list` | 通过 | |
+| `/external/material-kitting/results` | 通过 | 数据置信度 low（快照 10-25） |
+| `/external/material-kitting/shortages` | 通过 | 数据置信度 low（快照 10-25） |
+| `/external/material-kitting/demands` | 通过 | |
+| `/external/inventory/availability` | 通过 | |
+| `/external/material-supplies/list` | 通过 | |
+| `/external/quality-issues/list` | 通过 | |
+| `/external/quality-trace/list` | 通过 | 需 `order_no` |
+| `/external/production/work-orders/list` | 通过 | 78910 条 |
+| `/external/production/operations/list` | 通过 | 按订单查询返回 0 条 |
+| `/external/production/order-links/list` | 通过 | 需 `order_no` |
+| `/external/production/reports/list` | 通过 | 需 `work_order_no` |
+| `/external/production/capacity/list` | 通过 | 需 `date_start` + `date_end` |
+
+### 分析 `reason_control_platform`：4/4
+
+| task_type | 结果 | 耗时 | handled_by |
+|---|---|---|---|
+| `order_delivery_analysis` | 完成，6 条结论 | 20.4s | `spc-agent-order-risk` |
+| `material_kitting_analysis` | 完成，6 条结论 | 20.3s | `spc-agent-kitting-risk` |
+| `quality_analysis` | 完成，6 条结论 | 68.3s | `spc-agent-quality-risk` |
+| `production_analysis` | 完成，6 条结论 | 12.1s | `spc-agent-production-risk` |
+
+`request_id` 均原样回显；`data_confidence=high`、`stale=false`。
+
+### 写入 `write_control_platform`：3/3 创建校验
+
+- `order.update_note`、`order.update_status`、`order.update_delivery_date` 均通过 schema/权限校验并进入 `pending_approval`；
+- 实际派单需要 Hub 人工确认（验收后清理了测试请求，未修改数据）；
+- 写入端到端依赖中台 `resolve-caller` 修复后的手工确认测试。
+
+### 其他
+
+- `AGENT_BUSY` 已验证（并发第二笔）；
+- `AGENT_NOT_FOUND` / `TARGET_AGENT_UNAVAILABLE` 未触发（Hub 暂无 `target_agent_ref` 入口）。
