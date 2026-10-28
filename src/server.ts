@@ -1196,8 +1196,12 @@ function notifyWriteRecord(record: WriteRequestRecord): void {
   if (!convId) return;
   writeConversationByRequest.delete(record.id);
   const orderNo = (record.input as Record<string, unknown> | null)?.orderNo;
+  const result = isRecord(record.result) ? record.result : {};
+  const handledBy = isRecord(result.handled_by) ? result.handled_by : {};
+  const handler = typeof handledBy.agentName === 'string' ? handledBy.agentName
+    : typeof handledBy.agentId === 'string' ? handledBy.agentId : '';
   const text = record.status === 'completed'
-    ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}。`
+    ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}${handler ? ` · 处理方 ${handler}` : ''}。`
     : `写操作失败：${record.error?.message || '未知错误'}`;
   pushAssistantReply(convId, text);
 }
