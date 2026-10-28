@@ -82,6 +82,7 @@ import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport, loadConclusionDispatchPolicy, saveConclusionDispatchPolicy } from './conclusion-dispatcher.ts';
+import { RecentAnalysisCache } from './recent-analysis-cache.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
 import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
@@ -268,6 +269,17 @@ const conclusionDispatcher = new ConclusionDispatcher(executionPlane, {
   appendEvidence,
   systemLabel: (systemId) => listSystems().find((system) => system.systemId === systemId)?.name ?? systemId,
 });
+// 最高风险分析短时缓存：5 分钟内相同问题直接复用，避免重复调用执行面。
+type HighestRiskCacheEntry = {
+  answer: string;
+  requestId: string;
+  queryRunId: string;
+  reasoningRunId: string;
+  orderNo: string;
+  cachedAt: string;
+};
+const HIGHEST_RISK_CACHE_TTL_MS = 5 * 60_000;
+const highestRiskAnswerCache = new RecentAnalysisCache<HighestRiskCacheEntry>({ ttlMs: HIGHEST_RISK_CACHE_TTL_MS });
 const catalogApi = new CatalogApi((tenantId) => {
   const allSystems = listSystems();
   const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
@@ -1221,6 +1233,29 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
   }
 
   const runId = `hub-orch-${randomUUID()}`;
+  // 短时缓存：同一问题 5 分钟内重复提问直接复用上次结果；“重新分析/下一条”不走缓存。
+  const forceRefresh = /重新分析|再分析|重跑/.test(text);
+  const cacheKey = `highest-risk|${text.trim().replace(/\s+/g, ' ').toLowerCase()}`;
+  const cached = !forceRefresh && !wantsNextOrder ? highestRiskAnswerCache.get(cacheKey) : null;
+  if (cached) {
+    const answer = `${cached.answer}\n\n（5 分钟内已分析过同一问题，本次直接返回上次结果；如需重新分析，请回复“重新分析”。）`;
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
+    pushConv(convId, {
+      type: 'assistant_reply',
+      convId,
+      text: answer,
+      meta: {
+        requestId: cached.requestId,
+        queryRunId: cached.queryRunId,
+        reasoningRunId: cached.reasoningRunId,
+        orderNo: cached.orderNo,
+        cached: true,
+        cachedAt: cached.cachedAt,
+      },
+    });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
+    return true;
+  }
   const envelope = { type: 'evt', convId, sessionId, runId, runtimeInstanceId: 'hub-execution-orchestrator' };
   pushConv(convId, {
     ...envelope,
@@ -1245,6 +1280,16 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
       ...(excludeOrderNos && excludeOrderNos.length ? { excludeOrderNos } : {}),
     });
     const answer = formatHighestRiskAnswer(result);
+    if (!forceRefresh && !wantsNextOrder) {
+      highestRiskAnswerCache.set(cacheKey, {
+        answer,
+        requestId: result.requestId,
+        queryRunId: result.queryRunId,
+        reasoningRunId: result.reasoningRunId,
+        orderNo: result.order.orderNo,
+        cachedAt: new Date().toISOString(),
+      });
+    }
     appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
     pushConv(convId, {
       type: 'assistant_reply',
@@ -1267,7 +1312,7 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
         },
         {
           traceId: result.requestId,
-          force: /重新分析|再分析|重跑/.test(text),
+          force: forceRefresh,
           onProgress: (event) => {
             pushConv(convId, {
               type: 'dispatch_progress',
