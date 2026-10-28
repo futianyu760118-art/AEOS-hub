@@ -102,6 +102,16 @@ export interface ConclusionDispatchReport {
   endedAt: string;
 }
 
+/** 分发过程中的进度事件，供会话实时展示。 */
+export interface ConclusionDispatchProgress {
+  phase: 'started' | 'item_started' | 'item_completed';
+  index: number;
+  total: number;
+  domain?: DispatchDomain;
+  status?: ConclusionDispatchItemStatus;
+  conclusions?: number;
+}
+
 type DispatchPlane = Pick<ExecutionPlaneRegistry, 'list' | 'dispatch' | 'getRun' | 'recall'>;
 
 export interface ConclusionDispatcherOptions {
@@ -350,7 +360,7 @@ export class ConclusionDispatcher {
   /** 对单个业务对象按策略分发（默认使用策略里的 dispatchDomains）。 */
   async dispatchForObject(
     input: { businessObjectRef: string; orderNo?: string; title?: string; domains?: DispatchDomain[] },
-    context: { traceId?: string | null; caller?: CallerContext | null } = {},
+    context: { traceId?: string | null; caller?: CallerContext | null; onProgress?: (event: ConclusionDispatchProgress) => void } = {},
   ): Promise<ConclusionDispatchReport> {
     const policy = loadConclusionDispatchPolicy(this.policyFile);
     const domains = (input.domains ?? policy.dispatchDomains)
@@ -367,7 +377,7 @@ export class ConclusionDispatcher {
   /** 分发一组结构化事项；逐项出结果，整体不抛错。 */
   async dispatch(
     items: ConclusionDispatchItem[],
-    context: { traceId?: string | null; caller?: CallerContext | null; policy?: ConclusionDispatchPolicy } = {},
+    context: { traceId?: string | null; caller?: CallerContext | null; policy?: ConclusionDispatchPolicy; onProgress?: (event: ConclusionDispatchProgress) => void } = {},
   ): Promise<ConclusionDispatchReport> {
     const policy = context.policy ?? loadConclusionDispatchPolicy(this.policyFile);
     const startedAt = this.now().toISOString();
@@ -393,8 +403,12 @@ export class ConclusionDispatcher {
       .filter((item) => typeof item.businessObjectRef === 'string' && item.businessObjectRef.trim())
       .slice(0, policy.maxItemsPerAnalysis || 0);
     const agents = this.plane.list().agents;
+    const total = selected.length;
+    if (total > 0) context.onProgress?.({ phase: 'started', index: 0, total });
 
-    for (const item of selected) {
+    for (const [offset, item] of selected.entries()) {
+      const index = offset + 1;
+      context.onProgress?.({ phase: 'item_started', index, total, domain: item.domain });
       const result = await this.dispatchItem(item, {
         policy,
         traceId,
@@ -402,6 +416,14 @@ export class ConclusionDispatcher {
         agents,
         store,
         recentCutoff,
+      });
+      context.onProgress?.({
+        phase: 'item_completed',
+        index,
+        total,
+        domain: result.domain,
+        status: result.status,
+        ...(typeof result.conclusions === 'number' ? { conclusions: result.conclusions } : {}),
       });
       report.items.push(result);
       if (result.systemId && result.systemName === undefined) {

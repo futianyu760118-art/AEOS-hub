@@ -376,3 +376,20 @@ test('报告使用系统显示名而不是技术 ID', async () => {
   assert.equal(report.items[0]?.systemName, '公司中控平台');
   assert.match(formatConclusionDispatchReport(report), /【物料齐套 · 公司中控平台】/);
 });
+
+test('分发过程推送进度事件', async () => {
+  const { plane } = planeFixture();
+  const files = sandbox();
+  const events: Array<Record<string, unknown>> = [];
+  await buildDispatcher(plane, files).dispatchForObject(
+    { businessObjectRef: 'business://order/O-12' },
+    { onProgress: (event) => { events.push(event as unknown as Record<string, unknown>); } },
+  );
+  assert.deepEqual(events[0], { phase: 'started', index: 0, total: 2 });
+  assert.deepEqual(events[1], { phase: 'item_started', index: 1, total: 2, domain: 'kitting' });
+  assert.equal(events[2]?.phase, 'item_completed');
+  assert.equal(events[2]?.status, 'completed');
+  assert.equal(events[2]?.conclusions, 2);
+  assert.equal(events[3]?.domain, 'quality');
+  assert.equal(events.length, 5);
+});

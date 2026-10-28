@@ -81,7 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, e
 import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
-import { ConclusionDispatcher, formatConclusionDispatchReport } from './conclusion-dispatcher.ts';
+import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport } from './conclusion-dispatcher.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
 import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
@@ -1243,7 +1243,7 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
         orderNo: result.order.orderNo,
       },
     });
-    // 结论自动分发：不阻塞主回答，完成后在同一会话追加一条补充说明。
+    // 结论自动分发：不阻塞主回答，过程中推送进度，完成后在同一会话追加报告。
     void conclusionDispatcher
       .dispatchForObject(
         {
@@ -1251,7 +1251,22 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
           orderNo: result.order.orderNo,
           title: result.order.businessObjectRef,
         },
-        { traceId: result.requestId },
+        {
+          traceId: result.requestId,
+          onProgress: (event) => {
+            pushConv(convId, {
+              type: 'dispatch_progress',
+              convId,
+              phase: event.phase,
+              domain: event.domain ?? null,
+              domainLabel: event.domain ? DOMAIN_LABELS[event.domain] : null,
+              index: event.index,
+              total: event.total,
+              status: event.status ?? null,
+              conclusions: event.conclusions ?? null,
+            });
+          },
+        },
       )
       .then((report) => {
         const text = formatConclusionDispatchReport(report);
@@ -1261,7 +1276,7 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
           type: 'assistant_reply',
           convId,
           text,
-          meta: { dispatchId: report.dispatchId, traceId: report.traceId, counts: report.counts },
+          meta: { dispatchId: report.dispatchId, traceId: report.traceId, counts: report.counts, dispatchComplete: true },
         });
       })
       .catch((error) => {

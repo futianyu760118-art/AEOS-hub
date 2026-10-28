@@ -3239,12 +3239,35 @@ function appendMsg(kind, text, extraClass) {
   return wrap;
 }
 
+function renderDispatchProgress(message) {
+  const host = els.messages;
+  if (!host) return;
+  let el = document.getElementById('dispatch-progress-line');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'dispatch-progress-line';
+    el.className = 'dispatch-progress-line';
+    host.appendChild(el);
+  }
+  const label = message.domainLabel || message.domain || '分析';
+  if (message.phase === 'item_completed') {
+    const done = message.status === 'completed'
+      ? `已完成${typeof message.conclusions === 'number' ? `（${message.conclusions} 条结论）` : ''}`
+      : '未能完成';
+    el.textContent = `${label}${done}${message.index < message.total ? '；继续下一项…' : ''}`;
+  } else if (message.phase === 'item_started') {
+    el.textContent = `正在分发给${label}（${message.index}/${message.total}）…`;
+  } else {
+    el.textContent = `正在分发给其他系统 Agent（共 ${message.total} 项）…`;
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
 function msgMeta(text) {
   const node = document.createElement('div');
   node.className = 'meta';
   node.textContent = text;
-  return node;
-}
+  return node;}
 
 function resetTurn(scope = {}) {
   // Live reasoning is the only transient DOM node owned by a turn. Completed
@@ -7253,8 +7276,16 @@ function connect() {
       case 'user_message':
         if (message.convId === curConvId) appendLocalUser(message.text);
         break;
+      case 'dispatch_progress': {
+        if (message.convId === curConvId) renderDispatchProgress(message);
+        break;
+      }
       case 'assistant_reply': {
-        if (message.convId !== curConvId) break;
+        if (message.convId !== curConvId) {
+          if (message.meta && message.meta.dispatchComplete) toast('自动分发完成，结果已写入会话');
+          break;
+        }
+        document.getElementById('dispatch-progress-line')?.remove();
         const wrap = appendMsg('agent', '');
         const bubble = $('.bubble', wrap);
         if (bubble) {
