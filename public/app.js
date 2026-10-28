@@ -7887,6 +7887,17 @@ const TRACE_KIND_LABELS = { borrow: '借调', run: '执行', usage: '用量', ev
 const TRACE_AGENT_LABELS = { 'gateway-control-platform': '中台网关', 'runtime-execution-query': 'PLM 助手' };
 const TRACE_CAPABILITY_LABELS = { query_control_platform: '查询', reason_control_platform: '分析', query_plm: 'PLM 查询', reason_plm: 'PLM 分析', query_local_files: '本地文件查询' };
 const TRACE_RUN_TASK_LABELS = { order_delivery_analysis: '订单交付分析', material_kitting_analysis: '齐套分析', quality_analysis: '质量分析', production_analysis: '生产分析' };
+const TRACE_RUN_TASK_SHORT_LABELS = { order_delivery_analysis: '订单交付', material_kitting_analysis: '齐套', quality_analysis: '质量', production_analysis: '生产' };
+
+function traceRunTaskLabel(run) {
+  const taskType = run?.input && typeof run.input.task_type === 'string' ? run.input.task_type : '';
+  return TRACE_RUN_TASK_LABELS[taskType] || '';
+}
+
+function traceRunTaskShortLabel(run) {
+  const taskType = run?.input && typeof run.input.task_type === 'string' ? run.input.task_type : '';
+  return TRACE_RUN_TASK_SHORT_LABELS[taskType] || '';
+}
 
 function humanizeTraceText(value) {
   let text = String(value ?? '');
@@ -7928,11 +7939,39 @@ async function loadTraceRecent() {
     const agentsData = agentsResponse.ok ? await agentsResponse.json() : {};
     const orders = Array.isArray(ordersData?.orders) ? ordersData.orders : [];
     const runIdsWithOrders = new Set(orders.map((order) => order.runId).filter(Boolean));
-    const recentRuns = (Array.isArray(agentsData?.runs) ? agentsData.runs : [])
-      .filter((run) => !runIdsWithOrders.has(run.runId))
-      .sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))
-      .slice(0, 12);
-    // 借调单与执行 run 是两条留痕来源：按时间合并排序，避免“最后一次分析”被更早的借调单压在下面。
+    const borrowTraceIds = new Set(orders.map((order) => order.orderId));
+    // 同一 traceId 下的查询/推理/分发子分析属于同一次分析，列表按链路聚合而不是按 run 拆开。
+    const groups = new Map();
+    for (const run of (Array.isArray(agentsData?.runs) ? agentsData.runs : [])) {
+      if (runIdsWithOrders.has(run.runId)) continue;
+      const traceId = run.traceId || run.runId;
+      if (borrowTraceIds.has(traceId)) continue;
+      const list = groups.get(traceId) || [];
+      list.push(run);
+      groups.set(traceId, list);
+    }
+    const traceEntries = [...groups.entries()].map(([traceId, group]) => {
+      group.sort((left, right) => String(left.startedAt || '').localeCompare(String(right.startedAt || '')));
+      const latest = group[group.length - 1];
+      const fullLabels = [...new Set(group.map(traceRunTaskLabel).filter(Boolean))];
+      const shortLabels = [...new Set(group.map(traceRunTaskShortLabel).filter(Boolean))];
+      const title = fullLabels.length > 1
+        ? `经营分析（${shortLabels.join('、')}）`
+        : (fullLabels[0] || TRACE_CAPABILITY_LABELS[group[0].capability] || group[0].capability);
+      const running = group.some((run) => run.state === 'dispatched' || run.state === 'running');
+      const failed = group.some((run) => run.state === 'failed' || run.state === 'recalled');
+      const status = running ? '运行中' : failed ? '有失败' : '已完成';
+      const at = latest.endedAt || latest.startedAt;
+      return {
+        at,
+        html: `
+      <button class="trace-recent-item" type="button" data-trace-id="${esc(traceId)}">
+        <span><strong>${esc(title)}</strong><small>${esc(group[0].agentId)} · ${group.length > 1 ? `${group.length} 个步骤 · ` : ''}${status}</small></span>
+        <time>${esc(formatDateTimeText(at))}</time>
+      </button>`,
+      };
+    });
+    // 借调单与执行链路是两条留痕来源：按时间合并排序，避免最新的分析被更早的记录压在下面。
     const entries = [
       ...orders.map((order) => ({
         at: order.createdAt,
@@ -7942,18 +7981,7 @@ async function loadTraceRecent() {
         <time>${esc(formatDateTimeText(order.createdAt))}</time>
       </button>`,
       })),
-      ...recentRuns.map((run) => {
-        const taskType = run.input && typeof run.input.task_type === 'string' ? run.input.task_type : '';
-        const label = TRACE_RUN_TASK_LABELS[taskType] || run.capability;
-        return {
-          at: run.startedAt,
-          html: `
-      <button class="trace-recent-item" type="button" data-trace-id="${esc(run.runId)}">
-        <span><strong>${esc(label)}</strong><small>${esc(run.agentId)} · ${esc(aiRunStatusLabel(run.state))}</small></span>
-        <time>${esc(formatDateTimeText(run.startedAt))}</time>
-      </button>`,
-        };
-      }),
+      ...traceEntries,
     ].sort((left, right) => String(right.at || '').localeCompare(String(left.at || ''))).slice(0, 10);
     const items = entries.map((entry) => entry.html);
     root.innerHTML = items.length
