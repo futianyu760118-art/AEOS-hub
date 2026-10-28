@@ -14,6 +14,18 @@ export type ExecutionAgentRuntimeStatus = 'idle' | 'working' | 'error';
 export type ExecutionAgentConnectionStatus = 'online' | 'offline';
 export type ExecutionRunState = 'dispatched' | 'running' | 'completed' | 'failed' | 'recalled';
 
+export interface ExecutionCapabilityConstraints {
+  readOnly?: boolean;
+  requireEvidence?: boolean;
+  /** 写能力必须经 Hub 人工审批后才能派单。 */
+  approvalRequired?: boolean;
+  riskLevel?: 'low' | 'medium' | 'high';
+  /** 提供方是否保证同一 idempotencyKey 只执行一次。 */
+  idempotent?: boolean;
+  /** 提供方是否支持 dryRun 预演。 */
+  dryRun?: boolean;
+}
+
 export interface ExecutionAgentCapability {
   name: string;
   description: string;
@@ -22,7 +34,7 @@ export interface ExecutionAgentCapability {
   outputSchemaVersion?: string;
   inputSchema?: Schema;
   outputSchema?: Schema;
-  constraints?: { readOnly?: boolean; requireEvidence?: boolean };
+  constraints?: ExecutionCapabilityConstraints;
   intent?: QueryIntent;
 }
 
@@ -185,20 +197,25 @@ function parseSchema(value: unknown, field: string): Schema | undefined {
   return value as Schema;
 }
 
-function parseConstraints(value: unknown): { readOnly?: boolean; requireEvidence?: boolean } | undefined {
+function parseConstraints(value: unknown): ExecutionCapabilityConstraints | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints 必须是对象');
   }
   const record = value as Record<string, unknown>;
-  const constraints: { readOnly?: boolean; requireEvidence?: boolean } = {};
-  if (record.readOnly !== undefined) {
-    if (typeof record.readOnly !== 'boolean') throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints.readOnly 必须是布尔值');
-    constraints.readOnly = record.readOnly;
+  const constraints: ExecutionCapabilityConstraints = {};
+  for (const field of ['readOnly', 'requireEvidence', 'approvalRequired', 'idempotent', 'dryRun'] as const) {
+    if (record[field] === undefined) continue;
+    if (typeof record[field] !== 'boolean') {
+      throw new ExecutionPlaneError('INVALID_ARGUMENT', `constraints.${field} 必须是布尔值`);
+    }
+    constraints[field] = record[field] as boolean;
   }
-  if (record.requireEvidence !== undefined) {
-    if (typeof record.requireEvidence !== 'boolean') throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints.requireEvidence 必须是布尔值');
-    constraints.requireEvidence = record.requireEvidence;
+  if (record.riskLevel !== undefined) {
+    if (record.riskLevel !== 'low' && record.riskLevel !== 'medium' && record.riskLevel !== 'high') {
+      throw new ExecutionPlaneError('INVALID_ARGUMENT', 'constraints.riskLevel 必须是 low/medium/high');
+    }
+    constraints.riskLevel = record.riskLevel;
   }
   return Object.keys(constraints).length ? constraints : undefined;
 }
@@ -635,7 +652,7 @@ export class ExecutionPlaneRegistry {
   }
 
   // ---------- 管理面 → 执行面 ----------
-  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string; caller?: CallerContext | null; requestId?: string } = {}): { runId: string; state: ExecutionRunState } {
+  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string; caller?: CallerContext | null; requestId?: string; writeApproved?: boolean } = {}): { runId: string; state: ExecutionRunState } {
     const entry = this.requireAgent(agentId);
     if (entry.record.connectionStatus !== 'online') {
       throw new ExecutionPlaneError('AGENT_OFFLINE', `执行面 ${agentId} 不在线，无法派单`);
@@ -656,8 +673,9 @@ export class ExecutionPlaneRegistry {
         console.warn(`[execution-plane] ${message}；当前为 observe 模式，仍允许派单`);
       }
     }
-    if (cap.constraints?.readOnly !== true) {
-      throw new ExecutionPlaneError('WRITE_FORBIDDEN', `能力 ${capability} 未声明只读，试点仅允许只读能力`);
+    if (cap.constraints?.readOnly !== true && options.writeApproved !== true) {
+      // 写能力只能由 Hub 写操作审批服务在人工批准后派单；外部/直连调用一律拒绝。
+      throw new ExecutionPlaneError('WRITE_FORBIDDEN', `能力 ${capability} 是写能力，必须经 Hub 审批后派单`);
     }
     const inputRecord = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
     if (cap.inputSchema) {

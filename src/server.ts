@@ -97,6 +97,9 @@ import { BorrowOrderService, BorrowOrderServiceError, borrowOrderSummary } from 
 import { CatalogApi } from './catalog-api.ts';
 import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
 import { verifySystemToken } from './system-token.ts';
+import { parseCallerContext } from './caller-context.ts';
+import { WriteRequestStore } from './write-request-store.ts';
+import { WriteRequestError, WriteRequestService } from './write-request-service.ts';
 import { buildTrace, readEvidenceEntries } from './trace.ts';
 import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 import {
@@ -280,6 +283,15 @@ type HighestRiskCacheEntry = {
 };
 const HIGHEST_RISK_CACHE_TTL_MS = 5 * 60_000;
 const highestRiskAnswerCache = new RecentAnalysisCache<HighestRiskCacheEntry>({ ttlMs: HIGHEST_RISK_CACHE_TTL_MS });
+// 写操作审批：提交 → 人工审批 → 派单；写能力只能由该服务在审批后派单。
+const writeRequestStore = new WriteRequestStore();
+const writeRequestService = new WriteRequestService({
+  store: writeRequestStore,
+  plane: executionPlane,
+  loadPermissions: loadExecutionAgentPermissions,
+  tenantIdOf: (systemId) => systemId ? resolveTenantId(systemId, listSystems()) : null,
+  appendEvidence,
+});
 const catalogApi = new CatalogApi((tenantId) => {
   const allSystems = listSystems();
   const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
@@ -1990,6 +2002,73 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // ---------- 写操作请求（系统 token：可提交/查询；审批只能由 Hub 用户完成） ----------
+  if (url.pathname.startsWith('/api/system/write-requests')) {
+    try {
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const systemId = decodeSystemIdHeader(headerValue('x-aeos-system-id'));
+      const token = headerValue('x-aeos-system-token');
+      if (!systemId || !token || !verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token)) {
+        sendJson(res, 401, { error: 'authentication required' });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/system/write-requests') {
+        const body = await readJsonBody(req, 128 * 1024).catch(() => null);
+        if (!isRecord(body)) { sendJson(res, 400, { error: 'invalid write request body' }); return; }
+        const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+        if (!requestId) { sendJson(res, 400, { error: 'requestId 必填' }); return; }
+        let caller = null;
+        if (body.caller !== undefined) {
+          try {
+            caller = parseCallerContext(body.caller);
+          } catch (error) {
+            sendJson(res, 400, { error: `caller 无效：${(error as Error).message}` });
+            return;
+          }
+          if (caller && caller.systemId !== systemId) {
+            sendJson(res, 400, { error: 'caller.systemId 必须等于发起系统' });
+            return;
+          }
+        }
+        const outcome = writeRequestService.create({
+          tenantId: resolveTenantId(systemId, listSystems()) ?? DEFAULT_TENANT_ID,
+          capability: typeof body.capability === 'string' ? body.capability : '',
+          systemId: typeof body.toSystem === 'string' ? body.toSystem : null,
+          input: body.input,
+          reason: typeof body.reason === 'string' ? body.reason : '',
+          requestedBy: { kind: 'system', id: systemId },
+          caller,
+          idempotencyKey: requestId,
+        });
+        sendJson(res, outcome.idempotent ? 200 : 201, outcome);
+        return;
+      }
+      const detailMatch = url.pathname.match(/^\/api\/system\/write-requests\/([^/]+)$/);
+      if (detailMatch && req.method === 'GET') {
+        const id = decodeURIComponent(detailMatch[1] ?? '').trim();
+        const record = writeRequestStore.get(id);
+        if (!record) { sendJson(res, 404, { error: 'write request not found' }); return; }
+        const requesterSystem = record.requestedBy.kind === 'system' ? record.requestedBy.id : null;
+        if (requesterSystem !== systemId && record.systemId !== systemId) {
+          sendJson(res, 403, { error: 'write request not visible to this system' });
+          return;
+        }
+        sendJson(res, 200, { request: record });
+        return;
+      }
+      sendJson(res, 404, { error: 'write request endpoint not found' });
+    } catch (error) {
+      if (error instanceof WriteRequestError) {
+        sendJson(res, error.status, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+    }
+    return;
+  }
   // ---------- 统一链路查询（系统 token，只读，限参与方） ----------
   const systemTraceMatch = url.pathname.match(/^\/api\/system\/trace\/([^/]+)$/);
   if (systemTraceMatch) {
@@ -2095,6 +2174,74 @@ const server = createServer(async (req, res) => {
   const requestActor = publicAsset ? 'anonymous' : requestActorContext!.actorId;
   const actorTenant = requestActorContext?.tenantId?.trim();
   const requestTenantId = !actorTenant || actorTenant === 'local-dev' ? DEFAULT_TENANT_ID : actorTenant;
+  // ---------- 写操作审批（浏览器会话；创建与审批仅 manager / supervisor） ----------
+  if (url.pathname.startsWith('/api/write-requests')) {
+    try {
+      const roles = requestActorContext?.roles ?? [];
+      const canWrite = roles.includes('manager') || roles.includes('supervisor');
+      const actor = { id: requestActor, roles, tenantId: requestTenantId };
+      if (url.pathname === '/api/write-requests/capabilities' && req.method === 'GET') {
+        sendJson(res, 200, { capabilities: writeRequestService.listCapabilities(requestTenantId) });
+        return;
+      }
+      if (url.pathname === '/api/write-requests') {
+        if (req.method === 'GET') {
+          const status = url.searchParams.get('status');
+          const limit = Number(url.searchParams.get('limit') || 100);
+          sendJson(res, 200, {
+            requests: writeRequestService.list({
+              tenantId: requestTenantId,
+              status: status === 'pending_approval' || status === 'rejected' || status === 'dispatched'
+                || status === 'completed' || status === 'failed' || status === 'cancelled' ? status : null,
+              limit: Number.isFinite(limit) ? limit : 100,
+            }),
+          });
+          return;
+        }
+        if (req.method === 'POST') {
+          if (!canWrite) { sendJson(res, 403, { error: '只有 manager / supervisor 可以提交写操作' }); return; }
+          const body = await readJsonBody(req, 128 * 1024).catch(() => null);
+          if (!isRecord(body)) { sendJson(res, 400, { error: 'invalid write request body' }); return; }
+          const outcome = writeRequestService.create({
+            tenantId: requestTenantId,
+            capability: typeof body.capability === 'string' ? body.capability : '',
+            systemId: typeof body.systemId === 'string' ? body.systemId : null,
+            input: body.input,
+            reason: typeof body.reason === 'string' ? body.reason : '',
+            requestedBy: { kind: 'user', id: requestActor },
+            idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : null,
+          });
+          sendJson(res, outcome.idempotent ? 200 : 201, outcome);
+          return;
+        }
+      }
+      const match = url.pathname.match(/^\/api\/write-requests\/([^/]+)(?:\/(approve|reject))?$/);
+      if (match) {
+        const id = decodeURIComponent(match[1] ?? '').trim();
+        if (!match[2] && req.method === 'GET') {
+          sendJson(res, 200, { request: writeRequestService.get(id, requestTenantId) });
+          return;
+        }
+        if (match[2] && req.method === 'POST') {
+          if (!canWrite) { sendJson(res, 403, { error: '只有 manager / supervisor 可以审批写操作' }); return; }
+          const body = await readJsonBody(req, 16 * 1024).catch(() => null);
+          const record = match[2] === 'approve'
+            ? writeRequestService.approve(id, actor, isRecord(body) && typeof body.note === 'string' ? body.note : null)
+            : writeRequestService.reject(id, actor, isRecord(body) && typeof body.reason === 'string' ? body.reason : null);
+          sendJson(res, 200, { request: record });
+          return;
+        }
+      }
+      sendJson(res, 404, { error: 'write request endpoint not found' });
+    } catch (error) {
+      if (error instanceof WriteRequestError) {
+        sendJson(res, error.status, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+    }
+    return;
+  }
   let rel: string;
   try {
     rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
@@ -3169,13 +3316,33 @@ executionWss.on('connection', (ws, request) => {
         if (agentId) executionPlane.onHeartbeat(agentId, { status: msg.status, currentRunId: msg.currentRunId });
       } else if (type === 'run_update') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunUpdate(agentId, { runId: msg.runId, state: msg.state });
+        if (agentId) {
+          executionPlane.onRunUpdate(agentId, { runId: msg.runId, state: msg.state });
+          if (msg.state === 'recalled' && typeof msg.runId === 'string' && msg.runId.trim()) {
+            writeRequestService.onRunFinished(msg.runId.trim(), { state: 'failed', error: { code: 'RECALLED', message: '写操作已召回' } });
+          }
+        }
       } else if (type === 'run_complete') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result, usage: msg.usage });
+        if (agentId) {
+          executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result, usage: msg.usage });
+          if (typeof msg.runId === 'string' && msg.runId.trim()) {
+            writeRequestService.onRunFinished(msg.runId.trim(), { state: 'completed', result: msg.result });
+          }
+        }
       } else if (type === 'run_failed') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });
+        if (agentId) {
+          executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });
+          if (typeof msg.runId === 'string' && msg.runId.trim()) {
+            writeRequestService.onRunFinished(msg.runId.trim(), {
+              state: 'failed',
+              error: isRecord(msg.error) && typeof msg.error.code === 'string' && typeof msg.error.message === 'string'
+                ? { code: msg.error.code, message: msg.error.message }
+                : null,
+            });
+          }
+        }
       } else if (type === 'run_event') {
         // 执行步骤回执：校验归属、去重、限额后落库；失败只回 ack，不影响任务本身。
         const agentId = executionWsAgent.get(ws);

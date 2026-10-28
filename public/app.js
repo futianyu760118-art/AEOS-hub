@@ -304,6 +304,7 @@ const commands = [
   { view: 'ai-obs', label: 'AI 运行观测', desc: 'Hub 派单任务与各系统自有助手的统一观测', icon: 'scan-eye', group: '分析与记录' },
   { view: 'ops', label: '运行状态', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
+  { view: 'writes', label: '写操作', desc: '提交、审批与追踪写操作', icon: 'file-pen-line', group: '系统' },
 ];
 
 // Local experience review: keep module implementations intact while temporarily
@@ -741,6 +742,7 @@ function showView(view, options = {}) {
   if (view === 'trace') loadTraceView();
   if (view === 'ai-obs') loadAiObs();
   if (view === 'ops') loadOps();
+  if (view === 'writes') loadWrites();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
   syncBorrowRefresh();
@@ -1195,6 +1197,219 @@ function renderUsage() {
     root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(filteredSystems, filteredAgents)}</section>`;
   }
   refreshIcons(root);
+}
+
+// ---------- 写操作（提交 / 审批 / 追踪） ----------
+let writeCapabilities = [];
+let writeRequests = [];
+let writeControlsWired = false;
+
+const WRITE_STATUS_LABELS = {
+  pending_approval: '待审批',
+  rejected: '已拒绝',
+  dispatched: '已派单',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+const WRITE_STATUS_TONES = {
+  pending_approval: 'warn',
+  rejected: 'neutral',
+  dispatched: 'info',
+  completed: 'ok',
+  failed: 'danger',
+  cancelled: 'neutral',
+};
+const WRITE_OPERATION_LABELS = {
+  'order.update_note': '订单备注',
+  'order.update_status': '订单状态',
+};
+
+function writeOperationLabel(operation) {
+  return WRITE_OPERATION_LABELS[operation] || operation || '写操作';
+}
+
+function currentWriteCapability() {
+  const select = $('#write-capability-select');
+  const index = Number(select?.value);
+  return Number.isInteger(index) ? writeCapabilities[index] || null : null;
+}
+
+function renderWriteOperations() {
+  const operationSelect = $('#write-operation-select');
+  if (!operationSelect) return;
+  const capability = currentWriteCapability();
+  const operations = Array.isArray(capability?.operations) ? capability.operations : [];
+  operationSelect.innerHTML = operations.length
+    ? operations.map((operation) => `<option value="${esc(operation)}">${esc(writeOperationLabel(operation))}</option>`).join('')
+    : '<option value="">无可用操作</option>';
+}
+
+function renderWriteCapabilityOptions() {
+  const select = $('#write-capability-select');
+  const caption = $('#write-capability-caption');
+  const submit = $('#btn-write-submit');
+  if (!select) return;
+  if (!writeCapabilities.length) {
+    select.innerHTML = '<option value="">暂无写能力</option>';
+    if (caption) caption.textContent = '提供方尚未注册写能力（需要中台在网关注册 write_control_platform）';
+    if (submit) submit.disabled = true;
+    renderWriteOperations();
+    return;
+  }
+  select.innerHTML = writeCapabilities.map((capability, index) => (
+    `<option value="${index}">${esc(capability.systemName)} · ${esc(capability.capability)}</option>`
+  )).join('');
+  if (caption) caption.textContent = `共 ${writeCapabilities.length} 项写能力；批准后才会派单`;
+  if (submit) submit.disabled = false;
+  renderWriteOperations();
+}
+
+function writeRequestChanges(record) {
+  const changes = record?.input?.changes;
+  if (!changes || typeof changes !== 'object') return '';
+  return Object.entries(changes).map(([key, value]) => `${key}=${String(value)}`).join('，');
+}
+
+function writeRequestRow(record, pending) {
+  const target = record?.input?.orderNo || record?.input?.target?.orderNo || '—';
+  const changes = writeRequestChanges(record);
+  const details = [
+    record?.requestedBy?.name || record?.requestedBy?.id || '',
+    formatDateTimeText(record?.createdAt),
+    record?.approval?.by ? `审批人 ${record.approval.by}` : '',
+    record?.rejection?.reason ? `拒绝原因 ${record.rejection.reason}` : '',
+    record?.error?.code ? `错误 ${record.error.code}` : '',
+  ].filter(Boolean).join(' · ');
+  const actions = pending
+    ? `<span class="write-actions"><button class="btn primary compact" type="button" data-write-approve="${esc(record.id)}">批准</button><button class="btn secondary compact" type="button" data-write-reject="${esc(record.id)}">拒绝</button></span>`
+    : '';
+  return `<div class="write-row">
+    <div class="write-main">
+      <strong>${esc(writeOperationLabel(record?.operation))} · ${esc(target)}</strong>
+      <small>${esc(record?.capability || '')} · ${esc(record?.systemId || '')}${changes ? ` · ${esc(changes)}` : ''}</small>
+      <small>原因：${esc(record?.reason || '—')}</small>
+      <small class="write-meta">${esc(details)}</small>
+    </div>
+    <span class="status-pill ${esc(WRITE_STATUS_TONES[record?.status] || 'neutral')}">${esc(WRITE_STATUS_LABELS[record?.status] || record?.status || '未知')}</span>
+    ${actions}
+  </div>`;
+}
+
+function renderWriteLists() {
+  const pending = writeRequests.filter((record) => record.status === 'pending_approval');
+  const history = writeRequests.filter((record) => record.status !== 'pending_approval');
+  const pendingCount = $('#write-pending-count');
+  if (pendingCount) {
+    pendingCount.textContent = String(pending.length);
+    pendingCount.className = `status-pill ${pending.length ? 'warn' : 'info'}`;
+  }
+  const pendingHost = $('#write-pending-list');
+  if (pendingHost) {
+    pendingHost.innerHTML = pending.length
+      ? pending.map((record) => writeRequestRow(record, true)).join('')
+      : '<div class="harbor-empty"><i data-lucide="check-circle"></i><strong>没有待审批的写操作</strong><small>提交写请求后会出现在这里</small></div>';
+  }
+  const historyHost = $('#write-history-list');
+  if (historyHost) {
+    historyHost.innerHTML = history.length
+      ? history.map((record) => writeRequestRow(record, false)).join('')
+      : '<div class="harbor-empty"><i data-lucide="history"></i><strong>暂无历史</strong><small>审批或执行后的写操作会显示在这里</small></div>';
+  }
+  refreshIcons(pendingHost || document);
+  refreshIcons(historyHost || document);
+}
+
+async function loadWrites() {
+  wireWriteControls();
+  try {
+    const [capabilityResponse, listResponse] = await Promise.all([
+      fetch('/api/write-requests/capabilities', { headers: { accept: 'application/json' } }),
+      fetch('/api/write-requests?limit=100', { headers: { accept: 'application/json' } }),
+    ]);
+    writeCapabilities = capabilityResponse.ok ? (await capabilityResponse.json())?.capabilities || [] : [];
+    writeRequests = listResponse.ok ? (await listResponse.json())?.requests || [] : [];
+  } catch {
+    writeCapabilities = [];
+    writeRequests = [];
+  }
+  renderWriteCapabilityOptions();
+  renderWriteLists();
+}
+
+async function submitWriteRequest(event) {
+  event.preventDefault();
+  const capability = currentWriteCapability();
+  if (!capability) { toast('暂无可用的写能力', true); return; }
+  const operation = $('#write-operation-select')?.value || '';
+  const orderNo = $('#write-order-no')?.value.trim() || '';
+  const value = $('#write-change-value')?.value.trim() || '';
+  const reason = $('#write-reason')?.value.trim() || '';
+  if (!operation || !orderNo || !value || !reason) {
+    toast('请填写操作、订单号、变更内容和原因', true);
+    return;
+  }
+  const changes = operation.endsWith('update_note') ? { remark: value } : { status: value };
+  const status = $('#write-form-status');
+  if (status) status.textContent = '提交中...';
+  try {
+    const response = await fetch('/api/write-requests', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        capability: capability.capability,
+        systemId: capability.systemId,
+        input: { operation, orderNo, changes },
+        reason,
+        idempotencyKey: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `write-${Date.now()}`,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    if (status) status.textContent = '已提交，等待审批';
+    $('#write-request-form')?.reset();
+    renderWriteOperations();
+    await loadWrites();
+    toast('写请求已提交，等待审批');
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    toast(`提交失败：${error.message}`, true);
+  }
+}
+
+async function decideWriteRequest(id, action) {
+  let note = '';
+  if (action === 'reject') {
+    note = window.prompt('拒绝原因') || '';
+    if (!note.trim()) return;
+  }
+  try {
+    const response = await fetch(`/api/write-requests/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(action === 'reject' ? { reason: note } : {}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    toast(action === 'approve' ? '已批准并派单' : '已拒绝');
+    await loadWrites();
+  } catch (error) {
+    toast(`操作失败：${error.message}`, true);
+  }
+}
+
+function wireWriteControls() {
+  if (writeControlsWired) return;
+  writeControlsWired = true;
+  $('#btn-writes-refresh')?.addEventListener('click', () => loadWrites());
+  $('#write-capability-select')?.addEventListener('change', () => renderWriteOperations());
+  $('#write-request-form')?.addEventListener('submit', (event) => { void submitWriteRequest(event); });
+  $('#write-pending-list')?.addEventListener('click', (event) => {
+    const approve = event.target.closest('[data-write-approve]');
+    if (approve) { void decideWriteRequest(approve.getAttribute('data-write-approve') || '', 'approve'); return; }
+    const reject = event.target.closest('[data-write-reject]');
+    if (reject) { void decideWriteRequest(reject.getAttribute('data-write-reject') || '', 'reject'); }
+  });
 }
 
 // ---------- 跨系统借调（只读监控） ----------

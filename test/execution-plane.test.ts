@@ -547,3 +547,50 @@ test('派单 request_id 优先使用调用方提供的值', (t) => {
   assert.equal(message.request_id, 'borrow-123');
   assert.notEqual(message.request_id, runId);
 });
+
+const WRITE_SCHEMA = {
+  type: 'object',
+  properties: { operation: { type: 'string', enum: ['order.update_note'] } },
+  required: ['operation'],
+};
+
+function registerWriteAgent(registry: ExecutionPlaneRegistry, sent: unknown[]): void {
+  registry.onRegister({
+    agentId: 'agent-write-1',
+    name: '写智能体',
+    version: '1.0.0',
+    sourceSystem: '公司中控平台',
+    capabilities: [{
+      name: 'write_control_platform',
+      description: '受控写操作',
+      inputSchema: WRITE_SCHEMA,
+      constraints: { readOnly: false, approvalRequired: true, riskLevel: 'low', idempotent: true },
+    }],
+  }, (msg) => sent.push(msg));
+}
+
+test('写能力未经审批不能派单', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  registerWriteAgent(h.registry, h.sent);
+  assert.throws(
+    () => h.registry.dispatch('agent-write-1', 'write_control_platform', { operation: 'order.update_note' }),
+    (error: unknown) => error instanceof ExecutionPlaneError && error.code === 'WRITE_FORBIDDEN',
+  );
+});
+
+test('审批后写能力可以派单并携带 request_id', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  registerWriteAgent(h.registry, h.sent);
+  const { runId } = h.registry.dispatch(
+    'agent-write-1',
+    'write_control_platform',
+    { operation: 'order.update_note' },
+    { writeApproved: true, requestId: 'write-123' },
+  );
+  const message = h.sent.at(-1) as Record<string, unknown>;
+  assert.equal(message.type, 'dispatch');
+  assert.equal(message.request_id, 'write-123');
+  assert.equal(h.registry.getRun(runId)?.state, 'dispatched');
+});

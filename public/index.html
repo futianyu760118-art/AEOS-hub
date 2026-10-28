@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=p0-business-v25-20261028" />
+  <link rel="stylesheet" href="/style.css?v=p0-business-v27-20261028" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -141,7 +141,7 @@
           <button class="nav-item" type="button" data-view="evidence" data-title="证据与审计"><i data-lucide="file-search"></i><span>证据与审计</span></button>
           <button class="nav-item" type="button" data-view="registry" data-title="能力目录"><i data-lucide="boxes"></i><span>能力目录</span></button>
         </div>
-        <div class="nav-group"><span class="nav-label">系统</span><button class="nav-item" type="button" data-view="ops" data-title="运行状态"><i data-lucide="activity"></i><span>运行状态</span></button><button class="nav-item" type="button" data-view="config" data-title="系统配置"><i data-lucide="settings"></i><span>系统配置</span></button></div>
+        <div class="nav-group"><span class="nav-label">系统</span><button class="nav-item" type="button" data-view="writes" data-title="写操作"><i data-lucide="file-pen-line"></i><span>写操作</span></button><button class="nav-item" type="button" data-view="ops" data-title="运行状态"><i data-lucide="activity"></i><span>运行状态</span></button><button class="nav-item" type="button" data-view="config" data-title="系统配置"><i data-lucide="settings"></i><span>系统配置</span></button></div>
       </nav>
 
       <div class="sidebar-foot">
@@ -726,6 +726,35 @@
           <div id="usage-list" class="usage-list"><div class="dashboard-loading">正在读取用量台账…</div></div>
         </section>
 
+        <section id="view-writes" class="view app-view hidden">
+          <div class="page-head">
+            <div><span class="page-module">系统</span><h1>写操作</h1><p>提交写请求，人工审批后由 Hub 派单；每次写操作都留痕</p></div>
+            <div class="page-actions"><button id="btn-writes-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
+          </div>
+
+          <section class="surface">
+            <div class="surface-head"><div><h2>提交写请求</h2><p id="write-capability-caption">仅显示提供方声明的写能力</p></div><span id="write-form-status" class="config-status"></span></div>
+            <form id="write-request-form" class="write-form">
+              <label><span>系统 / 能力</span><select id="write-capability-select"></select></label>
+              <label><span>操作</span><select id="write-operation-select"></select></label>
+              <label><span>订单号</span><input id="write-order-no" placeholder="如 HJ202602-0009-0028" autocomplete="off" /></label>
+              <label><span>变更内容</span><input id="write-change-value" placeholder="备注内容或目标状态" autocomplete="off" /></label>
+              <label class="write-reason"><span>原因</span><textarea id="write-reason" rows="2" placeholder="为什么要做这次写操作"></textarea></label>
+              <button id="btn-write-submit" class="btn primary compact" type="submit"><i data-lucide="send"></i>提交待审批</button>
+            </form>
+          </section>
+
+          <section class="surface">
+            <div class="surface-head"><div><h2>待审批</h2><p>批准后才会派单到提供方系统</p></div><span id="write-pending-count" class="status-pill info">0</span></div>
+            <div id="write-pending-list" class="write-list"><div class="dashboard-loading">正在读取写请求…</div></div>
+          </section>
+
+          <section class="surface">
+            <div class="surface-head"><div><h2>历史</h2><p>最近 100 条写请求与执行结果</p></div></div>
+            <div id="write-history-list" class="write-list"><div class="dashboard-loading">正在读取写请求…</div></div>
+          </section>
+        </section>
+
         <section id="view-ops" class="view app-view hidden">
           <div class="page-head">
             <div><span class="page-module">系统</span><h1>运行状态</h1><p>服务健康、模型错误、借调失败率与备份状态（只读）</p></div>
@@ -893,6 +922,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=p0-business-v26-20261028"></script>
+  <script type="module" src="/app.js?v=p0-business-v27-20261028"></script>
 </body>
 </html>
