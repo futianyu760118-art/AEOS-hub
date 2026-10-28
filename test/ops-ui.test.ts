@@ -27,7 +27,7 @@ test('视图注册、懒加载与轮询', () => {
 
 test('运行监控为只读：没有写请求', () => {
   const start = app.indexOf('// ---------- 运行监控（只读） ----------');
-  const end = app.indexOf('let routeControlsWired');
+  const end = app.indexOf('// ---------- AI 观测（统一总览：Hub 派单任务 / 各系统助手） ----------');
   assert.ok(start > 0 && end > start);
   const block = app.slice(start, end);
   assert.doesNotMatch(block, /method:\s*'(POST|PUT|PATCH|DELETE)'/);

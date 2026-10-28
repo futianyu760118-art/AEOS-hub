@@ -52,7 +52,7 @@ test('视图注册、两个标签页数据加载与轮询', () => {
 
 test('AI 观测为只读：没有写请求', () => {
   const start = app.indexOf('// ---------- AI 观测（统一总览：Hub 派单任务 / 各系统助手） ----------');
-  const end = app.indexOf('let routeControlsWired');
+  const end = app.indexOf('function executionEmptyState(');
   assert.ok(start > 0 && end > start);
   const block = app.slice(start, end);
   assert.doesNotMatch(block, /method:\s*'(POST|PUT|PATCH|DELETE)'/);

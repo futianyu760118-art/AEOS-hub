@@ -155,7 +155,7 @@ let authSession = null;
 // 业务视图：默认隐藏技术/管理模块，管理者可一键切到完整视图。
 const VIEW_MODE_KEY = 'aeos-hub-view-mode-v1';
 const MANAGEMENT_VIEWS = new Set([
-  'borrow', 'ai-obs', 'ops', 'config', 'route', 'registry', 'evidence', 'harbor',
+  'borrow', 'ai-obs', 'ops', 'config', 'registry', 'evidence', 'harbor',
   'g0-governance', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding',
 ]);
 let businessMode = localStorage.getItem(VIEW_MODE_KEY) !== 'full';
@@ -309,7 +309,7 @@ const commands = [
 // Local experience review: keep module implementations intact while temporarily
 // removing their routes from the decision-maker interface.
 const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本', 'route': '模型配置' };
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -571,7 +571,7 @@ function viewVisibleForRole(view, session) {
     return myGrants.some((grant) => grant.resourceCode === resource && Array.isArray(grant.operations) && grant.operations.includes('read'));
   }
   if (roles.includes('manager') || roles.includes('supervisor')) return true;
-  return ['chat', 'attention', 'tasks', 'projects', 'evidence', 'usage', 'route', 'borrow'].includes(view);
+  return ['chat', 'attention', 'tasks', 'projects', 'evidence', 'usage', 'borrow'].includes(view);
 }
 
 function defaultViewForSession(session) {
@@ -740,7 +740,6 @@ function showView(view, options = {}) {
   if (view === 'trace') loadTraceView();
   if (view === 'ai-obs') loadAiObs();
   if (view === 'ops') loadOps();
-  if (view === 'route') loadRoute();
   syncDashboardLiveRefresh();
   syncExecutionRefresh();
   syncBorrowRefresh();
@@ -1934,74 +1933,6 @@ function renderAssistantDetail() {
     <div class="borrow-detail-block"><h3>时间线</h3>${assistantTimelineHtml(events)}</div>`;
   if (detailChanged) root.scrollTop = 0;
   refreshIcons(root);
-}
-
-let routeControlsWired = false;
-
-function wireRouteControls() {
-  if (routeControlsWired) return;
-  routeControlsWired = true;
-  const form = $('#route-form');
-  if (!form) return;
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const data = new FormData(form);
-    const body = { difficulty: data.get('difficulty') || 'light', dataSensitive: data.get('dataSensitive') === 'on' };
-    const maxLatencyMs = Number(data.get('maxLatencyMs'));
-    const minContextWindow = Number(data.get('minContextWindow'));
-    const maxCostPerMillion = Number(data.get('maxCostPerMillion'));
-    if (Number.isFinite(maxLatencyMs) && maxLatencyMs > 0) body.maxLatencyMs = maxLatencyMs;
-    if (Number.isFinite(minContextWindow) && minContextWindow > 0) body.minContextWindow = minContextWindow;
-    if (Number.isFinite(maxCostPerMillion) && maxCostPerMillion > 0) body.maxCostPerMillion = maxCostPerMillion;
-    const root = $('#route-result');
-    if (root) root.innerHTML = '<div class="dashboard-loading">正在选型…</div>';
-    try {
-      const response = await fetch('/api/models/route', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const decision = await response.json();
-      if (!response.ok) { renderRouteError(root, decision?.error || '选型失败'); return; }
-      renderRouteDecision(decision);
-    } catch {
-      renderRouteError(root, '网络异常，选型失败');
-    }
-  });
-}
-
-function renderRouteError(root, message) {
-  if (root) root.innerHTML = `<div class="harbor-empty"><i data-lucide="triangle-alert"></i><strong>选型失败</strong><small>${esc(message)}</small></div>`;
-}
-
-function renderRouteDecision(decision) {
-  const root = $('#route-result');
-  if (!root) return;
-  const reasons = (Array.isArray(decision.reasons) ? decision.reasons : []).map((reason) => `<li>${esc(reason)}</li>`).join('');
-  if (decision.satisfied && decision.profile) {
-    const p = decision.profile;
-    const execBadge = decision.executable
-      ? '<b class="status-pill info">Hub 可执行</b>'
-      : '<b class="status-pill neutral">需网关/凭据</b>';
-    root.innerHTML = `
-      <div class="route-card">
-        <div class="route-card-head"><strong>${esc(p.modelName)}</strong><span>${esc(p.id)}</span>${execBadge}</div>
-        <div class="route-card-meta">
-          <span>provider：${esc(p.provider)}</span><span>档位：${esc(p.tier)}</span>
-          <span>输入 ¥${formatUsageCost(p.inputPrice)}/M</span><span>输出 ¥${formatUsageCost(p.outputPrice)}/M</span>
-          <span>时延 ${formatTokenCount(p.latencyMs)}ms</span><span>上下文 ${formatTokenCount(p.contextWindow)}</span>
-        </div>
-        <ul class="route-reasons">${reasons}</ul>
-      </div>`;
-  } else {
-    const fallback = decision.fallbackProfileId ? `<p class="form-hint">回退档：${esc(decision.fallbackProfileId)}</p>` : '';
-    root.innerHTML = `<div class="route-card route-card-fallback"><strong>无档位满足全部约束</strong>${fallback}<ul class="route-reasons">${reasons}</ul></div>`;
-  }
-  refreshIcons(root);
-}
-
-async function loadRoute() {
-  wireRouteControls();
 }
 
 function executionEmptyState() {

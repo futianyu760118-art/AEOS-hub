@@ -46,12 +46,12 @@ test('视图注册与懒加载', () => {
   assert.match(app, /view: 'borrow', label: '跨系统查询'/);
   assert.match(app, /if \(view === 'borrow'\) loadBorrowOrders\(\);/);
   assert.match(app, /function syncBorrowRefresh\(\)/);
-  assert.match(app, /'route', 'borrow'/);
+  assert.match(app, /'usage', 'borrow'/);
 });
 
 test('借调视图只读：没有写请求与操作按钮', () => {
   const start = app.indexOf('// ---------- 跨系统借调（只读监控） ----------');
-  const end = app.indexOf('let routeControlsWired');
+  const end = app.indexOf('// ---------- 运行监控（只读） ----------');
   assert.ok(start > 0 && end > start);
   const block = app.slice(start, end);
   assert.doesNotMatch(block, /method:\s*'(POST|PUT|PATCH|DELETE)'/);

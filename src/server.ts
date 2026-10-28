@@ -121,7 +121,7 @@ import { OrchestrationTaskService } from './orchestration-task-service.ts';
 import { OrchestrationTaskExecutor } from './orchestration-task-executor.ts';
 import { BorrowOrderExecutionAdapter } from './orchestration-task-borrow-adapter.ts';
 import { OrchestrationTaskApi } from './orchestration-task-api.ts';
-import { routeModel, parseRouteRequest } from './model-router.ts';
+import { routeModel } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
 import {
   ensureUsageLedger,
@@ -2865,17 +2865,6 @@ const server = createServer(async (req, res) => {
     try {
       const limit = boundedLimit(url.searchParams.get('limit'));
       sendJson(res, 200, { events: listUsageEvents(limit, requestTenantId) });
-    } catch (e) {
-      sendJson(res, 400, { error: (e as Error).message });
-    }
-    return;
-  }
-  // ---------- 模型选型只读 API（确定性规则矩阵选型） ----------
-  if (url.pathname === '/api/models/route') {
-    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    try {
-      const input = await readJsonBody(req, 8 * 1024);
-      sendJson(res, 200, routeModel(parseRouteRequest(input)));
     } catch (e) {
       sendJson(res, 400, { error: (e as Error).message });
     }
