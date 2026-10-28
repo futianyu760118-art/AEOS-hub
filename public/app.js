@@ -7886,6 +7886,7 @@ els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
 const TRACE_KIND_LABELS = { borrow: '借调', run: '执行', usage: '用量', evidence: '审计' };
 const TRACE_AGENT_LABELS = { 'gateway-control-platform': '中台网关', 'runtime-execution-query': 'PLM 助手' };
 const TRACE_CAPABILITY_LABELS = { query_control_platform: '查询', reason_control_platform: '分析', query_plm: 'PLM 查询', reason_plm: 'PLM 分析', query_local_files: '本地文件查询' };
+const TRACE_RUN_TASK_LABELS = { order_delivery_analysis: '订单交付分析', material_kitting_analysis: '齐套分析', quality_analysis: '质量分析', production_analysis: '生产分析' };
 
 function humanizeTraceText(value) {
   let text = String(value ?? '');
@@ -7927,22 +7928,34 @@ async function loadTraceRecent() {
     const agentsData = agentsResponse.ok ? await agentsResponse.json() : {};
     const orders = Array.isArray(ordersData?.orders) ? ordersData.orders : [];
     const runIdsWithOrders = new Set(orders.map((order) => order.runId).filter(Boolean));
-    const runs = (Array.isArray(agentsData?.runs) ? agentsData.runs : [])
-      .filter((run) => run.state === 'completed' || run.state === 'failed')
+    const recentRuns = (Array.isArray(agentsData?.runs) ? agentsData.runs : [])
       .filter((run) => !runIdsWithOrders.has(run.runId))
       .sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))
-      .slice(0, 8);
-    const borrowItems = orders.map((order) => `
+      .slice(0, 12);
+    // 借调单与执行 run 是两条留痕来源：按时间合并排序，避免“最后一次分析”被更早的借调单压在下面。
+    const entries = [
+      ...orders.map((order) => ({
+        at: order.createdAt,
+        html: `
       <button class="trace-recent-item" type="button" data-trace-id="${esc(order.orderId)}">
         <span><strong>${esc(order.orderId)}</strong><small>借调 · ${esc(order.fromSystem)} → ${esc(order.providerSystem || '—')} · ${esc(order.status)}</small></span>
         <time>${esc(formatDateTimeText(order.createdAt))}</time>
-      </button>`);
-    const runItems = runs.map((run) => `
+      </button>`,
+      })),
+      ...recentRuns.map((run) => {
+        const taskType = run.input && typeof run.input.task_type === 'string' ? run.input.task_type : '';
+        const label = TRACE_RUN_TASK_LABELS[taskType] || run.capability;
+        return {
+          at: run.startedAt,
+          html: `
       <button class="trace-recent-item" type="button" data-trace-id="${esc(run.runId)}">
-        <span><strong>${esc(run.capability)}</strong><small>${esc(run.agentId)} · ${esc(run.state)}</small></span>
+        <span><strong>${esc(label)}</strong><small>${esc(run.agentId)} · ${esc(aiRunStatusLabel(run.state))}</small></span>
         <time>${esc(formatDateTimeText(run.startedAt))}</time>
-      </button>`);
-    const items = [...borrowItems, ...runItems];
+      </button>`,
+        };
+      }),
+    ].sort((left, right) => String(right.at || '').localeCompare(String(left.at || ''))).slice(0, 10);
+    const items = entries.map((entry) => entry.html);
     root.innerHTML = items.length
       ? `<div class="trace-recent-list">${items.join('')}</div>`
       : '<div class="dashboard-loading">暂无借调单或执行记录</div>';
