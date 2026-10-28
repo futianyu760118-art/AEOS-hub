@@ -2532,10 +2532,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .borrow-raw { margin-top: 8px; }
 .borrow-raw summary { cursor: pointer; color: var(--text-3); font-size: 10px; }
 .borrow-raw .borrow-json { margin-top: 6px; }
-.ops-check-table, .ops-alert-table { height: auto; max-height: 420px; }
-.ops-check-table .harbor-row { min-width: 820px; grid-template-columns: 110px minmax(180px, 1fr) minmax(260px, 1.6fr) 90px; }
-.ops-alert-table .harbor-row { min-width: 980px; grid-template-columns: 150px 80px minmax(220px, 1.2fr) minmax(260px, 1.5fr) 90px; }
-.ops-check-table .harbor-row > span, .ops-alert-table .harbor-row > span { overflow: hidden; text-overflow: ellipsis; }
+.ops-health-table { display: flex; flex-direction: column; gap: 6px; padding: 0 18px 14px; }
+.ops-health-entry { border: 1px solid var(--line-subtle); border-radius: 8px; background: #fff; }
+.ops-health-main { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) 110px 70px 16px; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; background: transparent; text-align: left; cursor: pointer; color: var(--text-1); font: inherit; }
+.ops-health-main:hover { background: rgba(18, 18, 24, 0.02); }
+.ops-health-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ops-health-title strong { font-size: 12px; }
+.ops-health-title small { color: var(--text-2); font-size: 10px; }
+.ops-health-detail { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--text-2); font-size: 11px; overflow-wrap: anywhere; }
+.ops-health-detail small { color: var(--text-3); font-size: 10px; }
+.ops-health-time { color: var(--text-3); font-size: 10px; text-align: right; }
+.ops-health-chevron { color: var(--text-3); }
+.ops-health-history { border-top: 1px solid var(--line-subtle); padding: 6px 12px 10px; display: flex; flex-direction: column; gap: 4px; background: #fcfcfd; }
+.ops-health-history-row { display: grid; grid-template-columns: 120px 70px minmax(0, 1fr) 80px; gap: 8px; align-items: start; font-size: 10px; color: var(--text-2); }
+.ops-health-history-row small { display: block; color: var(--text-3); }
+.ops-health-history-row.empty { display: block; color: var(--text-3); }
+
 .execution-timeline { display: flex; flex-direction: column; padding: 6px 0; }
 .execution-step { display: grid; grid-template-columns: 110px minmax(0, 1fr) 100px; gap: 10px; padding: 7px 0; border-bottom: 1px solid rgba(18, 18, 24, 0.055); }
 .execution-step:last-child { border-bottom: 0; }

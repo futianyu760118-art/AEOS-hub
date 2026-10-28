@@ -1798,6 +1798,14 @@ function wireOpsControls() {
   if (opsControlsWired) return;
   opsControlsWired = true;
   $('#btn-ops-refresh')?.addEventListener('click', () => loadOps());
+  $('#ops-health-list')?.addEventListener('click', (event) => {
+    const toggle = event.target.closest('[data-ops-health-toggle]');
+    if (!toggle) return;
+    const key = toggle.getAttribute('data-ops-health-toggle') || '';
+    if (healthExpanded.has(key)) healthExpanded.delete(key);
+    else healthExpanded.add(key);
+    renderOps();
+  });
 }
 
 async function loadOps() {
@@ -1818,10 +1826,8 @@ async function loadOps() {
 
 function renderOpsForbidden() {
   const message = '<div class="harbor-empty"><i data-lucide="shield-alert"></i><strong>无权查看运行状态</strong><small>仅 manager / supervisor 角色可见</small></div>';
-  for (const selector of ['#ops-checks', '#ops-alerts']) {
-    const root = $(selector);
-    if (root) { root.innerHTML = message; refreshIcons(root); }
-  }
+  const root = $('#ops-health-list');
+  if (root) { root.innerHTML = message; refreshIcons(root); }
 }
 
 function opsSeverityPill(severity) {
@@ -1830,20 +1836,26 @@ function opsSeverityPill(severity) {
   return `<b class="status-pill ${tone}">${esc(label)}</b>`;
 }
 
+let healthExpanded = new Set();
+
 function renderOps() {
   const snapshot = opsData?.snapshot;
   const metrics = snapshot?.metrics;
+  const checks = Array.isArray(snapshot?.checks) ? snapshot.checks : [];
+  const alerts = Array.isArray(opsData?.alerts) ? opsData.alerts : [];
   const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
 
+  const unhealthy = checks.filter((check) => !check.ok).length;
+  setText('#ops-health-summary', unhealthy ? `${unhealthy} 项异常` : '正常');
   setText('#ops-agents', `${formatTokenCount(metrics?.agentsOnline ?? 0)}/${formatTokenCount(metrics?.agentsTotal ?? 0)}`);
-  const alerts = Array.isArray(opsData?.alerts) ? opsData.alerts : [];
-  const authAlert = alerts.some((alert) => alert.key === 'model:auth' && alert.status === 'active');
-  const modelErrors = metrics?.model?.errorsInWindow ?? 0;
-  setText('#ops-model', authAlert ? '密钥异常' : modelErrors > 0 ? `波动 ${modelErrors} 次` : '正常');
 
-  const ended = metrics?.borrow?.endedInWindow ?? 0;
-  const failed = metrics?.borrow?.failedInWindow ?? 0;
-  setText('#ops-borrow', `${formatTokenCount(Math.max(0, ended - failed))} / ${formatTokenCount(failed)}`);
+  const counts = opsData?.alertCounts;
+  const activeCount = counts?.active ?? alerts.filter((alert) => alert.status === 'active').length;
+  const alertCountEl = $('#ops-alert-count');
+  if (alertCountEl) {
+    alertCountEl.textContent = String(activeCount);
+    alertCountEl.className = `status-pill ${counts?.critical ? 'danger' : counts?.warn ? 'warn' : 'ok'}`;
+  }
 
   const backup = metrics?.backup;
   const backupLabel = !backup ? '未知'
@@ -1855,45 +1867,82 @@ function renderOps() {
   const checked = $('#ops-checked-at');
   if (checked) checked.textContent = snapshot?.checkedAt ? `检查于 ${borrowTime(snapshot.checkedAt)}` : '';
 
-  const checks = Array.isArray(snapshot?.checks) ? snapshot.checks : [];
-  const checksRoot = $('#ops-checks');
-  if (checksRoot) {
-    checksRoot.innerHTML = checks.length
-      ? `<div class="harbor-table ops-check-table">
-          <div class="harbor-row harbor-head"><span>组件</span><span>检查项</span><span>详情</span><span>状态</span></div>
-          ${checks.map((check) => `<div class="harbor-row">
-            <span>${esc(check.component)}</span>
-            <span>${esc(check.title)}</span>
-            <span>${esc(check.message)}</span>
-            <span>${check.ok ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(check.severity)}</span>
-          </div>`).join('')}
-        </div>`
-      : harborEmpty('activity', '暂无检查结果', '监控每 60 秒运行一次');
-    refreshIcons(checksRoot);
+  const alertsByKey = new Map();
+  for (const alert of alerts) {
+    const key = alert.key || alert.component;
+    const list = alertsByKey.get(key) || [];
+    list.push(alert);
+    alertsByKey.set(key, list);
   }
+  const entries = new Map();
+  for (const check of checks) {
+    entries.set(check.key, {
+      key: check.key,
+      component: check.component,
+      title: check.title,
+      message: check.message,
+      ok: check.ok,
+      severity: check.severity,
+      action: check.action || null,
+      alerts: alertsByKey.get(check.key) || [],
+    });
+  }
+  for (const [key, list] of alertsByKey) {
+    if (entries.has(key)) continue;
+    const latest = list[0];
+    entries.set(key, {
+      key,
+      component: latest.component,
+      title: latest.title,
+      message: latest.message,
+      ok: latest.status === 'recovered',
+      severity: latest.severity,
+      action: latest.action || null,
+      alerts: list,
+    });
+  }
+  const rows = [...entries.values()].sort((left, right) => {
+    const rank = (entry) => (entry.ok && !entry.alerts.some((alert) => alert.status === 'active') ? 1 : 0);
+    const severityRank = (entry) => entry.severity === 'critical' ? 0 : entry.severity === 'warn' ? 1 : 2;
+    return rank(left) - rank(right)
+      || severityRank(left) - severityRank(right)
+      || left.component.localeCompare(right.component, 'zh-CN');
+  });
 
-  const counts = opsData?.alertCounts;
-  const countEl = $('#ops-alert-count');
-  if (countEl) {
-    countEl.textContent = `${formatTokenCount(counts?.active ?? 0)} 条未恢复`;
-    countEl.className = `status-pill ${counts?.critical ? 'danger' : counts?.warn ? 'warn' : 'ok'}`;
+  const host = $('#ops-health-list');
+  if (!host) return;
+  if (!rows.length) {
+    host.innerHTML = harborEmpty('activity', '暂无健康事件', '监控每 60 秒运行一次');
+    refreshIcons(host);
+    return;
   }
-  const alertsRoot = $('#ops-alerts');
-  if (alertsRoot) {
-    alertsRoot.innerHTML = alerts.length
-      ? `<div class="harbor-table ops-alert-table">
-          <div class="harbor-row harbor-head"><span>时间</span><span>级别</span><span>组件 / 标题</span><span>详情</span><span>状态</span></div>
-          ${alerts.map((alert) => `<div class="harbor-row">
-            <span class="num">${borrowTime(alert.lastSeenAt)}</span>
-            <span>${opsSeverityPill(alert.severity)}</span>
-            <span><strong>${esc(alert.component)}</strong><br/><small>${esc(alert.title)}</small></span>
-            <span>${esc(alert.message)}${alert.action ? `<br/><small>建议：${esc(alert.action)}</small>` : ''}</span>
-            <span>${alert.status === 'active' ? '<b class="status-pill danger">未恢复</b>' : '<b class="status-pill ok">已恢复</b>'}</span>
-          </div>`).join('')}
-        </div>`
-      : harborEmpty('shield-check', '暂无告警', '当前没有需要处理的问题');
-    refreshIcons(alertsRoot);
-  }
+  const rowHtml = rows.map((entry) => {
+    const activeAlert = entry.alerts.find((alert) => alert.status === 'active');
+    const healthy = entry.ok && !activeAlert;
+    const statusPill = healthy ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(activeAlert?.severity || entry.severity);
+    const lastAt = entry.alerts[0]?.lastSeenAt || snapshot?.checkedAt;
+    const expanded = healthExpanded.has(entry.key);
+    const history = entry.alerts.length
+      ? entry.alerts.map((alert) => `<div class="ops-health-history-row">
+          <span class="num">${borrowTime(alert.lastSeenAt)}</span>
+          <span>${opsSeverityPill(alert.severity)}</span>
+          <span><strong>${esc(alert.title)}</strong><small>${esc(alert.message)}${alert.action ? ` · 建议：${esc(alert.action)}` : ''}</small></span>
+          <span>${alert.status === 'active' ? '<b class="status-pill danger">未恢复</b>' : '<b class="status-pill ok">已恢复</b>'}</span>
+        </div>`).join('')
+      : '<div class="ops-health-history-row empty">暂无告警历史</div>';
+    return `<div class="ops-health-entry">
+      <button class="ops-health-main" type="button" data-ops-health-toggle="${esc(entry.key)}" aria-expanded="${expanded}">
+        <span class="ops-health-title"><strong>${esc(entry.component)}</strong><small>${esc(entry.title)}</small></span>
+        <span class="ops-health-detail">${esc(activeAlert?.message || entry.message)}${(activeAlert?.action || entry.action) ? `<small>建议：${esc(activeAlert?.action || entry.action)}</small>` : ''}</span>
+        <span class="num ops-health-time">${lastAt ? esc(borrowTime(lastAt)) : '—'}</span>
+        ${statusPill}
+        <i class="ops-health-chevron" data-lucide="${expanded ? 'chevron-down' : 'chevron-right'}"></i>
+      </button>
+      ${expanded ? `<div class="ops-health-history">${history}</div>` : ''}
+    </div>`;
+  }).join('');
+  host.innerHTML = `<div class="ops-health-table">${rowHtml}</div>`;
+  refreshIcons(host);
 }
 
 function syncOpsRefresh() {

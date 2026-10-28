@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=p0-business-v28-20261028" />
+  <link rel="stylesheet" href="/style.css?v=p0-business-v29-20261028" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -764,25 +764,20 @@
 
         <section id="view-ops" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">系统</span><h1>运行状态</h1><p>服务健康、模型错误、借调失败率与备份状态（只读）</p></div>
+            <div><span class="page-module">系统</span><h1>运行状态</h1><p>服务健康、分析通道、告警与备份状态（只读）</p></div>
             <div class="page-actions"><button id="btn-ops-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
           <div class="harbor-metrics usage-metrics">
-            <div><span>在线执行面</span><strong id="ops-agents">0/0</strong><small>在线 / 已注册</small></div>
-            <div><span>模型调用</span><strong id="ops-model">未知</strong><small>最近 5 分钟</small></div>
-            <div><span>借调（1 小时）</span><strong id="ops-borrow">0 / 0</strong><small>完成 / 失败</small></div>
+            <div><span>服务健康</span><strong id="ops-health-summary">—</strong><small>异常检查项</small></div>
+            <div><span>分析通道</span><strong id="ops-agents">0/0</strong><small>在线 / 已注册</small></div>
+            <div><span>待处理告警</span><strong id="ops-alert-count" class="status-pill neutral">0</strong><small>未恢复</small></div>
             <div><span>最近备份</span><strong id="ops-backup">未知</strong><small>每天 02:00</small></div>
           </div>
 
           <section class="surface">
-            <div class="surface-head"><div><h2>检查项</h2><p>登录服务、中台接口、磁盘、备份、模型、借调与内存</p></div><span id="ops-checked-at" class="mono subtle"></span></div>
-            <div id="ops-checks" class="usage-list"><div class="dashboard-loading">正在读取运行状态…</div></div>
-          </section>
-
-          <section class="surface">
-            <div class="surface-head"><div><h2>告警记录</h2><p>同一问题只记一条；恢复后自动补一条恢复记录</p></div><span id="ops-alert-count" class="status-pill neutral">0</span></div>
-            <div id="ops-alerts" class="usage-list"><div class="dashboard-loading">正在读取告警…</div></div>
+            <div class="surface-head"><div><h2>健康事件</h2><p>当前检查状态与历史告警；点击行展开</p></div><span id="ops-checked-at" class="mono subtle"></span></div>
+            <div id="ops-health-list" class="usage-list"><div class="dashboard-loading">正在读取健康状态…</div></div>
           </section>
         </section>
 
@@ -929,6 +924,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=p0-business-v28-20261028"></script>
+  <script type="module" src="/app.js?v=p0-business-v29-20261028"></script>
 </body>
 </html>

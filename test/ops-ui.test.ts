@@ -12,8 +12,9 @@ test('运行监控导航与视图存在', () => {
   assert.match(html, /data-view="ops"/);
   assert.match(html, /id="view-ops"/);
   assert.match(html, /id="btn-ops-refresh"/);
-  assert.match(html, /id="ops-checks"/);
-  assert.match(html, /id="ops-alerts"/);
+  assert.match(html, /id="ops-health-list"/);
+  assert.doesNotMatch(html, /id="ops-checks"/);
+  assert.doesNotMatch(html, /id="ops-alerts"/);
   assert.match(html, /id="ops-agents"/);
 });
 
@@ -34,8 +35,9 @@ test('运行监控为只读：没有写请求', () => {
 });
 
 test('监控样式存在', () => {
-  assert.match(css, /\.ops-check-table/);
-  assert.match(css, /\.ops-alert-table/);
+  assert.match(css, /\.ops-health-table/);
+  assert.match(css, /\.ops-health-main/);
+  assert.match(css, /\.ops-health-history/);
 });
 
 test('资源版本号已更新', () => {
