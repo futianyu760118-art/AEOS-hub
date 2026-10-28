@@ -87,7 +87,11 @@ function planeFixture(options: { agents?: ExecutionAgentRecord[]; mode?: Mode } 
           } else {
             run.state = 'completed';
             run.result = {
-              conclusions: [{ matter: '结论一' }, { matter: '结论二' }],
+              summary: '齐套分析完成：3 行齐套、2 行缺料',
+              conclusions: [
+                { matter: '结论一：基础 BOM 行缺料', risk: '影响交付', recommendation: '请物控确认', confidence: 'high' },
+                { matter: '结论二：存在替代料' },
+              ],
               handled_by: { agentId: 'spc-internal-1', name: '齐套研判', role: 'kitting' },
             };
           }
@@ -160,6 +164,12 @@ test('按策略分发两个域：能力、task_type、traceId 与 caller 正确'
   assert.deepEqual(kitting?.options, { traceId: 'orch-1', caller: { systemId: 'aeos-hub', agentId: 'AG-1', userId: 'U-1', taskId: null, traceId: 't-1' } });
   assert.deepEqual(report.items[0]?.handledBy, { agentId: 'spc-internal-1', name: '齐套研判', role: 'kitting' });
   assert.equal(report.items[0]?.conclusions, 2);
+  assert.equal(report.items[0]?.summary, '齐套分析完成：3 行齐套、2 行缺料');
+  assert.deepEqual(report.items[0]?.conclusionHighlights, [
+    { matter: '结论一：基础 BOM 行缺料', risk: '影响交付', recommendation: '请物控确认', confidence: 'high' },
+    { matter: '结论二：存在替代料' },
+  ]);
+  assert.equal(report.items[0]?.systemName, 'control-platform');
   assert.equal(audits.length, 1);
   assert.equal((audits[0]?.payload as Record<string, unknown>).status, 'completed');
 });
@@ -256,7 +266,7 @@ test('目标持续忙碌时放弃并标记 AGENT_BUSY', async () => {
   assert.equal(dispatched.length, 0);
 });
 
-test('分发结果文案：完成、无提供方与重复都说明原因', () => {
+test('分发结果文案：合并成一份可读报告', () => {
   const report = {
     dispatchId: 'dispatch-1',
     traceId: 'orch-1',
@@ -265,15 +275,66 @@ test('分发结果文案：完成、无提供方与重复都说明原因', () =>
     startedAt: NOW.toISOString(),
     endedAt: NOW.toISOString(),
     items: [
-      { domain: 'kitting' as const, businessObjectRef: 'business://order/O-1', status: 'completed' as const, systemId: 'control-platform', conclusions: 2 },
+      {
+        domain: 'kitting' as const,
+        businessObjectRef: 'business://order/O-1',
+        status: 'completed' as const,
+        systemId: 'control-platform',
+        systemName: '公司中控平台',
+        conclusions: 3,
+        summary: '3 行齐套、2 行缺料',
+        conclusionHighlights: [
+          { matter: '基础 BOM 行缺料', risk: '影响交付', recommendation: '请物控确认', confidence: 'high' },
+        ],
+      },
       { domain: 'quality' as const, businessObjectRef: 'business://order/O-1', status: 'skipped' as const, reason: 'NO_PROVIDER' },
     ],
   };
   const text = formatConclusionDispatchReport(report);
-  assert.match(text, /已自动分发给其他系统 Agent/);
-  assert.match(text, /物料齐套 → control-platform（2 条结论）/);
+  assert.match(text, /已自动分发给其他系统 Agent（1 项）/);
+  assert.match(text, /【物料齐套 · 公司中控平台】3 条结论/);
+  assert.match(text, /摘要：3 行齐套、2 行缺料/);
+  assert.match(text, /1\. 基础 BOM 行缺料（风险：影响交付；建议：请物控确认；置信度：high）/);
+  assert.match(text, /其余 2 条见「处理记录」/);
   assert.match(text, /暂无提供方：质量异常/);
-  assert.match(text, /处理记录/);
+  assert.match(text, /完整依据与执行步骤见「处理记录」/);
+});
+
+test('分发结果文案：没有结论时明确说明，不编造', () => {
+  const text = formatConclusionDispatchReport({
+    dispatchId: 'dispatch-3',
+    traceId: null,
+    status: 'completed',
+    counts: { dispatched: 1, completed: 1, failed: 0, skipped: 0 },
+    startedAt: NOW.toISOString(),
+    endedAt: NOW.toISOString(),
+    items: [
+      { domain: 'quality' as const, businessObjectRef: 'business://order/O-1', status: 'completed' as const, systemId: 'control-platform', conclusions: 0 },
+    ],
+  });
+  assert.match(text, /未返回明确结论，需人工复核/);
+});
+
+test('分发结果文案：忙碌与上游错误翻译成可读原因', () => {
+  const text = formatConclusionDispatchReport({
+    dispatchId: 'dispatch-4',
+    traceId: null,
+    status: 'failed',
+    counts: { dispatched: 1, completed: 0, failed: 1, skipped: 0 },
+    startedAt: NOW.toISOString(),
+    endedAt: NOW.toISOString(),
+    items: [
+      {
+        domain: 'kitting' as const,
+        businessObjectRef: 'business://order/O-1',
+        status: 'failed' as const,
+        reason: 'RUN_FAILED',
+        systemId: 'control-platform',
+        error: { code: 'INTERNAL_ERROR', message: 'agent busy' },
+      },
+    ],
+  });
+  assert.match(text, /目标系统忙碌，请稍后重试/);
 });
 
 test('分发结果文案：关闭开关时不打扰用户', () => {
@@ -298,4 +359,20 @@ test('分发记录写入去重台账且不含令牌字段', async () => {
   assert.equal(store.records[0].key, 'control-platform|reason_control_platform|material_kitting_analysis|business://order/O-8');
   assert.equal(store.records[0].status, 'completed');
   assert.equal(JSON.stringify(store).includes('token'), false);
+});
+
+test('报告使用系统显示名而不是技术 ID', async () => {
+  const { plane } = planeFixture();
+  const files = sandbox({ dispatchDomains: ['kitting'] });
+  const dispatcher = new ConclusionDispatcher(plane, {
+    policyFile: files.policyFile,
+    storeFile: files.storeFile,
+    now: () => NOW,
+    idFactory: () => 'label-test',
+    pollIntervalMs: 1,
+    systemLabel: (systemId) => systemId === 'control-platform' ? '公司中控平台' : systemId,
+  });
+  const report = await dispatcher.dispatchForObject({ businessObjectRef: 'business://order/O-11' });
+  assert.equal(report.items[0]?.systemName, '公司中控平台');
+  assert.match(formatConclusionDispatchReport(report), /【物料齐套 · 公司中控平台】/);
 });

@@ -264,7 +264,10 @@ const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN,
 // 执行面三张配置（准入/授权/选路）变更审计：首次只建基线，之后按文件哈希写 evidence。
 createExecutionPolicyAuditor({ appendEvidence }).start();const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
 // 结论自动分发：中枢出结论后，按策略交给其他系统的执行面能力继续只读分析。
-const conclusionDispatcher = new ConclusionDispatcher(executionPlane, { appendEvidence });
+const conclusionDispatcher = new ConclusionDispatcher(executionPlane, {
+  appendEvidence,
+  systemLabel: (systemId) => listSystems().find((system) => system.systemId === systemId)?.name ?? systemId,
+});
 const catalogApi = new CatalogApi((tenantId) => {
   const allSystems = listSystems();
   const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;

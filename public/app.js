@@ -8011,19 +8011,46 @@ async function loadTrace(id) {
   if (!root) return;
   root.innerHTML = '<div class="dashboard-loading">正在读取链路…</div>';
   try {
-    const response = await fetch(`/api/trace/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } });
+    const [response, agentsResponse] = await Promise.all([
+      fetch(`/api/trace/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } }),
+      fetch('/api/execution/agents', { headers: { accept: 'application/json' } }).catch(() => null),
+    ]);
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       root.innerHTML = harborEmpty('git-branch', '查询失败', esc(humanizeError(body.code, body.error || `HTTP ${response.status}`)));
       return;
     }
-    renderTrace(body);
+    // 链路接口只带结论摘要；完整结论从执行面快照按 runId 取回，一次分析的所有结论在同一页展示。
+    let runDetails = new Map();
+    try {
+      const agentsData = agentsResponse && agentsResponse.ok ? await agentsResponse.json() : {};
+      runDetails = new Map((Array.isArray(agentsData?.runs) ? agentsData.runs : []).map((run) => [run.runId, run]));
+    } catch {
+      runDetails = new Map();
+    }
+    renderTrace(body, runDetails);
   } catch (error) {
     root.innerHTML = harborEmpty('git-branch', '查询失败', esc(error?.message || String(error)));
   }
 }
 
-function renderTrace(trace) {
+function traceConclusionsSection(runs, runDetails) {
+  const blocks = [];
+  for (const run of runs) {
+    if (!String(run.capability || '').startsWith('reason')) continue;
+    const detail = runDetails?.get(run.runId);
+    if (!detail || !detail.result) continue;
+    const label = traceRunTaskLabel(detail) || TRACE_CAPABILITY_LABELS[run.capability] || '分析';
+    blocks.push(`<div class="trace-conclusion"><h3>${esc(label)} · ${esc(run.agentId)}</h3><pre class="assistant-reply-text">${esc(summarizeReasoningResult(detail.result))}</pre></div>`);
+  }
+  if (!blocks.length) return '';
+  return `<section class="surface">
+      <div class="surface-head"><div><h2>分析结论</h2><p>同一次分析的订单交付、齐套、质量结论</p></div></div>
+      ${blocks.join('')}
+    </section>`;
+}
+
+function renderTrace(trace, runDetails = new Map()) {
   const root = $('#trace-result');
   if (!root) return;
   if (!trace || trace.resolvedBy === 'none') {
@@ -8083,7 +8110,7 @@ function renderTrace(trace) {
       </div>
     </section>`;
 
-  root.innerHTML = summary + timeline + usageSection;
+  root.innerHTML = summary + traceConclusionsSection(runs, runDetails) + timeline + usageSection;
   refreshIcons();
   $('#btn-trace-open-run')?.addEventListener('click', () => {
     if (lastRun) openExecutionRun(lastRun.runId);

@@ -67,15 +67,27 @@ export interface ConclusionDispatchItem {
 
 export type ConclusionDispatchItemStatus = 'completed' | 'failed' | 'timeout' | 'skipped';
 
+/** 分析结论的精简条目：只保留面向管理者的字段，依据引用仍在「处理记录」查看。 */
+export interface ConclusionHighlight {
+  matter: string;
+  risk?: string;
+  recommendation?: string;
+  confidence?: string;
+}
+
 export interface ConclusionDispatchResultItem {
   domain: DispatchDomain;
   businessObjectRef: string;
   status: ConclusionDispatchItemStatus;
   reason?: string;
   systemId?: string;
+  /** 系统显示名（来自系统注册表）；缺省时用 systemId。 */
+  systemName?: string;
   agentId?: string;
   runId?: string;
   conclusions?: number;
+  summary?: string;
+  conclusionHighlights?: ConclusionHighlight[];
   handledBy?: unknown;
   error?: { code: string; message: string } | null;
 }
@@ -98,6 +110,8 @@ export interface ConclusionDispatcherOptions {
   now?: () => Date;
   idFactory?: () => string;
   pollIntervalMs?: number;
+  /** 系统显示名解析（如 control-platform → 公司中控平台）；缺省用 systemId。 */
+  systemLabel?: (systemId: string) => string;
   appendEvidence?: (input: EvidenceInput) => unknown;
 }
 
@@ -218,9 +232,33 @@ function defaultPrompt(domain: DispatchDomain, item: ConclusionDispatchItem): st
   }
 }
 
-function conclusionsCount(result: unknown): number {
-  if (!isRecord(result)) return 0;
-  return Array.isArray(result.conclusions) ? result.conclusions.length : 0;
+function textField(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function digestOf(result: unknown): { count: number; summary: string; highlights: ConclusionHighlight[] } {
+  const root = isRecord(result) ? result : {};
+  const list = Array.isArray(root.conclusions) ? root.conclusions : [];
+  const highlights: ConclusionHighlight[] = [];
+  for (const entry of list.slice(0, 4)) {
+    if (!isRecord(entry)) continue;
+    const matter = textField(entry.matter, 200);
+    if (!matter) continue;
+    const risk = textField(entry.risk, 120);
+    const recommendation = textField(entry.recommendation, 120);
+    const confidence = textField(entry.confidence, 20);
+    highlights.push({
+      matter,
+      ...(risk ? { risk } : {}),
+      ...(recommendation ? { recommendation } : {}),
+      ...(confidence ? { confidence } : {}),
+    });
+  }
+  return {
+    count: list.length,
+    summary: textField(root.summary, 200),
+    highlights,
+  };
 }
 
 function handledByOf(result: unknown): unknown {
@@ -228,7 +266,19 @@ function handledByOf(result: unknown): unknown {
   return result.handled_by ?? result.handledBy ?? null;
 }
 
-/** 把分发结果格式化为面向用户的补充说明；没有可展示信息时返回空串。 */
+function failureLine(item: ConclusionDispatchResultItem): string {
+  const label = DOMAIN_LABELS[item.domain];
+  const code = item.error?.code ?? '';
+  const message = item.error?.message ?? '';
+  if (item.reason === 'TIMEOUT') return `${label}超时`;
+  if (item.reason === 'AGENT_BUSY' || /busy|忙碌/i.test(message)) return `${label}：目标系统忙碌，请稍后重试`;
+  if (/UPSTREAM_UNAVAILABLE/.test(code)) return `${label}：上游不可用`;
+  if (/UPSTREAM_TIMEOUT/.test(code)) return `${label}：上游超时`;
+  if (item.reason === 'RUN_FAILED' || item.reason === 'RECALLED') return `${label}：${message || '执行失败'}`;
+  return `${label}：${message || item.reason || '未完成'}`;
+}
+
+/** 把分发结果格式化为一份可读报告（完成后直接展示在对话里）；没有可展示信息时返回空串。 */
 export function formatConclusionDispatchReport(report: ConclusionDispatchReport): string {
   if (report.status === 'disabled') return '';
   const completed = report.items.filter((item) => item.status === 'completed');
@@ -236,25 +286,40 @@ export function formatConclusionDispatchReport(report: ConclusionDispatchReport)
   const duplicate = report.items.filter((item) => item.reason === 'DUPLICATE');
   const noProvider = report.items.filter((item) => item.reason === 'NO_PROVIDER');
   const noTarget = report.items.filter((item) => item.reason === 'NO_TARGET');
-  const parts: string[] = [];
-  if (completed.length) {
-    parts.push(completed.map((item) => `${DOMAIN_LABELS[item.domain]} → ${item.systemId ?? '其他系统'}${typeof item.conclusions === 'number' ? `（${item.conclusions} 条结论）` : ''}`).join('；'));
+  const notes: string[] = [];
+  if (failed.length) notes.push(`未完成：${failed.map(failureLine).join('；')}`);
+  if (noProvider.length) notes.push(`暂无提供方：${[...new Set(noProvider.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
+  if (noTarget.length) notes.push(`未配置目标：${[...new Set(noTarget.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
+  if (duplicate.length) notes.push(`已分发过：${[...new Set(duplicate.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
+
+  if (!completed.length) {
+    return notes.length ? `本次自动分发未执行：${notes.join('；')}。` : '';
   }
-  if (failed.length) {
-    parts.push(`未完成：${failed.map((item) => `${DOMAIN_LABELS[item.domain]}${item.reason === 'TIMEOUT' ? '超时' : `失败（${item.error?.message || item.reason || '未知原因'}）`}`).join('；')}`);
+
+  // 一次分析的多份结论合并成一份报告，管理者不需要再逐个点开执行记录。
+  const lines: string[] = [`已自动分发给其他系统 Agent（${completed.length} 项）：`];
+  for (const item of completed) {
+    const system = item.systemName || item.systemId || '其他系统';
+    lines.push(`【${DOMAIN_LABELS[item.domain]} · ${system}】${item.conclusions ?? 0} 条结论`);
+    if (item.summary) lines.push(`摘要：${item.summary}`);
+    const highlights = item.conclusionHighlights ?? [];
+    if (highlights.length) {
+      highlights.forEach((conclusion, index) => {
+        const extra = [
+          conclusion.risk ? `风险：${conclusion.risk}` : '',
+          conclusion.recommendation ? `建议：${conclusion.recommendation}` : '',
+          conclusion.confidence ? `置信度：${conclusion.confidence}` : '',
+        ].filter(Boolean).join('；');
+        lines.push(`${index + 1}. ${conclusion.matter}${extra ? `（${extra}）` : ''}`);
+      });
+      const remaining = (item.conclusions ?? 0) - highlights.length;
+      if (remaining > 0) lines.push(`…其余 ${remaining} 条见「处理记录」。`);
+    } else {
+      lines.push('未返回明确结论，需人工复核。');
+    }
   }
-  if (noProvider.length) {
-    parts.push(`暂无提供方：${[...new Set(noProvider.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
-  }
-  if (noTarget.length) {
-    parts.push(`未配置目标：${[...new Set(noTarget.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
-  }
-  if (duplicate.length) {
-    parts.push(`已分发过：${[...new Set(duplicate.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
-  }
-  if (!parts.length) return '';
-  const prefix = completed.length ? '已自动分发给其他系统 Agent：' : '本次自动分发未执行：';
-  return `${prefix}${parts.join('；')}。处理过程可在「处理记录」查看。`;
+  lines.push('完整依据与执行步骤见「处理记录」。');
+  return [...lines, ...notes].join('\n');
 }
 
 /**
@@ -268,6 +333,7 @@ export class ConclusionDispatcher {
   private readonly now: () => Date;
   private readonly idFactory: () => string;
   private readonly pollIntervalMs: number;
+  private readonly systemLabel: (systemId: string) => string;
   private readonly appendEvidence?: (input: EvidenceInput) => unknown;
 
   constructor(plane: DispatchPlane, options: ConclusionDispatcherOptions = {}) {
@@ -277,6 +343,7 @@ export class ConclusionDispatcher {
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
+    this.systemLabel = options.systemLabel ?? ((systemId) => systemId);
     this.appendEvidence = options.appendEvidence;
   }
 
@@ -337,6 +404,9 @@ export class ConclusionDispatcher {
         recentCutoff,
       });
       report.items.push(result);
+      if (result.systemId && result.systemName === undefined) {
+        result.systemName = this.systemLabel(result.systemId);
+      }
       if (result.status === 'skipped') report.counts.skipped += 1;
       else {
         report.counts.dispatched += 1;
@@ -464,6 +534,7 @@ export class ConclusionDispatcher {
     runId: string,
   ): ConclusionDispatchResultItem {
     if (run.state === 'completed') {
+      const digest = digestOf(run.result);
       return {
         domain,
         businessObjectRef: item.businessObjectRef,
@@ -471,7 +542,9 @@ export class ConclusionDispatcher {
         systemId: target.systemId,
         agentId,
         runId,
-        conclusions: conclusionsCount(run.result),
+        conclusions: digest.count,
+        ...(digest.summary ? { summary: digest.summary } : {}),
+        ...(digest.highlights.length ? { conclusionHighlights: digest.highlights } : {}),
         handledBy: handledByOf(run.result),
       };
     }
