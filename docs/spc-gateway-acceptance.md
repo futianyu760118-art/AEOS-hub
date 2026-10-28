@@ -52,7 +52,7 @@ node -e "const d=require('./data/execution-plane.json');const a=d.agents||d;for(
 | T07 | 网关注册能力 | 至少包含 `query_control_platform`、`reason_control_platform` |
 | T08 | 检查能力约束 | 两条能力均为只读；推理能力要求 `context.businessObjectRef` |
 | T09 | 注册未授权能力 | 被过滤；若全部未授权，注册被拒绝（`CAPABILITY_FORBIDDEN`） |
-| T10 | 注册写能力 | 被拒绝（`WRITE_FORBIDDEN`），网关不得声明写操作 |
+| T10 | 注册写能力 | 注册时被能力授权表过滤（未授权的写能力不会登记）；若已被登记，派单时返回 `WRITE_FORBIDDEN`。网关不得声明写操作 |
 
 如果增加 `order` 能力，必须先在 Hub 的权限配置中授权，再验证一次 T07-T09。
 
@@ -61,25 +61,27 @@ node -e "const d=require('./data/execution-plane.json');const a=d.agents||d;for(
 | ID | 操作 | 预期结果 |
 |---|---|---|
 | T11 | 发起一笔 `query_control_platform` 借调/派单 | 借调单 `completed`，run `completed` |
-| T12 | 检查查询结果 | 有业务数据、`evidence_refs`、`data_as_of`、`data_confidence` |
+| T12 | 检查查询结果 | 有业务数据、`data_as_of`、`data_confidence`；查询结果不强制 `evidence_refs` |
 | T13 | 检查归因 | 借调单、run、用量、trace 指向同一 `gateway-control-platform` |
 | T14 | 上游返回 5xx 或不可达 | `run_failed` 携带 `UPSTREAM_UNAVAILABLE`，页面不得显示“没有数据/没有风险” |
 | T15 | 查询数据过旧 | 结果标记 `STALE_DATA` 或 `data_confidence=low`，页面标注“数据置信度不足” |
 
-示例（由 SPC 网关调用 Hub，令牌用环境变量，不要写进脚本）：
+示例（由调用方系统调用 Hub，令牌用环境变量，不要写进脚本）：
 
 ```bash
 # 本机调试用 127.0.0.1；跨机部署请替换为实际 Hub 地址
+# 注意：不允许向自己借调（toSystem 不能等于令牌系统），否则返回 403 SELF_BORROW_FORBIDDEN。
+# 下面用 aeos-hub 作为调用方、借调中控能力；caller.systemId 必须等于令牌系统。
 curl -sS -X POST http://<hub-host>:8790/api/system/borrow-orders \
   -H 'content-type: application/json' \
-  -H 'x-aeos-system-id: control-platform' \
-  -H "x-aeos-system-token: $SPC_TOKEN" \
+  -H 'x-aeos-system-id: aeos-hub' \
+  -H "x-aeos-system-token: $CALLER_TOKEN" \
   -d '{
     "requestId": "acceptance-query-001",
     "capability": "query_control_platform",
     "toSystem": "control-platform",
     "caller": {
-      "systemId": "control-platform",
+      "systemId": "aeos-hub",
       "agentId": "AG-ACCEPT-1",
       "userId": "accept-user-1",
       "taskId": "accept-task-1",
@@ -99,14 +101,14 @@ curl -sS -X POST http://<hub-host>:8790/api/system/borrow-orders \
 | T19 | 上游推理超时 | `UPSTREAM_TIMEOUT` 或 `UPSTREAM_UNAVAILABLE`，可召回，不得显示“没有风险” |
 | T20 | 推理结果为空但成功 | 明确说明“无结论”，不得编造风险或金额 |
 
-推理请求必须带业务锚点，例如：
+推理请求必须带业务锚点；`task_type` 只能取注册 schema 中的枚举值（`order_delivery_analysis`、`material_kitting_analysis`、`quality_analysis`、`production_analysis`），例如：
 
 ```json
 {
   "capability": "reason_control_platform",
   "input": {
     "prompt": "分析该订单的交付风险",
-    "task_type": "order_risk",
+    "task_type": "order_delivery_analysis",
     "context": { "businessObjectRef": "business://order/SO-2609-001" }
   }
 }
@@ -124,6 +126,8 @@ curl -sS -X POST http://<hub-host>:8790/api/system/borrow-orders \
 | T26 | 不传 caller | 行为与旧系统级调用一致，字段为 null，不报错 |
 
 Hub 页面核对：处理记录 → 借调详情 → 链路追踪；应能看到同一个用户/Agent/任务/trace。
+
+> 重要边界：`caller.userId` / `caller.agentId` 表示 **SPC 内部**用户/Agent。若 `caller.systemId` 不是 `control-platform`（例如 Hub 页面发起的 `aeos-hub` 调用），SPC 网关不应拿这些 ID 去查 SPC 用户表并拒绝；应按外部系统调用处理，保留元数据但不做 SPC 内部路由。否则 Hub 页面派单会出现 `USER_NOT_FOUND`。
 
 ## 6. 取消、断线与错误
 
