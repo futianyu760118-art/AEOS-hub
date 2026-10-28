@@ -24,6 +24,8 @@ export type TraceRun = {
   caller: { systemId: string; agentId: string | null; userId: string | null; taskId: string | null; traceId: string | null } | null;
   agentId: string;
   capability: string;
+  /** 分析类型（input.task_type）；查询 run 为 null，用于区分同一网关上并行分发的多笔分析。 */
+  taskType: string | null;
   state: string;
   startedAt: string;
   endedAt: string | null;
@@ -34,8 +36,7 @@ export type TraceRun = {
   error: { code: string; message: string } | null;
 };
 
-export type TraceUsage = {
-  runId: string | null;
+export type TraceUsage = {  runId: string | null;
   traceId: string | null;
   callerAgentId: string | null;
   callerUserId: string | null;
@@ -144,6 +145,7 @@ function collectRunIds(entry: EvidenceEntry, target: Set<string>): void {
 
 function runToTrace(run: ExecutionRunRecord): TraceRun {
   const result = record(run.result);
+  const input = record(run.input);
   const conclusions = Array.isArray(result.conclusions) ? result.conclusions : [];
   const refs = new Set<string>();
   for (const item of conclusions) {
@@ -161,6 +163,7 @@ function runToTrace(run: ExecutionRunRecord): TraceRun {
     taskId: run.capability.startsWith('reason') ? run.runId : null,
     agentId: run.agentId,
     capability: run.capability,
+    taskType: text(input.task_type),
     state: run.state,
     startedAt: run.startedAt,
     endedAt: run.endedAt,
@@ -190,6 +193,19 @@ function borrowToSummary(order: BorrowOrderRecord) {
     startedAt: order.startedAt,
     endedAt: order.endedAt,
   };
+}
+
+/** 分析类型 → 时间线可读标签；未登记的类型回退「查询/推理」。 */
+const ANALYSIS_LABELS: Record<string, string> = {
+  order_delivery_analysis: '订单交付分析',
+  material_kitting_analysis: '齐套分析',
+  quality_analysis: '质量分析',
+  production_analysis: '生产分析',
+};
+
+function analysisLabel(run: TraceRun): string {
+  const label = run.taskType ? ANALYSIS_LABELS[run.taskType] : undefined;
+  return label ?? (run.capability.startsWith('query') ? '查询' : '推理');
 }
 
 /** 按任一关联标识构建链路视图。找不到任何关联时 resolvedBy='none'，返回空链路而不是报错。 */
@@ -287,14 +303,14 @@ export function buildTrace(traceId: string, sources: TraceSources): TraceResult 
     timeline.push({
       at: run.startedAt,
       kind: 'run',
-      title: `${run.capability.startsWith('query') ? '查询' : '推理'}开始：${run.agentId}`,
-      detail: run.capability,
+      title: `${analysisLabel(run)}开始：${run.agentId}`,
+      detail: [run.capability, run.taskType].filter(Boolean).join(' · '),
     });
     if (run.endedAt) {
       timeline.push({
         at: run.endedAt,
         kind: 'run',
-        title: `${run.capability.startsWith('query') ? '查询' : '推理'}${run.state === 'completed' ? '完成' : '结束'}：${run.state}`,
+        title: `${analysisLabel(run)}${run.state === 'completed' ? '完成' : '结束'}：${run.state}`,
         detail: [
           run.dataConfidence ? `置信度 ${run.dataConfidence}` : '',
           run.conclusions ? `${run.conclusions} 条结论` : '',

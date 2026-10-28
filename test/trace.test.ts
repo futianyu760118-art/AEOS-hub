@@ -155,3 +155,23 @@ test('未知标识返回空链路而不是抛错', () => {
   assert.equal(trace.usage.length, 0);
   assert.equal(trace.timeline.length, 0);
 });
+
+test('同一 trace 下按 task_type 区分分析类型', () => {
+  const runs = [
+    run({ runId: 'exec-run-q', capability: 'query_control_platform', input: { path: '/external/orders/list' }, traceId: 'trace-multi' }),
+    run({ runId: 'exec-run-k', capability: 'reason_control_platform', input: { task_type: 'material_kitting_analysis' }, traceId: 'trace-multi' }),
+    run({ runId: 'exec-run-q2', capability: 'reason_control_platform', input: { task_type: 'quality_analysis' }, traceId: 'trace-multi' }),
+  ];
+  const trace = buildTrace('trace-multi', sources({
+    borrowOrders: () => [],
+    allRuns: () => runs,
+    runById: (id) => runs.find((item) => item.runId === id),
+    usageEvents: () => [],
+    evidenceEntries: () => [],
+  }));
+  const titles = trace.timeline.filter((item) => item.kind === 'run').map((item) => item.title);
+  assert.ok(titles.some((title) => title.startsWith('查询开始')));
+  assert.ok(titles.some((title) => title.startsWith('齐套分析开始')));
+  assert.ok(titles.some((title) => title.startsWith('质量分析完成')));
+  assert.equal(trace.runs.find((item) => item.runId === 'exec-run-k')?.taskType, 'material_kitting_analysis');
+});

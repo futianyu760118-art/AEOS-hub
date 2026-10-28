@@ -160,6 +160,8 @@ export interface ExecutionOrchestratorOptions {
   queryTimeoutMs?: number;
   reasoningTimeoutMs?: number;
   pollIntervalMs?: number;
+  /** 目标执行面忙碌时的最长等待时间（后台分发会占用同一网关）。 */
+  agentIdleTimeoutMs?: number;
   idFactory?: () => string;
   clock?: () => Date;
 }
@@ -170,6 +172,7 @@ export class ExecutionOrchestrator {
   private readonly queryTimeoutMs: number;
   private readonly reasoningTimeoutMs: number;
   private readonly pollIntervalMs: number;
+  private readonly agentIdleTimeoutMs: number;
   private readonly idFactory: () => string;
   private readonly clock: () => Date;
 
@@ -183,6 +186,7 @@ export class ExecutionOrchestrator {
     this.queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
     this.reasoningTimeoutMs = options.reasoningTimeoutMs ?? DEFAULT_REASONING_TIMEOUT_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.agentIdleTimeoutMs = options.agentIdleTimeoutMs ?? 60_000;
     this.idFactory = options.idFactory ?? randomUUID;
     this.clock = options.clock ?? (() => new Date());
   }
@@ -220,6 +224,7 @@ export class ExecutionOrchestrator {
     let queryRunId: string | null = null;
     let reasoningRunId: string | null = null;
     try {
+      await this.requireAgentIdle(queryer.agentId, requestId);
       const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
         path: KITTING_RESULTS_PATH,
         params: { page: 1, page_size: 200, risk_level: 'red' },
@@ -239,6 +244,7 @@ export class ExecutionOrchestrator {
         });
       }
 
+      await this.requireAgentIdle(reasoner.agentId, requestId, queryRunId);
       const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId), { traceId: requestId });
       reasoningRunId = reasonDispatch.runId;
       const reasonRun = await this.waitForRun(reasoningRunId, this.reasoningTimeoutMs, 'REASONING_TIMEOUT');
@@ -271,6 +277,7 @@ export class ExecutionOrchestrator {
     input: unknown;
     timeoutMs?: number;
   }): Promise<unknown> {
+    await this.requireAgentIdle(input.agentId, null);
     const dispatch = this.plane.dispatch(input.agentId, input.capability, input.input);
     try {
       const run = await this.waitForRun(dispatch.runId, input.timeoutMs ?? this.reasoningTimeoutMs, 'EXECUTION_TIMEOUT');
@@ -283,6 +290,23 @@ export class ExecutionOrchestrator {
       throw error instanceof ExecutionOrchestrationError
         ? error
         : new ExecutionOrchestrationError('EXECUTION_FAILED', (error as Error).message || '执行失败', { status: 502 });
+    }
+  }
+
+  /** 目标执行面同一时刻只跑一个任务：等空闲再派；超时返回 AGENT_BUSY，不直接撞上游。 */
+  private async requireAgentIdle(agentId: string, requestId: string | null, queryRunId: string | null = null): Promise<void> {
+    const deadline = Date.now() + this.agentIdleTimeoutMs;
+    for (;;) {
+      const agent = this.plane.list().agents.find((item) => item.agentId === agentId);
+      // 离线/不存在交给 dispatch 按原逻辑报错。
+      if (!agent || agent.connectionStatus !== 'online') return;
+      if (!agent.currentRunId && agent.runtimeStatus !== 'working') return;
+      if (Date.now() >= deadline) {
+        throw new ExecutionOrchestrationError('AGENT_BUSY', '目标执行面持续忙碌，请稍后重试', {
+          status: 409, requestId, queryRunId,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
     }
   }
 

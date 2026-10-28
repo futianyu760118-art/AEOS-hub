@@ -1625,6 +1625,8 @@ async function renderAiRunDetail() {
   }
   const events = await fetchRunEvents(run.runId);
   const order = aiBorrowByRun.get(run.runId);
+  // 推理类 run 直接渲染结构化结论（分发出去的齐套/质量分析也走这里）。
+  const reasoningText = run.capability?.startsWith('reason') && run.result ? summarizeReasoningResult(run.result) : '';
   root.innerHTML = `<div class="borrow-detail-grid">
       <div><span>任务</span><strong class="mono">${esc(run.runId)}</strong></div>
       <div><span>Agent</span><strong>${esc(run.agentId)}</strong></div>
@@ -1634,6 +1636,7 @@ async function renderAiRunDetail() {
       <div><span>耗时</span><strong>${esc(aiRunDuration(run))}</strong></div>
     </div>
     <div class="borrow-detail-block"><h3>结果摘要</h3><p class="form-hint">${esc(aiRunResultSummary(run))}</p></div>
+    ${reasoningText ? `<div class="borrow-detail-block"><h3>分析结论</h3><pre class="assistant-reply-text">${esc(reasoningText)}</pre></div>` : ''}
     <div class="borrow-detail-block"><h3>执行步骤</h3>${executionTimelineHtml(events)}</div>
     <div class="borrow-detail-block borrow-detail-actions">
       <button id="btn-ai-run-open-trace" class="btn secondary compact" type="button">查看链路</button>

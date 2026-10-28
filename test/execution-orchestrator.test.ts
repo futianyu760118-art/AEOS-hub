@@ -40,13 +40,27 @@ const GATEWAY_AGENT = agent({
   ],
 });
 
-function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean } = {}) {
+function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean; busyForMs?: number; busyForever?: boolean; agentIdleTimeoutMs?: number } = {}) {
   const runs = new Map<string, ExecutionRunRecord>();
   let sequence = 0;
   const audits: EvidenceInput[] = [];
-  const agents = options.singleGateway
+  const agents = (options.singleGateway
     ? [GATEWAY_AGENT]
-    : options.noQueryAgent ? [REASON_AGENT] : [QUERY_AGENT, REASON_AGENT];
+    : options.noQueryAgent ? [REASON_AGENT] : [QUERY_AGENT, REASON_AGENT]).map((item) => ({ ...item }));
+  if (options.busyForever || options.busyForMs) {
+    for (const item of agents) {
+      item.currentRunId = 'busy-run';
+      item.runtimeStatus = 'working';
+    }
+    if (options.busyForMs) {
+      setTimeout(() => {
+        for (const item of agents) {
+          item.currentRunId = null;
+          item.runtimeStatus = 'idle';
+        }
+      }, options.busyForMs);
+    }
+  }
   const plane = {
     list: () => ({ agents, runs: [] }),
     dispatch: (agentId: string, capability: string, input: unknown) => {
@@ -83,6 +97,7 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
     queryTimeoutMs: 200,
     reasoningTimeoutMs: 200,
     pollIntervalMs: 1,
+    agentIdleTimeoutMs: options.agentIdleTimeoutMs ?? 60_000,
     idFactory: () => 'test',
   });
   return { orchestrator, audits };
@@ -175,4 +190,19 @@ test('构造推理请求时写入订单锚点与只读约束', () => {
   assert.equal(request.request_id, 'orch-1');
   assert.deepEqual(request.context, { businessObjectRef: 'business://order/SO-1' });
   assert.match(String(request.prompt), /SO-1/);
+});
+
+test('目标执行面忙碌时先等空闲再编排', async () => {
+  const { orchestrator } = planeFixture({ busyForMs: 30, agentIdleTimeoutMs: 1000 });
+  const result = await orchestrator.highestRiskOrder({ reasoningAgentId: 'reason-agent', text: '分析今日风险最高的订单' });
+  assert.equal(result.order.orderNo, 'HJ-RED-BIG');
+  assert.equal(result.queryRunId, 'run-1');
+});
+
+test('目标执行面持续忙碌时返回 AGENT_BUSY 而不是直接撞上游', async () => {
+  const { orchestrator } = planeFixture({ busyForever: true, agentIdleTimeoutMs: 30 });
+  await assert.rejects(
+    () => orchestrator.highestRiskOrder({ reasoningAgentId: 'reason-agent', text: '分析今日风险最高的订单' }),
+    (error: unknown) => error instanceof ExecutionOrchestrationError && error.code === 'AGENT_BUSY',
+  );
 });
