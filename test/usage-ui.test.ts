@@ -33,3 +33,13 @@ test('纯查询调用显示无模型 Token，不显示 Token 0 / 成本 0', () =
   assert.match(app, /查询接口不产生模型费用/);
   assert.match(app, /queryEvents/);
 });
+
+test('分析成本按系统与 Agent 合并展示，并提供调用方切换', () => {
+  assert.match(app, /function usageHierarchyHtml/);
+  assert.match(app, /usageAgentSystem/);
+  assert.match(app, /usage-hierarchy/);
+  assert.match(app, /usage-system-row/);
+  assert.match(app, /usage-agent-row/);
+  assert.match(app, /usageTab = 'system'/);
+  assert.match(app, /data-usage-tab/);
+});

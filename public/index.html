@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=p0-business-v18-20261028" />
+  <link rel="stylesheet" href="/style.css?v=p0-business-v22-20261028" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -705,15 +705,21 @@
 
         <section id="view-usage" class="view app-view hidden">
           <div class="page-head">
-            <div><span class="page-module">成本与资源</span><h1>分析成本</h1><p>按智能助手和系统查看分析成本；Token 明细在完整视图中查看</p></div>
+            <div><span class="page-module">成本与资源</span><h1>分析成本</h1><p>按系统与 Agent 查看调用次数和成本；调用方归属可切换查看</p></div>
             <div class="page-actions"><button id="btn-usage-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
           </div>
 
           <div class="harbor-metrics usage-metrics">
             <div><span>累计成本</span><strong id="usage-total-cost">¥0.00</strong><small>人民币</small></div>
+            <div><span>调用次数</span><strong id="usage-total-events">0</strong><small>次分析 / 查询</small></div>
+            <div><span>覆盖系统</span><strong id="usage-system-count">0</strong><small>来源系统</small></div>
+            <div><span>覆盖 Agent</span><strong id="usage-agent-count">0</strong><small>执行通道与助手</small></div>
             <div id="usage-token-metric"><span>累计 Token</span><strong id="usage-total-tokens">0</strong><small>输入 + 输出</small></div>
-            <div><span>调用次数</span><strong id="usage-total-events">0</strong><small>条用量事件</small></div>
-            <div><span>覆盖智能助手</span><strong id="usage-agent-count">0</strong><small>有过记账的智能体</small></div>
+          </div>
+
+          <div class="segmented usage-tabs" role="tablist" aria-label="分析成本视图">
+            <button class="active" type="button" data-usage-tab="system" aria-pressed="true">按系统与 Agent</button>
+            <button type="button" data-usage-tab="caller" aria-pressed="false">按调用方</button>
           </div>
 
           <div id="usage-list" class="usage-list"><div class="dashboard-loading">正在读取用量台账…</div></div>
@@ -886,6 +892,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=p0-business-v21-20261028"></script>
+  <script type="module" src="/app.js?v=p0-business-v22-20261028"></script>
 </body>
 </html>

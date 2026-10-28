@@ -1254,7 +1254,7 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .harbor-delete-agent { width: 26px; height: 26px; margin-left: auto; color: var(--text-3); }
 .harbor-delete-agent:hover { background: rgba(192,57,43,.09); color: var(--danger); }
 .harbor-delete-agent svg { width: 13px; height: 13px; }
-.usage-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.usage-metrics { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .usage-list { display: flex; flex-direction: column; gap: 8px; }
 .usage-block { padding: 12px 16px; }
 .usage-block .surface-head { margin-bottom: 8px; }
@@ -1262,6 +1262,11 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .usage-table .harbor-row { min-width: 640px; grid-template-columns: minmax(200px, 1fr) 110px 110px 130px 90px; }
 .usage-table .harbor-row > span { font-size: 11px; }
 .usage-table .num { text-align: right; font-family: ui-monospace, Consolas, monospace; }
+.usage-tabs { margin: 0 18px 10px; }
+.usage-table.usage-hierarchy .harbor-row { min-width: 760px; grid-template-columns: minmax(220px, 1fr) 100px 100px 110px 80px 150px; }
+.usage-table.usage-hierarchy.compact .harbor-row { min-width: 420px; grid-template-columns: minmax(180px, 1fr) 110px 90px; }
+.usage-system-row > span:first-child { font-weight: 600; }
+.usage-agent-row > span:first-child { padding-left: 16px; color: var(--text-2); }
 .harbor-tier { display: inline; margin-right: 5px; color: var(--info); font-size: 9px; font-weight: 700; }
 .harbor-agent-root { min-width: 920px; border-bottom: 1px solid rgba(38, 122, 85, 0.18); background: linear-gradient(90deg, rgba(38, 122, 85, 0.075), rgba(255, 255, 255, 0.96) 46%); }
 .harbor-agent-root-head { min-height: 48px; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; border-bottom: 1px solid rgba(38, 122, 85, 0.12); padding: 8px 14px; }

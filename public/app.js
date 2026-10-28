@@ -872,6 +872,12 @@ function wireUsageControls() {
   if (usageControlsWired) return;
   usageControlsWired = true;
   $('#btn-usage-refresh')?.addEventListener('click', () => loadUsage());
+  $$('.usage-tabs [data-usage-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      usageTab = button.dataset.usageTab === 'caller' ? 'caller' : 'system';
+      renderUsage();
+    });
+  });
 }
 
 function formatTokenCount(value) {
@@ -980,6 +986,8 @@ const USAGE_SYSTEM_LABELS = {
 };
 let usageAgentNames = new Map();
 let usageSimulatedAgentIds = new Set();
+let usageAgentSystem = new Map();
+let usageTab = 'system';
 
 function usageAgentLabel(agentId) {
   const label = USAGE_AGENT_LABELS[agentId] || usageAgentNames.get(agentId) || agentId;
@@ -1007,6 +1015,8 @@ async function loadUsage() {
       usageSimulatedAgentIds = new Set((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
         .filter((agent) => agent.simulated === true)
         .map((agent) => agent.agentId));
+      usageAgentSystem = new Map((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
+        .map((agent) => [agent.agentId, agent.systemId || agent.sourceSystem || '']));
     }
   } catch { return; }
   usageSummary = data;
@@ -1019,6 +1029,52 @@ async function loadUsage() {
   }
 }
 
+function usageDisplayAgents(rows) {
+  // 业务视图隐藏探针与模拟数据，但保留真实执行通道（中台网关等）的成本。
+  return businessMode
+    ? rows.filter((row) => !isProbeAgent(row.agentId) && !usageSimulatedAgentIds.has(row.agentId))
+    : rows;
+}
+
+function usageHierarchyHtml(bySystem, byAgent) {
+  const compact = businessMode;
+  const agents = usageDisplayAgents(byAgent).slice()
+    .sort((left, right) => Number(right.cost || 0) - Number(left.cost || 0));
+  const groups = new Map();
+  for (const row of agents) {
+    const systemId = usageAgentSystem.get(row.agentId)
+      || (row.agentId === 'agent-aeos-hub' ? 'aeos-hub' : 'unknown');
+    const list = groups.get(systemId) || [];
+    list.push(row);
+    groups.set(systemId, list);
+  }
+  const order = [];
+  for (const row of bySystem) if (!order.includes(row.systemId)) order.push(row.systemId);
+  for (const systemId of groups.keys()) if (!order.includes(systemId)) order.push(systemId);
+  const time = (value) => value ? formatDateTimeText(value) : '—';
+  const rows = [];
+  for (const systemId of order) {
+    const system = bySystem.find((row) => row.systemId === systemId);
+    if (system) {
+      rows.push(compact
+        ? `<div class="harbor-row usage-system-row"><span>${esc(usageSystemLabel(systemId))}</span><span class="num">¥${formatUsageCost(system.cost)}</span><span class="num">${formatTokenCount(system.events)}</span></div>`
+        : `<div class="harbor-row usage-system-row"><span>${esc(usageSystemLabel(systemId))}</span><span class="num">${formatTokenCount(system.tokensIn)}</span><span class="num">${formatTokenCount(system.tokensOut)}</span><span class="num">¥${formatUsageCost(system.cost)}</span><span class="num">${formatTokenCount(system.events)}</span><span class="num">${esc(time(system.lastAt))}</span></div>`);
+    }
+    for (const row of groups.get(systemId) || []) {
+      const queryOnly = isQueryOnlyUsageRow(row);
+      const cost = queryOnly ? '—' : `¥${formatUsageCost(row.cost)}`;
+      rows.push(compact
+        ? `<div class="harbor-row usage-agent-row"><span>${esc(usageAgentLabel(row.agentId))}</span><span class="num">${cost}</span><span class="num">${formatTokenCount(row.events)}</span></div>`
+        : `<div class="harbor-row usage-agent-row"><span>${esc(usageAgentLabel(row.agentId))}</span><span class="num">${queryOnly ? '无模型 Token' : formatTokenCount(row.tokensIn)}</span><span class="num">${queryOnly ? '—' : formatTokenCount(row.tokensOut)}</span><span class="num">${cost}</span><span class="num">${formatTokenCount(row.events)}</span><span class="num">${esc(time(row.lastAt))}</span></div>`);
+    }
+  }
+  if (!rows.length) return '<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>还没有产生分析成本</small></div>';
+  const header = compact
+    ? '<div class="harbor-row harbor-head"><span>系统 / Agent</span><span class="num">成本（¥）</span><span class="num">次数</span></div>'
+    : '<div class="harbor-row harbor-head"><span>系统 / Agent</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">次数</span><span class="num">最近</span></div>';
+  return `<div class="harbor-table usage-table usage-hierarchy${compact ? ' compact' : ''}">${header}${rows.join('')}</div>`;
+}
+
 function renderUsage() {
   const root = $('#usage-list');
   if (!root) return;
@@ -1026,22 +1082,29 @@ function renderUsage() {
   const bySystem = Array.isArray(usageSummary?.bySystem) ? usageSummary.bySystem : [];
   const byCallerAgent = Array.isArray(usageSummary?.byCallerAgent) ? usageSummary.byCallerAgent : [];
   const byCallerUser = Array.isArray(usageSummary?.byCallerUser) ? usageSummary.byCallerUser : [];
-  // 业务视图只显示面向用户的助手；执行通道、探针与纯查询记录归完整视图。
-  const displayAgents = businessMode
-    ? byAgent.filter((row) => !isExecutionChannelAgent(row.agentId) && !isProbeAgent(row.agentId) && !isQueryOnlyUsageRow(row))
-    : byAgent;
+  const displayAgents = usageDisplayAgents(byAgent);
   const totalCost = byAgent.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
   const totalTokens = byAgent.reduce((sum, row) => sum + (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0), 0);
   const totalEvents = byAgent.reduce((sum, row) => sum + (Number(row.events) || 0), 0);
 
   const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
   setText('#usage-total-cost', `¥${formatUsageCost(totalCost)}`);
-  setText('#usage-total-tokens', formatTokenCount(totalTokens));
   setText('#usage-total-events', formatTokenCount(totalEvents));
+  setText('#usage-system-count', formatTokenCount(bySystem.length));
   setText('#usage-agent-count', formatTokenCount(displayAgents.length));
+  setText('#usage-total-tokens', formatTokenCount(totalTokens));
   $('#usage-token-metric')?.classList.toggle('hidden', businessMode);
+  $$('.usage-tabs [data-usage-tab]').forEach((button) => {
+    const active = button.dataset.usageTab === usageTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 
-  root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按智能助手</h2><p>每个智能助手消耗的成本</p></div></div>${usageTableHtml(displayAgents, 'agentId', businessMode ? '业务视图下没有面向用户的助手用量；可切换到完整视图查看执行通道与历史记录' : '还没有产生分析成本')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按系统</h2><p>按来源系统聚合的成本</p></div></div>${usageTableHtml(bySystem, 'systemId', '暂无系统用量记录')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方智能助手</h2><p>SPC 用户智能体维度的成本（来自调用方）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：借调请求尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>SPC 用户维度的成本（来自调用方）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：借调请求尚未携带 caller')}</section>`;
+  if (usageTab === 'caller') {
+    root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>外部系统用户维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：调用尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>外部系统 Agent 维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：调用尚未携带 caller')}</section>`;
+  } else {
+    root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(bySystem, byAgent)}</section>`;
+  }
   refreshIcons(root);
 }
 
