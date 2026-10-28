@@ -53,6 +53,7 @@
     "test:trace": "node --test test/trace.test.ts",
     "test:routing": "node --test test/execution-routing-policy.test.ts",
     "test:permissions": "node --test test/execution-agent-permissions.test.ts",
+    "test:dispatch": "node --test test/conclusion-dispatcher.test.ts",
     "test:policy-audit": "node --test test/execution-policy-audit.test.ts"
   },
   "dependencies": {

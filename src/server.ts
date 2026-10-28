@@ -81,6 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, e
 import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
+import { ConclusionDispatcher, formatConclusionDispatchReport } from './conclusion-dispatcher.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
 import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
@@ -262,6 +263,8 @@ const executionPlane = new ExecutionPlaneRegistry({
 const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
 // 执行面三张配置（准入/授权/选路）变更审计：首次只建基线，之后按文件哈希写 evidence。
 createExecutionPolicyAuditor({ appendEvidence }).start();const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
+// 结论自动分发：中枢出结论后，按策略交给其他系统的执行面能力继续只读分析。
+const conclusionDispatcher = new ConclusionDispatcher(executionPlane, { appendEvidence });
 const catalogApi = new CatalogApi((tenantId) => {
   const allSystems = listSystems();
   const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
@@ -1237,6 +1240,32 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
         orderNo: result.order.orderNo,
       },
     });
+    // 结论自动分发：不阻塞主回答，完成后在同一会话追加一条补充说明。
+    void conclusionDispatcher
+      .dispatchForObject(
+        {
+          businessObjectRef: result.order.businessObjectRef,
+          orderNo: result.order.orderNo,
+          title: result.order.businessObjectRef,
+        },
+        { traceId: result.requestId },
+      )
+      .then((report) => {
+        const text = formatConclusionDispatchReport(report);
+        if (!text) return;
+        appendConversationMessage(convId, { id: `dispatch-${randomUUID()}`, role: 'assistant', text, phase: 'follow_up' });
+        pushConv(convId, {
+          type: 'assistant_reply',
+          convId,
+          text,
+          meta: { dispatchId: report.dispatchId, traceId: report.traceId, counts: report.counts },
+        });
+      })
+      .catch((error) => {
+        const text = `自动分发失败：${(error as Error).message || '未知错误'}`;
+        appendConversationMessage(convId, { id: `dispatch-${randomUUID()}`, role: 'assistant', text });
+        pushConv(convId, { type: 'assistant_reply', convId, text });
+      });
     pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
   } catch (error) {
     const message = `执行面编排失败：${(error as Error).message}`;
