@@ -1239,9 +1239,10 @@ function notifyWriteRecord(record: WriteRequestRecord): void {
   const handledBy = isRecord(result.handled_by) ? result.handled_by : {};
   const handler = typeof handledBy.agentName === 'string' ? handledBy.agentName
     : typeof handledBy.agentId === 'string' ? handledBy.agentId : '';
+  const runRef = record.runId ? ` · run ${record.runId}` : '';
   const text = record.status === 'completed'
     ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}${handler ? ` · 处理方 ${handler}` : ''}。`
-    : `写操作失败：${record.error?.message || '未知错误'}`;
+    : `写操作失败：${record.error?.message || '未知错误'}（请求 ${record.id}${runRef}）。`;
   pushAssistantReply(convId, text);
 }
 
