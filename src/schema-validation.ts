@@ -1,16 +1,17 @@
 // 轻量 schema 校验（JSON Schema 的一个极小子集），供执行面能力自描述后做通用输入/结果结构校验。
 // 覆盖：type(object/array/string/number/integer/boolean)、properties、items、required、enum、maxLength、minItems。
 // 约定：不校验未知字段（additionalProperties 默认放行），保证 Agent 增加字段向前兼容。
-export type SchemaType = 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean';
+export type SchemaType = 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';
 
 export interface Schema {
-  type: SchemaType;
+  type: SchemaType | SchemaType[];
   properties?: Record<string, Schema>;
   items?: Schema;
   required?: string[];
   enum?: (string | number)[];
   maxLength?: number;
   minItems?: number;
+  pattern?: string;
 }
 
 function typeName(value: unknown): string {
@@ -21,8 +22,16 @@ function typeName(value: unknown): string {
 
 /** 校验 value 是否符合 schema；通过返回 null，否则返回可读的错误描述。 */
 export function validateAgainstSchema(value: unknown, schema: Schema): string | null {
-  if (!schema || typeof schema !== 'object' || typeof schema.type !== 'string') return 'schema 无效';
+  if (!schema || typeof schema !== 'object') return 'schema 无效';
+  if (Array.isArray(schema.type)) {
+    for (const type of schema.type) {
+      if (validateAgainstSchema(value, { ...schema, type }) === null) return null;
+    }
+    return `期望 ${schema.type.join(' | ')}，实际为 ${typeName(value)}`;
+  }
+  if (typeof schema.type !== 'string') return 'schema 无效';
   const { type } = schema;
+  if (type === 'null') return value === null ? null : `期望 null，实际为 ${typeName(value)}`;
 
   if (type === 'object') {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -63,6 +72,13 @@ export function validateAgainstSchema(value: unknown, schema: Schema): string | 
       return `字符串长度 ${value.length} 超过上限 ${schema.maxLength}`;
     }
     if (schema.enum && !schema.enum.includes(value)) return `值 "${value}" 不在允许范围`;
+    if (schema.pattern) {
+      try {
+        if (!new RegExp(schema.pattern).test(value)) return `值 "${value}" 不符合格式要求`;
+      } catch {
+        // 非法 pattern 不阻断校验，由提供方兜底。
+      }
+    }
     return null;
   }
 

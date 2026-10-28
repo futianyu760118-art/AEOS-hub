@@ -93,6 +93,8 @@ function operationScore(text: string, detail: ExecutionCapabilityOperation): num
 
 function extractFieldValue(text: string, field: { label: string; type?: 'string' | 'date' | 'number' }): string | null {
   const label = escapeRegExp(field.label);
+  if (field.type !== 'date' && field.type !== 'number'
+    && new RegExp(`${label}\s*(?:清空|置空|删除)`).test(text)) return '';
   const pattern = new RegExp(`${label}\\s*(?:改为|改成|更新为|设为|设成|为|是|：|:)\\s*([^，。；;\\n]+)`, 'i');
   const match = text.match(pattern);
   if (!match?.[1]) return null;
@@ -102,7 +104,12 @@ function extractFieldValue(text: string, field: { label: string; type?: 'string'
     const number = value.match(/-?\d+(?:\.\d+)?/);
     return number?.[0] ?? null;
   }
-  return value.replace(/^[“"']|[”"']$/g, '').trim() || null;
+  const cleaned = value
+    .replace(/^[：:，,。；;\s]+/, '')
+    .replace(/[。；;]+$/, '')
+    .replace(/^[“"']|[”"']$/g, '')
+    .trim();
+  return cleaned || null;
 }
 
 /** 提供方声明了 operations 元数据时，不依赖模型即可解析；新增命令无需改 Hub 代码。 */

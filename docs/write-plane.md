@@ -205,3 +205,24 @@ Hub 会解析写意图并回复：
 7. 外部系统提交 → Hub 页面可见并审批；外部系统轮询到最终状态。
 8. 写能力被直接派单（不经审批）→ `WRITE_FORBIDDEN`。
 9. 对话内说“改写某订单的交付日期为 …” → 助手只回复确认提示；回复“确认”后才派单，回复“取消”不产生任何修改。
+
+## 7. 中台确认规则（2026-10-28）
+
+中台已完成 `write_control_platform` 的 operations 元数据与本地 smoke，规则如下：
+
+| 操作 | 规则 |
+|---|---|
+| `order.update_delivery_date` | 写 `promised_date`；`YYYY-MM-DD`；允许过去日期用于纠错；`erp_status=3` 或已删除订单拒绝；P0 不联动出货计划/下游任务 |
+| `order.update_status` | 目标值仅 `open` / `closed`，同时写 `status` + `is_closed`；ERP 已关闭/已删除拒绝；ERP 未关闭时允许手工 `closed→open` |
+| `order.update_note` | 覆盖写，≤2000 字符；空串/null 清空；允许已关闭订单，禁止已删除订单 |
+
+其他确认：
+
+- `orderNo` trim 后精确匹配，不含行号，≤64；
+- 幂等键保留 30 天；同 key 同内容返回首次结果并置 `idempotent_replay=true`；内容不一致返回 `IDEMPOTENCY_CONFLICT`；
+- 写操作 `handled_by` 返回 `spc-agent-order-write` / 订单写操作 Agent / `order_write`；写操作不调用大模型，`model` 省略；
+- `constraints.dryRun=false`；Hub 不依赖 `dryRun=true` 展示或派单，无需补实现；
+- `target_agent_ref` 已支持，Hub 当前未使用；
+- 生产部署前需为中台订单写 AppKey 授权 `orders.write`。
+
+Hub 侧已按此复跑：备注、状态、交付日期三类自然语言命令均可由 operations 元数据确定性解析（无需模型）。

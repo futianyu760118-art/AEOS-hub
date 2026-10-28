@@ -158,3 +158,17 @@ test('元数据缺少必要字段时要求补充', async () => {
   if (intent.kind !== 'clarify') return;
   assert.match(intent.message, /缺少必要信息：交付日期/);
 });
+
+test('清空备注解析为空字符串', async () => {
+  const intent = await parseWriteIntentWithLLM('把订单 HJ202602-0009-0028 的备注清空', [CAPABILITY], { apiKey: '' });
+  assert.equal(intent.kind, 'write');
+  if (intent.kind !== 'write') return;
+  assert.deepEqual(intent.input.changes, { remark: '' });
+});
+
+test('交付日期支持斜杠格式并规范化', async () => {
+  const intent = await parseWriteIntentWithLLM('改写订单 HJ202602-0009-0028 的交付日期为 2026/11/10', [CAPABILITY], { apiKey: '' });
+  assert.equal(intent.kind, 'write');
+  if (intent.kind !== 'write') return;
+  assert.deepEqual(intent.input.changes, { deliveryDate: '2026-11-10' });
+});
