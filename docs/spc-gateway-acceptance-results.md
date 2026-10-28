@@ -63,3 +63,24 @@
 1. SPC 侧排期做 T14/T15/T19/T20/T22/T27 的故障注入与内部取消确认。
 2. Hub 侧择机做 T28/T29（停网关、重启 Hub），建议在无人使用时段执行并提前告知。
 3. T09 若要真跑，需临时新增一个可注册的探针 Agent（不占用 `gateway-control-platform`）。
+
+## 2026-10-28 中台契约补齐复验
+
+中台部署后复跑真实链路，结果：
+
+| 项 | 结果 |
+|---|---|
+| `handled_by` · 订单 | `spc-agent-order-risk`（订单风险分析 Agent，model=deepseek-flash） |
+| `handled_by` · 齐套 | `spc-agent-kitting-risk`（齐套风险分析 Agent） |
+| `handled_by` · 质量 | `spc-agent-quality-risk`（质量风险分析 Agent） |
+| `request_id` | Hub 派单已携带，中台原样回显（如 `verify-rid-1793157972`） |
+| 并发忙碌 | 第二笔返回 `AGENT_BUSY`（不再是 `INTERNAL_ERROR`） |
+| 校验说明 | `validation_note` 不再出现 |
+
+未覆盖：
+- `TARGET_AGENT_UNAVAILABLE` / 显式 `target_agent_ref`：Hub 暂无该入口，待需要时再加。
+- `AGENT_NOT_FOUND`：需要中台内部构造无匹配 Agent 的场景。
+
+Hub 侧配套：派单消息新增 `request_id`；处理记录/分发报告展示“实际处理 Agent”。
+
+观察到的 Hub 侧问题：并发创建借调单时偶发 `borrow-orders.json` rename `EPERM`（一次 Kitting 请求 500，重试成功），待加写重试/串行化。

@@ -175,3 +175,23 @@ test('同一 trace 下按 task_type 区分分析类型', () => {
   assert.ok(titles.some((title) => title.startsWith('质量分析完成')));
   assert.equal(trace.runs.find((item) => item.runId === 'exec-run-k')?.taskType, 'material_kitting_analysis');
 });
+
+test('提取实际处理 Agent（handled_by）', () => {
+  const runs = [run({
+    traceId: 'trace-h',
+    runId: 'exec-run-h',
+    result: {
+      summary: '齐套分析',
+      conclusions: [],
+      handled_by: { agentId: 'spc-agent-kitting-risk', agentName: '齐套风险分析 Agent', role: 'kitting_risk' },
+    },
+  })];
+  const trace = buildTrace('trace-h', sources({
+    borrowOrders: () => [],
+    allRuns: () => runs,
+    runById: (id) => runs.find((item) => item.runId === id),
+    usageEvents: () => [],
+    evidenceEntries: () => [],
+  }));
+  assert.deepEqual(trace.runs[0]?.handledBy, { agentId: 'spc-agent-kitting-risk', agentName: '齐套风险分析 Agent' });
+});

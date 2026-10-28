@@ -191,6 +191,7 @@ test('派单下发 dispatch 并创建 run', (t) => {
     input: { path: '/external/material-kitting/shortages', params: { demand_no: 'X' } },
     traceId: runId,
     caller: null,
+    request_id: runId,
   });
   const run = h.registry.list().runs.find((r) => r.runId === runId);
   assert.equal(run?.state, 'dispatched');
@@ -531,4 +532,18 @@ test('推理结果缺少 evidence_refs 标记低置信度', (t) => {
   assert.equal(run?.state, 'completed');
   assert.equal((run?.result as { data_confidence?: string }).data_confidence, 'low');
   assert.ok((run?.result as { validation_note?: string }).validation_note);
+});
+
+test('派单 request_id 优先使用调用方提供的值', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const { runId } = h.registry.dispatch(
+    h.agentId,
+    'query_control_platform',
+    { path: '/external/orders/list', params: {} },
+    { requestId: 'borrow-123' },
+  );
+  const message = h.sent[0] as Record<string, unknown>;
+  assert.equal(message.request_id, 'borrow-123');
+  assert.notEqual(message.request_id, runId);
 });

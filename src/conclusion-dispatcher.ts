@@ -307,6 +307,12 @@ function handledByOf(result: unknown): unknown {
   return result.handled_by ?? result.handledBy ?? null;
 }
 
+/** 实际处理方显示名：优先 agentName/name，其次 agentId。 */
+function handledByLabel(value: unknown): string {
+  if (!isRecord(value)) return '';
+  return textField(value.agentName, 80) || textField(value.name, 80) || textField(value.agentId, 80);
+}
+
 function failureLine(item: ConclusionDispatchResultItem): string {
   const label = DOMAIN_LABELS[item.domain];
   const code = item.error?.code ?? '';
@@ -341,7 +347,8 @@ export function formatConclusionDispatchReport(report: ConclusionDispatchReport)
   const lines: string[] = [`已自动分发给其他系统 Agent（${completed.length} 项）：`];
   for (const item of completed) {
     const system = item.systemName || item.systemId || '其他系统';
-    lines.push(`【${DOMAIN_LABELS[item.domain]} · ${system}】${item.conclusions ?? 0} 条结论`);
+    const handler = handledByLabel(item.handledBy);
+    lines.push(`【${DOMAIN_LABELS[item.domain]} · ${system}${handler ? ` · ${handler}` : ''}】${item.conclusions ?? 0} 条结论`);
     if (item.summary) lines.push(`摘要：${item.summary}`);
     const highlights = item.conclusionHighlights ?? [];
     if (highlights.length) {
@@ -565,6 +572,7 @@ export class ConclusionDispatcher {
     try {
       const dispatch = this.plane.dispatch(agent.agentId, target.capability, input, {
         ...(context.traceId ? { traceId: context.traceId } : {}),
+        ...(context.traceId ? { requestId: `${context.traceId}:${target.taskType}` } : {}),
         caller: context.caller,
       });
       runId = dispatch.runId;

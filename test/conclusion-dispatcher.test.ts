@@ -162,7 +162,7 @@ test('按策略分发两个域：能力、task_type、traceId 与 caller 正确'
   assert.equal((kitting?.input as Record<string, unknown>).task_type, 'material_kitting_analysis');
   assert.deepEqual((kitting?.input as Record<string, unknown>).context, { businessObjectRef: 'business://order/O-1' });
   assert.equal((quality?.input as Record<string, unknown>).task_type, 'quality_analysis');
-  assert.deepEqual(kitting?.options, { traceId: 'orch-1', caller: { systemId: 'aeos-hub', agentId: 'AG-1', userId: 'U-1', taskId: null, traceId: 't-1' } });
+  assert.deepEqual(kitting?.options, { traceId: 'orch-1', requestId: 'orch-1:material_kitting_analysis', caller: { systemId: 'aeos-hub', agentId: 'AG-1', userId: 'U-1', taskId: null, traceId: 't-1' } });
   assert.deepEqual(report.items[0]?.handledBy, { agentId: 'spc-internal-1', name: '齐套研判', role: 'kitting' });
   assert.equal(report.items[0]?.conclusions, 2);
   assert.equal(report.items[0]?.summary, '齐套分析完成：3 行齐套、2 行缺料');
@@ -375,7 +375,7 @@ test('报告使用系统显示名而不是技术 ID', async () => {
   });
   const report = await dispatcher.dispatchForObject({ businessObjectRef: 'business://order/O-11' });
   assert.equal(report.items[0]?.systemName, '公司中控平台');
-  assert.match(formatConclusionDispatchReport(report), /【物料齐套 · 公司中控平台】/);
+  assert.match(formatConclusionDispatchReport(report), /【物料齐套 · 公司中控平台 · 齐套研判】/);
 });
 
 test('分发过程推送进度事件', async () => {

@@ -228,7 +228,7 @@ export class ExecutionOrchestrator {
       const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
         path: KITTING_RESULTS_PATH,
         params: { page: 1, page_size: 200, risk_level: 'red' },
-      }, { traceId: requestId });
+      }, { traceId: requestId, requestId });
       queryRunId = queryDispatch.runId;
       const queryRun = await this.waitForRun(queryRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
       if (queryRun.state !== 'completed') {
@@ -246,7 +246,7 @@ export class ExecutionOrchestrator {
       }
 
       await this.requireAgentIdle(reasoner.agentId, requestId, queryRunId);
-      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId), { traceId: requestId });
+      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId), { traceId: requestId, requestId });
       reasoningRunId = reasonDispatch.runId;
       const reasonRun = await this.waitForRun(reasoningRunId, this.reasoningTimeoutMs, 'REASONING_TIMEOUT');
       if (reasonRun.state !== 'completed') {

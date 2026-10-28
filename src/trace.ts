@@ -26,6 +26,8 @@ export type TraceRun = {
   capability: string;
   /** 分析类型（input.task_type）；查询 run 为 null，用于区分同一网关上并行分发的多笔分析。 */
   taskType: string | null;
+  /** 提供方内部实际处理的 Agent（result.handled_by）；系统级/查询任务为 null。 */
+  handledBy: { agentId: string | null; agentName: string | null } | null;
   state: string;
   startedAt: string;
   endedAt: string | null;
@@ -155,6 +157,13 @@ function runToTrace(run: ExecutionRunRecord): TraceRun {
       if (typeof ref === 'string' && ref.trim()) refs.add(ref.trim());
     }
   }
+  const handledByRecord = record(result.handled_by);
+  const handledBy = Object.keys(handledByRecord).length
+    ? {
+      agentId: text(handledByRecord.agentId),
+      agentName: text(handledByRecord.agentName) ?? text(handledByRecord.name),
+    }
+    : null;
   return {
     runId: run.runId,
     traceId: run.traceId ?? run.runId,
@@ -164,6 +173,7 @@ function runToTrace(run: ExecutionRunRecord): TraceRun {
     agentId: run.agentId,
     capability: run.capability,
     taskType: text(input.task_type),
+    handledBy,
     state: run.state,
     startedAt: run.startedAt,
     endedAt: run.endedAt,

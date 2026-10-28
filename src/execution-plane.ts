@@ -635,7 +635,7 @@ export class ExecutionPlaneRegistry {
   }
 
   // ---------- 管理面 → 执行面 ----------
-  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string; caller?: CallerContext | null } = {}): { runId: string; state: ExecutionRunState } {
+  dispatch(agentId: string, capability: string, input: unknown, options: { traceId?: string; caller?: CallerContext | null; requestId?: string } = {}): { runId: string; state: ExecutionRunState } {
     const entry = this.requireAgent(agentId);
     if (entry.record.connectionStatus !== 'online') {
       throw new ExecutionPlaneError('AGENT_OFFLINE', `执行面 ${agentId} 不在线，无法派单`);
@@ -682,7 +682,16 @@ export class ExecutionPlaneRegistry {
     this.runs.set(runId, run);
     entry.record.currentRunId = runId;
     entry.record.runtimeStatus = 'working';
-    entry.send({ type: 'dispatch', runId, capability, input: input ?? null, traceId, caller: run.caller ?? null });
+    entry.send({
+      type: 'dispatch',
+      runId,
+      capability,
+      input: input ?? null,
+      traceId,
+      caller: run.caller ?? null,
+      // 中台按契约原样回显 request_id；未显式提供时用 runId 兜底。
+      request_id: options.requestId?.trim() || runId,
+    });
     this.persist();
     return { runId, state: run.state };
   }

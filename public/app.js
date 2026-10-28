@@ -8179,7 +8179,8 @@ function traceConclusionsSection(runs, runDetails) {
     const detail = runDetails?.get(run.runId);
     if (!detail || !detail.result) continue;
     const label = traceRunTaskLabel(detail) || TRACE_CAPABILITY_LABELS[run.capability] || '分析';
-    blocks.push(`<div class="trace-conclusion"><h3>${esc(label)} · ${esc(run.agentId)}</h3><pre class="assistant-reply-text">${esc(summarizeReasoningResult(detail.result))}</pre></div>`);
+    const handler = run.handledBy?.agentName || run.handledBy?.agentId || '';
+    blocks.push(`<div class="trace-conclusion"><h3>${esc(label)} · ${esc(run.agentId)}${handler ? ` · 实际处理：${esc(handler)}` : ''}</h3><pre class="assistant-reply-text">${esc(summarizeReasoningResult(detail.result))}</pre></div>`);
   }
   if (!blocks.length) return '';
   return `<section class="surface">

@@ -429,6 +429,7 @@ export class BorrowOrderService {
     try {
       const dispatched = this.executionPlane.dispatch(provider.agentId, capability, rawInput, {
         traceId: order.orderId,
+        requestId: order.requestId,
         caller: order.caller ?? { systemId: order.fromSystem, agentId: null, userId: null, taskId: null, traceId: null },
       });
       this.runToOrder.set(dispatched.runId, order.orderId);
