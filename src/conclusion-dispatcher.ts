@@ -203,6 +203,37 @@ export function loadConclusionDispatchPolicy(file = conclusionDispatchPolicyFile
   };
 }
 
+/** 保存分发策略（系统配置页）；只允许改开关、分发域与上限，目标系统仍由配置文件维护。 */
+export function saveConclusionDispatchPolicy(input: unknown, file = conclusionDispatchPolicyFile): ConclusionDispatchPolicy {
+  if (!isRecord(input)) throw new Error('分发配置无效');
+  const current = loadConclusionDispatchPolicy(file);
+  const enabled = input.enabled === true;
+  const rawDomains = Array.isArray(input.dispatchDomains) ? input.dispatchDomains : current.dispatchDomains;
+  const dispatchDomains: DispatchDomain[] = [];
+  for (const value of rawDomains) {
+    const domain = parseDomain(value);
+    if (domain && !dispatchDomains.includes(domain)) dispatchDomains.push(domain);
+  }
+  if (enabled && !dispatchDomains.length) throw new Error('启用自动分发时至少要选择一个分析域');
+  const rawMax = typeof input.maxItemsPerAnalysis === 'number' && Number.isFinite(input.maxItemsPerAnalysis)
+    ? Math.trunc(input.maxItemsPerAnalysis)
+    : current.maxItemsPerAnalysis;
+  const maxItemsPerAnalysis = Math.max(0, Math.min(10, rawMax));
+  if (enabled && maxItemsPerAnalysis < 1) throw new Error('最多分发项数至少为 1');
+  const next: ConclusionDispatchPolicy = {
+    ...current,
+    enabled,
+    dispatchDomains,
+    maxItemsPerAnalysis,
+    revision: current.revision + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  const temp = `${file}.tmp-${randomUUID().slice(0, 8)}`;
+  writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  renameSync(temp, file);
+  return next;
+}
+
 function readStore(file: string): DispatchStore {
   const raw = readJson(file);
   if (!isRecord(raw) || !Array.isArray(raw.records)) return { version: 1, records: [] };

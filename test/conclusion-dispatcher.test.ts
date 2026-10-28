@@ -7,6 +7,7 @@ import {
   ConclusionDispatcher,
   formatConclusionDispatchReport,
   loadConclusionDispatchPolicy,
+  saveConclusionDispatchPolicy,
   type ConclusionDispatchPolicy,
 } from '../src/conclusion-dispatcher.ts';
 import type { ExecutionAgentRecord, ExecutionRunRecord } from '../src/execution-plane.ts';
@@ -426,4 +427,22 @@ test('近 24 小时分发过的业务对象可被列出，用于“下一条”�
   const dispatcher = buildDispatcher(plane, files);
   await dispatcher.dispatchForObject({ businessObjectRef: 'business://order/O-14' });
   assert.deepEqual(dispatcher.recentBusinessObjectRefs(24), ['business://order/O-14']);
+});
+
+test('系统配置保存：只改开关、分发域与上限，目标系统保持不变', () => {
+  const files = sandbox();
+  const saved = saveConclusionDispatchPolicy({ enabled: true, dispatchDomains: ['order', 'bad', 'quality'], maxItemsPerAnalysis: 3 }, files.policyFile);
+  assert.equal(saved.enabled, true);
+  assert.deepEqual(saved.dispatchDomains, ['order', 'quality']);
+  assert.equal(saved.maxItemsPerAnalysis, 3);
+  assert.equal(saved.revision, 2);
+  assert.ok(saved.targets.kitting);
+  const reloaded = loadConclusionDispatchPolicy(files.policyFile);
+  assert.deepEqual(reloaded.dispatchDomains, ['order', 'quality']);
+});
+
+test('系统配置保存：启用时必须选择分析域且上限至少为 1', () => {
+  const files = sandbox();
+  assert.throws(() => saveConclusionDispatchPolicy({ enabled: true, dispatchDomains: [], maxItemsPerAnalysis: 2 }, files.policyFile), /至少要选择一个分析域/);
+  assert.throws(() => saveConclusionDispatchPolicy({ enabled: true, dispatchDomains: ['kitting'], maxItemsPerAnalysis: 0 }, files.policyFile), /至少为 1/);
 });

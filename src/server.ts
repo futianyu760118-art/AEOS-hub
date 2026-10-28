@@ -81,7 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, e
 import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
-import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport } from './conclusion-dispatcher.ts';
+import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport, loadConclusionDispatchPolicy, saveConclusionDispatchPolicy } from './conclusion-dispatcher.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
 import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
@@ -3403,6 +3403,30 @@ wss.on('connection', (ws, request) => {
         send(ws, { type: 'config_saved', message: '配置已保存，codex 运行时已用新配置重启' });
         broadcast({ type: 'model_options', modelOptions: buildModelOptions() });
         broadcast({ type: 'info', convId: null, text: '模型配置已更新' });
+      } else if (type === 'dispatch_policy:get') {
+        send(ws, { type: 'dispatch_policy:data', payload: loadConclusionDispatchPolicy() });
+      } else if (type === 'dispatch_policy:save') {
+        const policy = saveConclusionDispatchPolicy(msg.payload);
+        try {
+          appendEvidence({
+            kind: 'app_event',
+            actor_id: 'hub-config',
+            actor_type: 'system',
+            object_ref: 'hub://config/conclusion-dispatch',
+            source_system: 'aeos-hub',
+            correlation_id: 'conclusion-dispatch-policy-updated',
+            summary: 'conclusion dispatch policy updated',
+            payload: {
+              enabled: policy.enabled,
+              dispatchDomains: policy.dispatchDomains,
+              maxItemsPerAnalysis: policy.maxItemsPerAnalysis,
+              revision: policy.revision,
+            },
+          });
+        } catch {
+          // 审计失败不影响保存。
+        }
+        send(ws, { type: 'dispatch_policy_saved', message: '分发配置已保存（立即生效）', payload: policy });
       } else {
         send(ws, { type: 'error', convId: null, message: `不支持的 WebSocket 消息类型：${type || '缺失 type'}` });
       }

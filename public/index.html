@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#08090a" />
   <title>AEOS 中枢系统</title>
-  <link rel="stylesheet" href="/style.css?v=p0-business-v17-20261028" />
+  <link rel="stylesheet" href="/style.css?v=p0-business-v18-20261028" />
 </head>
 <body>
   <section id="login-stage" class="login-shell app-stage" aria-label="AEOS 登录">
@@ -794,6 +794,12 @@
               <div class="surface-head"><div><h2 id="onboarding-config-entry-title">首次人员开通（应急）</h2><p>仅在尚未接入 OA 或试点未初始化时使用；OA 同步启用后不作为日常人员维护入口。</p></div><button id="btn-open-personnel-onboarding" class="btn primary compact" type="button"><i data-lucide="user-plus"></i>开始应急开通</button></div>
             </section>
             <section class="surface config-section"><div class="surface-head"><div><h2>默认模型</h2><p>修改后将重启本项目隔离目录内的 Codex Runtime</p></div><span id="cfg-status" class="config-status"></span></div><div class="form-grid"><label><span>模型提供商</span><select id="cfg-provider"></select></label><label><span>模型</span><input id="cfg-model" list="model-suggest" placeholder="留空使用账号默认模型" /><datalist id="model-suggest"><option value="gpt-5.1-codex"></option><option value="gpt-5.2-codex"></option><option value="gpt-5-codex"></option><option value="o3"></option><option value="o4-mini"></option></datalist></label></div><p id="cfg-provider-hint" class="form-hint"></p></section>
+            <section class="surface config-section" aria-labelledby="dispatch-config-title">
+              <div class="surface-head"><div><h2 id="dispatch-config-title">结论自动分发</h2><p>中枢出结论后，自动交给其他系统的分析能力继续只读分析。</p></div><span id="dispatch-cfg-status" class="config-status"></span></div>
+              <div class="form-grid"><label><span>启用自动分发</span><select id="dispatch-cfg-enabled"><option value="1">启用</option><option value="0">停用</option></select></label><label><span>最多分发项数</span><input id="dispatch-cfg-max" type="number" min="0" max="10" step="1" /></label></div>
+              <div id="dispatch-cfg-domains" class="dispatch-domain-grid"></div>
+              <button id="btn-save-dispatch-cfg" class="btn secondary compact" type="button"><i data-lucide="save"></i>保存分发配置</button>
+            </section>
             <section class="surface config-section provider-section"><div class="surface-head"><div><h2>自定义提供商</h2><p>OpenAI 兼容网关 / 国内模型 · 密钥仅写入隔离目录</p></div><button id="btn-add-provider" class="btn secondary compact" type="button"><i data-lucide="plus"></i>添加提供商</button></div><div id="providers" class="providers"></div><p class="form-hint">当前 Codex 版本仅支持 <code>responses</code> 接口；可切换模型清单仅用于对话页选择。</p></section>
             <section class="surface config-section runtime-section"><div class="surface-head"><div><h2>运行时信息</h2><p>AEOS Hub 独立运行边界</p></div><span class="status-pill ok">隔离</span></div><dl class="runtime-info"><div><dt>隔离 CODEX_HOME</dt><dd><code id="info-home"></code></dd></div><div><dt>配置文件</dt><dd><code id="info-config"></code></dd></div><div><dt>已注册 MCP</dt><dd id="info-mcp"></dd></div><div><dt>已配置密钥</dt><dd id="info-keys"></dd></div></dl></section>
           </div>
@@ -912,6 +918,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=p0-business-v17-20261028"></script>
+  <script type="module" src="/app.js?v=p0-business-v18-20261028"></script>
 </body>
 </html>

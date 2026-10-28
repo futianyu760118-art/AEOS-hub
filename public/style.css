@@ -1550,6 +1550,9 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 /* Configuration */
 .config-layout { display: grid; gap: 8px; }
 .config-section { padding-bottom: 13px; }
+.dispatch-domain-grid { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 10px 0 12px; }
+.dispatch-domain-grid label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.dispatch-domain-grid input { height: auto; }
 .governance-config-entry .surface-head { min-height: 0; }
 .governance-config-entry .surface-head p { max-width: 560px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 14px; }

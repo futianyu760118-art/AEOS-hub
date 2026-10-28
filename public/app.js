@@ -3988,6 +3988,31 @@ function saveConfig() {
 
 function loadConfig() {
   send({ type: 'config:get' });
+  send({ type: 'dispatch_policy:get' });
+}
+
+const DISPATCH_DOMAIN_OPTIONS = [['order', '订单交付'], ['kitting', '物料齐套'], ['quality', '质量异常'], ['production', '生产进度']];
+
+function fillDispatchConfig(policy) {
+  const enabled = $('#dispatch-cfg-enabled');
+  if (enabled) enabled.value = policy?.enabled === true ? '1' : '0';
+  const max = $('#dispatch-cfg-max');
+  if (max) max.value = String(policy?.maxItemsPerAnalysis ?? 0);
+  const host = $('#dispatch-cfg-domains');
+  if (!host) return;
+  const selected = new Set(Array.isArray(policy?.dispatchDomains) ? policy.dispatchDomains : []);
+  host.innerHTML = DISPATCH_DOMAIN_OPTIONS.map(([value, label]) => `<label><input type="checkbox" data-dispatch-domain="${value}" ${selected.has(value) ? 'checked' : ''} /><span>${label}</span></label>`).join('');
+}
+
+function saveDispatchConfig() {
+  const enabled = ($('#dispatch-cfg-enabled')?.value || '0') === '1';
+  const max = Number($('#dispatch-cfg-max')?.value || 0);
+  const domains = Array.from(document.querySelectorAll('[data-dispatch-domain]'))
+    .filter((node) => node.checked)
+    .map((node) => node.getAttribute('data-dispatch-domain'));
+  const status = $('#dispatch-cfg-status');
+  if (status) status.textContent = '保存中...';
+  send({ type: 'dispatch_policy:save', payload: { enabled, dispatchDomains: domains, maxItemsPerAnalysis: max } });
 }
 
 async function loadEvidence() {
@@ -7338,6 +7363,16 @@ function connect() {
         els.btnSaveConfig.disabled = false;
         toast(message.message);
         break;
+      case 'dispatch_policy:data':
+        fillDispatchConfig(message.payload);
+        break;
+      case 'dispatch_policy_saved': {
+        if (message.payload) fillDispatchConfig(message.payload);
+        const dispatchStatus = $('#dispatch-cfg-status');
+        if (dispatchStatus) dispatchStatus.textContent = message.message || '已保存';
+        toast(message.message || '分发配置已保存');
+        break;
+      }
       default:
         break;
     }
@@ -7871,6 +7906,7 @@ els.guardDeny.addEventListener('click', () => decideGuard('decline'));
 els.cfgProvider.addEventListener('change', () => { els.cfgProviderHint.textContent = hintFor(els.cfgProvider.value); });
 els.btnAddProvider.addEventListener('click', () => { providerRows.push({ id: `provider-${providerRows.length + 1}`, wire_api: 'responses' }); renderProviders(); });
 els.btnSaveConfig.addEventListener('click', saveConfig);
+document.getElementById('btn-save-dispatch-cfg')?.addEventListener('click', saveDispatchConfig);
 els.evRefresh.addEventListener('click', loadEvidence);
 els.evidenceSearch?.addEventListener('input', renderEvidenceRows);
 els.evidenceSourceFilter?.addEventListener('change', renderEvidenceRows);
