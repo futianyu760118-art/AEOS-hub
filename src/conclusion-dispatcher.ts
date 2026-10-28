@@ -300,7 +300,7 @@ export function formatConclusionDispatchReport(report: ConclusionDispatchReport)
   if (failed.length) notes.push(`未完成：${failed.map(failureLine).join('；')}`);
   if (noProvider.length) notes.push(`暂无提供方：${[...new Set(noProvider.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
   if (noTarget.length) notes.push(`未配置目标：${[...new Set(noTarget.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
-  if (duplicate.length) notes.push(`已分发过：${[...new Set(duplicate.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}`);
+  if (duplicate.length) notes.push(`已分发过：${[...new Set(duplicate.map((item) => DOMAIN_LABELS[item.domain]))].join('、')}（如需重新分析，请回复“重新分析”）`);
 
   if (!completed.length) {
     return notes.length ? `本次自动分发未执行：${notes.join('；')}。` : '';
@@ -360,7 +360,7 @@ export class ConclusionDispatcher {
   /** 对单个业务对象按策略分发（默认使用策略里的 dispatchDomains）。 */
   async dispatchForObject(
     input: { businessObjectRef: string; orderNo?: string; title?: string; domains?: DispatchDomain[] },
-    context: { traceId?: string | null; caller?: CallerContext | null; onProgress?: (event: ConclusionDispatchProgress) => void } = {},
+    context: { traceId?: string | null; caller?: CallerContext | null; force?: boolean; onProgress?: (event: ConclusionDispatchProgress) => void } = {},
   ): Promise<ConclusionDispatchReport> {
     const policy = loadConclusionDispatchPolicy(this.policyFile);
     const domains = (input.domains ?? policy.dispatchDomains)
@@ -374,10 +374,25 @@ export class ConclusionDispatcher {
     return this.dispatch(items, { ...context, policy });
   }
 
+  /** 近 N 小时内分发过的业务对象引用，用于“下一条高风险订单”排除已分析对象。 */
+  recentBusinessObjectRefs(withinHours = 24): string[] {
+    const cutoff = this.now().getTime() - withinHours * 3600_000;
+    const store = readStore(this.storeFile);
+    const refs = new Set<string>();
+    for (const record of store.records) {
+      const at = new Date(record.at).getTime();
+      if (Number.isNaN(at) || at < cutoff) continue;
+      const parts = record.key.split('|');
+      const ref = parts[parts.length - 1];
+      if (ref) refs.add(ref);
+    }
+    return [...refs];
+  }
+
   /** 分发一组结构化事项；逐项出结果，整体不抛错。 */
   async dispatch(
     items: ConclusionDispatchItem[],
-    context: { traceId?: string | null; caller?: CallerContext | null; policy?: ConclusionDispatchPolicy; onProgress?: (event: ConclusionDispatchProgress) => void } = {},
+    context: { traceId?: string | null; caller?: CallerContext | null; policy?: ConclusionDispatchPolicy; force?: boolean; onProgress?: (event: ConclusionDispatchProgress) => void } = {},
   ): Promise<ConclusionDispatchReport> {
     const policy = context.policy ?? loadConclusionDispatchPolicy(this.policyFile);
     const startedAt = this.now().toISOString();
@@ -413,6 +428,7 @@ export class ConclusionDispatcher {
         policy,
         traceId,
         caller: context.caller ?? null,
+        force: context.force === true,
         agents,
         store,
         recentCutoff,
@@ -460,6 +476,7 @@ export class ConclusionDispatcher {
       policy: ConclusionDispatchPolicy;
       traceId: string | null;
       caller: CallerContext | null;
+      force: boolean;
       agents: ExecutionAgentRecord[];
       store: DispatchStore;
       recentCutoff: number;
@@ -480,7 +497,7 @@ export class ConclusionDispatcher {
       };
     }
     const key = dispatchKey(target, item.businessObjectRef);
-    const duplicate = context.store.records.some((entry) => entry.key === key
+    const duplicate = !context.force && context.store.records.some((entry) => entry.key === key
       && new Date(entry.at).getTime() >= context.recentCutoff
       && entry.status !== 'failed' && entry.status !== 'timeout');
     if (duplicate) {

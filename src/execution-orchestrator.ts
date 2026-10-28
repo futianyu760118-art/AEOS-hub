@@ -191,7 +191,7 @@ export class ExecutionOrchestrator {
     this.clock = options.clock ?? (() => new Date());
   }
 
-  async highestRiskOrder(input: { reasoningAgentId: string; text: string }): Promise<HighestRiskOrderResult> {
+  async highestRiskOrder(input: { reasoningAgentId: string; text: string; excludeOrderNos?: string[] }): Promise<HighestRiskOrderResult> {
     const text = typeof input.text === 'string' ? input.text.trim() : '';
     const reasoningAgentId = typeof input.reasoningAgentId === 'string' ? input.reasoningAgentId.trim() : '';
     if (!text || text.length > 2000) throw new ExecutionOrchestrationError('INVALID_ARGUMENT', 'text 必填且不超过 2000 字符', { status: 400 });
@@ -237,7 +237,8 @@ export class ExecutionOrchestrator {
         });
       }
 
-      const [order] = rankOrdersFromResult(queryRun.result);
+      const excluded = new Set((input.excludeOrderNos ?? []).map((value) => value.trim()).filter(Boolean));
+      const [order] = rankOrdersFromResult(queryRun.result).filter((candidate) => !excluded.has(candidate.orderNo));
       if (!order) {
         throw new ExecutionOrchestrationError('NO_ELIGIBLE_ORDER', '当前查询窗口没有可用于分析的订单', {
           status: 422, requestId, queryRunId,

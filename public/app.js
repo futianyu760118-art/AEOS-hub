@@ -4288,18 +4288,8 @@ function openDashboardRiskDetail(risk) {
   if (kicker) kicker.textContent = isProduction ? '生产协同详情' : isQuality ? '异常与质量详情' : isKitting ? '物料齐套详情' : '订单风险详情';
   els.dashboardRiskModalTitle.textContent = `${isQuality ? (risk.issueNo || risk.orderNo) : isProduction ? (risk.workOrderNo || risk.orderNo) : risk.orderNo} · ${risk.summary}`;
   els.dashboardRiskModalDesc.textContent = isProduction ? '生产协同中台返回字段与 Evidence 依据；缺失值不会补造。' : isKitting ? '物料齐套中台返回字段与 Evidence 依据；缺失值不会补造。' : isQuality ? '异常与质量中台返回字段与 Evidence 依据；缺失值不会补造。' : '仅展示 company-control 返回字段；缺失值不会补造。';
-  const riskTaskType = isProduction ? 'production' : isQuality ? 'quality' : isKitting ? 'kitting' : 'order';
-  const specialistProfile = isProduction ? productionAgentProfile(risk) : isQuality ? qualityAgentProfile(risk) : isKitting ? kittingAgentProfile(risk) : { pattern: /订单交付风险/ };
-  const hasVisibleSpecialist = visibleHarborAgents().filter((agent) => agent.registration?.lifecycle !== 'retired' && agent.status !== 'archived')
-    .some((agent) => specialistProfile.pattern.test(`${agent.name || ''} ${agent.role || ''}`) && (agent.domainIds || []).includes(riskTaskType));
-  els.dashboardRiskDispatch.classList.toggle('hidden', !hasVisibleSpecialist);
-  els.dashboardRiskDispatch.innerHTML = isProduction
-    ? '<i data-lucide="bot-message-square"></i><span>交给生产协同 Agent 分析</span>'
-    : isKitting
-    ? '<i data-lucide="bot-message-square"></i><span>交给物料齐套 Agent 分析</span>'
-    : isQuality
-      ? '<i data-lucide="bot-message-square"></i><span>交给异常与质量 Agent 分析</span>'
-      : '<i data-lucide="bot-message-square"></i><span>交给风险交付Agent分析</span>';
+  els.dashboardRiskDispatch.classList.remove('hidden');
+  els.dashboardRiskDispatch.innerHTML = '<i data-lucide="bot-message-square"></i><span>交给智能助手分析</span>';
   const detailFields = isProduction ? `
     ${field('生产工单号', risk.workOrderNo || risk.orderNo, 'mono')}
     ${field('销售订单 / 产品', [risk.salesOrderNo || risk.orderNo, risk.product].filter(Boolean).join(' / ') || '待回传')}
@@ -4330,7 +4320,7 @@ function openDashboardRiskDetail(risk) {
   ${riskLinkageHtml(risk)}
   <section class="risk-detail-gaps"><b><i data-lucide="triangle-alert"></i>字段缺失提示</b>${missing.length ? `<ul>${missing.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p>当前展示字段均已回传；仍应以本次工具调用的 evidence_refs 为准。</p>'}</section>`;
   els.dashboardRiskModalStatus.textContent = '';
-  els.dashboardRiskDispatch.disabled = !hasVisibleSpecialist;
+  els.dashboardRiskDispatch.disabled = false;
   els.dashboardRiskCreateCase.disabled = !risk.evidenceRef;
   els.dashboardRiskModal.classList.remove('hidden');
   refreshIcons(els.dashboardRiskModal);
@@ -4400,11 +4390,8 @@ function productionRiskFromRow(row, assessment = {}, index = 0) {
 async function dispatchDashboardRiskToAgent() {
   const risk = selectedDashboardRisk;
   if (!risk) return;
-  const activeDispatches = riskAgentDispatches.size + (pendingRiskAgentDispatch ? 1 : 0);
-  if (activeDispatches >= MAX_PARALLEL_SPECIALIST_DISPATCHES || ws?.readyState !== WebSocket.OPEN) {
-    toast(activeDispatches >= MAX_PARALLEL_SPECIALIST_DISPATCHES
-      ? `当前已有 ${MAX_PARALLEL_SPECIALIST_DISPATCHES} 个专业 Agent 并行研判，请等待任一任务完成后再派发`
-      : '中枢连接未就绪，请稍后重试', true);
+  if (ws?.readyState !== WebSocket.OPEN) {
+    toast('中枢连接未就绪，请稍后重试', true);
     if (!ws || ws.readyState !== WebSocket.OPEN) connect();
     return;
   }
@@ -4412,61 +4399,37 @@ async function dispatchDashboardRiskToAgent() {
   const isKitting = risk.source === 'kitting';
   const isQuality = risk.source === 'quality';
   const isProduction = risk.source === 'production';
-  const profile = isKitting ? kittingAgentProfile(risk) : isQuality ? qualityAgentProfile(risk) : isProduction ? productionAgentProfile(risk) : { pattern: /订单交付风险/, label: '风险交付Agent', task: '订单风险分析' };
-  els.dashboardRiskModalStatus.textContent = `正在定位${profile.label}…`;
+  const label = isProduction ? '生产进度' : isQuality ? '质量异常' : isKitting ? '物料齐套' : '订单交付';
+  els.dashboardRiskModalStatus.textContent = '正在把该事项交给智能助手…';
   try {
-    await Promise.all([loadSquad({ silent: true }), loadHarbor({ silent: true })]);
-    const taskType = isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order';
-    const activeAgents = visibleHarborAgents().filter((agent) => agent.registration?.lifecycle !== 'retired' && agent.status !== 'archived');
-    // 优先按专业角色匹配；匹配不到时，退回服务域覆盖该任务的在线 Agent（如中台执行面）。
-    const harborAgent = activeAgents.find((agent) => profile.pattern.test(`${agent.name || ''} ${agent.role || ''}`))
-      || activeAgents.find((agent) => (agent.domainIds || []).includes(taskType));
-    if (!harborAgent) throw new Error(`${profile.label}尚未在 AI 港湾登记，无法派发`);
-    if (!(harborAgent.domainIds || []).includes(taskType)) {
-      throw new Error(`${profile.label}的服务业务域未包含${taskType}，无法派发`);
-    }
-    const member = (squad.members || []).find((item) => item.harborAgentId === harborAgent.id);
-    if (member) {
-      await postSquad('/api/agent-squad/activities', {
-        agentId: member.id,
-        title: `已接收${profile.task}任务`,
-        detail: `${isKitting ? '需求对象' : isQuality ? '质量异常' : isProduction ? '生产对象' : '订单'} ${isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo} 已由首页派发；Evidence 线索：${risk.evidenceRef || '待运行时核对 evidence_refs'}。`,
-      });
-    }
-    pendingRiskAgentDispatch = {
-      harborAgentId: harborAgent.id,
-      memberId: member?.id ?? harborAgent.id,
-      squadId: null,
-      orderNo: isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo,
-      evidenceRef: risk.evidenceRef || '',
-      taskType: isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order',
-      attentionCardId: attentionCardId(risk),
-      agentLabel: profile.label,
-      prompt: isKitting ? kittingAgentPrompt(risk, harborAgent) : isQuality ? qualityAgentPrompt(risk, harborAgent) : isProduction ? productionAgentPrompt(risk, harborAgent) : riskAgentPrompt(risk, harborAgent),
-      choice: { provider: harborAgent.provider, model: harborAgent.model },
-    };
-    const attentionStates = savedMap(ATTENTION_STORAGE);
-    const previousAttentionState = attentionStates[pendingRiskAgentDispatch.attentionCardId] || 'new';
-    attentionStates[pendingRiskAgentDispatch.attentionCardId] = 'review';
-    saveMap(ATTENTION_STORAGE, attentionStates);
-    recordAttentionTransition(pendingRiskAgentDispatch.attentionCardId, previousAttentionState, 'review', '已派发专业 Agent 研判');
-    if (dashboardSnapshot) renderAttention(dashboardSnapshot);
+    const subject = isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo;
+    const prompt = risk.prompt || `分析${isQuality ? '质量异常' : '订单'} ${subject} 的影响、建议动作与责任人，并使用关联证据链。`;
     closeDashboardRiskDetail();
-    chatScope = { type: 'agent', agentId: member.id, squadId: null, label: `${harborAgent.name} · 专属会话` };
-    els.chatViewTitle.textContent = `${harborAgent.name} · 专属会话`;
-    els.chatViewDesc.textContent = '由中枢分发的任务会话，只在该 Agent 与所属小队中呈现。';
+    // Hub 只保留智能助手：首页事项统一进入中枢会话，由执行面网关完成只读分析。
+    chatScope = { type: 'hub', agentId: null, squadId: null, label: '中枢会话' };
+    els.chatViewTitle.textContent = '智能助手';
+    els.chatViewDesc.textContent = '跨域经营分析与能力调用';
     els.conversationScopeLabel.textContent = chatScope.label;
-    els.chatScopeBack.classList.remove('hidden');
+    els.chatScopeBack.classList.add('hidden');
     showView('chat');
     curConvId = null;
-    pendingText = pendingRiskAgentDispatch.prompt;
-    pendingChoice = pendingRiskAgentDispatch.choice;
-    if (!newConversation()) throw new Error('无法创建风险分析会话');
-    toast(`已派发 ${isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo} 给${profile.label}；可继续派发其他 Agent（最多 ${MAX_PARALLEL_SPECIALIST_DISPATCHES} 个并行）`);
+    pendingText = prompt;
+    pendingChoice = null;
+    pendingRiskAgentDispatch = null;
+    if (!newConversation()) throw new Error('无法创建分析会话');
+    const attentionStates = savedMap(ATTENTION_STORAGE);
+    const cardId = attentionCardId(risk);
+    const previousAttentionState = attentionStates[cardId] || 'new';
+    attentionStates[cardId] = 'review';
+    saveMap(ATTENTION_STORAGE, attentionStates);
+    recordAttentionTransition(cardId, previousAttentionState, 'review', '已交给智能助手分析');
+    if (dashboardSnapshot) renderAttention(dashboardSnapshot);
+    toast(`已交给智能助手分析：${label} ${subject}`);
   } catch (error) {
     els.dashboardRiskModalStatus.textContent = error.message;
+    toast(`发起分析失败：${error.message}`, true);
+  } finally {
     els.dashboardRiskDispatch.disabled = false;
-    toast(`派发${profile.label}失败：${error.message}`, true);
   }
 }
 

@@ -393,3 +393,37 @@ test('分发过程推送进度事件', async () => {
   assert.equal(events[3]?.domain, 'quality');
   assert.equal(events.length, 5);
 });
+
+test('显式重新分析时跳过去重', async () => {
+  const { plane, dispatched } = planeFixture();
+  const files = sandbox({ dispatchDomains: ['kitting'] });
+  const dispatcher = buildDispatcher(plane, files);
+  await dispatcher.dispatchForObject({ businessObjectRef: 'business://order/O-13' });
+  const forced = await dispatcher.dispatchForObject({ businessObjectRef: 'business://order/O-13' }, { force: true });
+  assert.equal(forced.counts.completed, 1);
+  assert.equal(dispatched.length, 2);
+});
+
+test('重复分发时提示可以要求重新分析', () => {
+  const text = formatConclusionDispatchReport({
+    dispatchId: 'dispatch-5',
+    traceId: null,
+    status: 'skipped',
+    counts: { dispatched: 0, completed: 0, failed: 0, skipped: 1 },
+    startedAt: NOW.toISOString(),
+    endedAt: NOW.toISOString(),
+    items: [
+      { domain: 'kitting' as const, businessObjectRef: 'business://order/O-1', status: 'skipped' as const, reason: 'DUPLICATE', systemId: 'control-platform' },
+    ],
+  });
+  assert.match(text, /已分发过：物料齐套/);
+  assert.match(text, /回复“重新分析”/);
+});
+
+test('近 24 小时分发过的业务对象可被列出，用于“下一条”排除', async () => {
+  const { plane } = planeFixture();
+  const files = sandbox({ dispatchDomains: ['kitting'] });
+  const dispatcher = buildDispatcher(plane, files);
+  await dispatcher.dispatchForObject({ businessObjectRef: 'business://order/O-14' });
+  assert.deepEqual(dispatcher.recentBusinessObjectRefs(24), ['business://order/O-14']);
+});

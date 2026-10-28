@@ -206,3 +206,13 @@ test('目标执行面持续忙碌时返回 AGENT_BUSY 而不是直接撞上游',
     (error: unknown) => error instanceof ExecutionOrchestrationError && error.code === 'AGENT_BUSY',
   );
 });
+
+test('排除已分析订单后选择下一条高风险订单', async () => {
+  const { orchestrator } = planeFixture();
+  const result = await orchestrator.highestRiskOrder({
+    reasoningAgentId: 'reason-agent',
+    text: '下一条高风险订单',
+    excludeOrderNos: ['HJ-RED-BIG'],
+  });
+  assert.equal(result.order.orderNo, 'HJ-RED-SMALL');
+});

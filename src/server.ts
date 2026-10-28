@@ -1156,13 +1156,18 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
   const conv = getConv(convId);
   if ((conv?.scope ?? 'hub') !== 'hub') return false;
   const intent = recognizeHubIntent(text);
-  if (intent.action === 'chat') return false;
+  // 范围控制：用户可直接要求“下一条高风险订单”，跳过最近已分析过的订单。
+  const wantsNextOrder = /^(下一条|下一个|下个)\s*(高风险)?\s*订单?/.test(text.trim());
+  if (intent.action === 'chat' && !wantsNextOrder) return false;
+  const effectiveIntent = wantsNextOrder
+    ? { ...intent, domain: 'cross-domain' as const, action: 'highest-risk' as const, confidence: 'high' as const }
+    : intent;
 
   const agents = executionPlane.list().agents;
-  const selection = selectAgentForIntent(intent, agents);
+  const selection = selectAgentForIntent(effectiveIntent, agents);
   const sessionId = conv?.threadId || 'hub-execution-orchestrator';
 
-  if (intent.action !== 'highest-risk') {
+  if (effectiveIntent.action !== 'highest-risk') {
     const plan = selection ? buildIntentDispatch(intent, text) : null;
     if (selection && plan) {
       const runId = `hub-intent-${randomUUID()}`;
@@ -1229,7 +1234,16 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
   });
 
   try {
-    const result = await executionOrchestrator.highestRiskOrder({ reasoningAgentId: selection.agentId, text });
+    const excludeOrderNos = wantsNextOrder
+      ? conclusionDispatcher.recentBusinessObjectRefs(24)
+        .filter((ref) => ref.startsWith('business://order/'))
+        .map((ref) => ref.slice('business://order/'.length))
+      : undefined;
+    const result = await executionOrchestrator.highestRiskOrder({
+      reasoningAgentId: selection.agentId,
+      text,
+      ...(excludeOrderNos && excludeOrderNos.length ? { excludeOrderNos } : {}),
+    });
     const answer = formatHighestRiskAnswer(result);
     appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
     pushConv(convId, {
@@ -1253,6 +1267,7 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
         },
         {
           traceId: result.requestId,
+          force: /重新分析|再分析|重跑/.test(text),
           onProgress: (event) => {
             pushConv(convId, {
               type: 'dispatch_progress',
@@ -1286,7 +1301,9 @@ async function routeHubExecutionTurn(convId: string, text: string): Promise<bool
       });
     pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
   } catch (error) {
-    const message = `执行面编排失败：${(error as Error).message}`;
+    const message = wantsNextOrder && error instanceof ExecutionOrchestrationError && error.code === 'NO_ELIGIBLE_ORDER'
+      ? '没有更多未分析的高风险订单；如需重新分析，请回复“重新分析”。'
+      : `执行面编排失败：${(error as Error).message}`;
     appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: message });
     pushConv(convId, { type: 'assistant_reply', convId, text: message });
     pushConv(convId, { type: 'turn_end', convId, status: 'failed', runId, sessionId, message, occurredAt: new Date().toISOString() });
