@@ -1799,6 +1799,11 @@ function wireOpsControls() {
   opsControlsWired = true;
   $('#btn-ops-refresh')?.addEventListener('click', () => loadOps());
   $('#ops-health-list')?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-ops-health-show-all]')) {
+      healthShowAll = !healthShowAll;
+      renderOps();
+      return;
+    }
     const toggle = event.target.closest('[data-ops-health-toggle]');
     if (!toggle) return;
     const key = toggle.getAttribute('data-ops-health-toggle') || '';
@@ -1837,6 +1842,7 @@ function opsSeverityPill(severity) {
 }
 
 let healthExpanded = new Set();
+let healthShowAll = false;
 
 function renderOps() {
   const snapshot = opsData?.snapshot;
@@ -1845,8 +1851,8 @@ function renderOps() {
   const alerts = Array.isArray(opsData?.alerts) ? opsData.alerts : [];
   const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
 
-  const unhealthy = checks.filter((check) => !check.ok).length;
-  setText('#ops-health-summary', unhealthy ? `${unhealthy} 项异常` : '正常');
+  const unhealthyCount = checks.filter((check) => !check.ok).length;
+  setText('#ops-health-summary', unhealthyCount ? `${unhealthyCount} 项异常` : '正常');
   setText('#ops-agents', `${formatTokenCount(metrics?.agentsOnline ?? 0)}/${formatTokenCount(metrics?.agentsTotal ?? 0)}`);
 
   const counts = opsData?.alertCounts;
@@ -1867,61 +1873,63 @@ function renderOps() {
   const checked = $('#ops-checked-at');
   if (checked) checked.textContent = snapshot?.checkedAt ? `检查于 ${borrowTime(snapshot.checkedAt)}` : '';
 
-  const alertsByKey = new Map();
-  for (const alert of alerts) {
-    const key = alert.key || alert.component;
-    const list = alertsByKey.get(key) || [];
-    list.push(alert);
-    alertsByKey.set(key, list);
-  }
-  const entries = new Map();
-  for (const check of checks) {
-    entries.set(check.key, {
-      key: check.key,
-      component: check.component,
-      title: check.title,
-      message: check.message,
-      ok: check.ok,
-      severity: check.severity,
-      action: check.action || null,
-      alerts: alertsByKey.get(check.key) || [],
-    });
-  }
-  for (const [key, list] of alertsByKey) {
-    if (entries.has(key)) continue;
-    const latest = list[0];
-    entries.set(key, {
-      key,
-      component: latest.component,
-      title: latest.title,
-      message: latest.message,
-      ok: latest.status === 'recovered',
-      severity: latest.severity,
-      action: latest.action || null,
-      alerts: list,
-    });
-  }
-  const rows = [...entries.values()].sort((left, right) => {
-    const rank = (entry) => (entry.ok && !entry.alerts.some((alert) => alert.status === 'active') ? 1 : 0);
-    const severityRank = (entry) => entry.severity === 'critical' ? 0 : entry.severity === 'warn' ? 1 : 2;
-    return rank(left) - rank(right)
-      || severityRank(left) - severityRank(right)
-      || left.component.localeCompare(right.component, 'zh-CN');
-  });
+  // 按组件聚合：一个组件下可能有多项检查（例如模型有鉴权/限流/服务端/调用四类）。
+  const groups = new Map();
+  const ensureGroup = (component) => {
+    const name = component || '其他';
+    const group = groups.get(name) ?? { component: name, checks: [], alerts: [] };
+    groups.set(name, group);
+    return group;
+  };
+  for (const check of checks) ensureGroup(check.component).checks.push(check);
+  for (const alert of alerts) ensureGroup(alert.component).alerts.push(alert);
+
+  const severityRank = (severity) => severity === 'critical' ? 0 : severity === 'warn' ? 1 : 2;
+  const entries = [...groups.values()].map((group) => {
+    const failing = group.checks.filter((check) => !check.ok);
+    const activeAlerts = group.alerts.filter((alert) => alert.status === 'active');
+    const healthy = !failing.length && !activeAlerts.length;
+    const severities = [...failing.map((check) => check.severity), ...activeAlerts.map((alert) => alert.severity)];
+    const worst = severities.sort((left, right) => severityRank(left) - severityRank(right))[0] || 'info';
+    const primary = activeAlerts[0] || failing[0] || null;
+    const lastAt = group.alerts[0]?.lastSeenAt || snapshot?.checkedAt || null;
+    return {
+      component: group.component,
+      checks: group.checks,
+      alerts: group.alerts,
+      healthy,
+      severity: worst,
+      message: primary?.message || (group.checks.length ? `${group.checks.length} 项检查正常` : '暂无检查结果'),
+      action: primary?.action || null,
+      lastAt,
+      abnormalChecks: failing.length,
+    };
+  }).sort((left, right) => Number(left.healthy) - Number(right.healthy)
+    || severityRank(left.severity) - severityRank(right.severity)
+    || left.component.localeCompare(right.component, 'zh-CN'));
 
   const host = $('#ops-health-list');
   if (!host) return;
-  if (!rows.length) {
+  if (!entries.length) {
     host.innerHTML = harborEmpty('activity', '暂无健康事件', '监控每 60 秒运行一次');
     refreshIcons(host);
     return;
   }
-  const rowHtml = rows.map((entry) => {
+  const healthyCount = entries.filter((entry) => entry.healthy).length;
+  const visible = entries.filter((entry) => !entry.healthy || healthShowAll || healthExpanded.has(entry.component));
+  const toggleLabel = healthShowAll ? '只看异常' : `显示全部（${healthyCount} 项正常）`;
+
+  const rows = visible.map((entry) => {
     const activeAlert = entry.alerts.find((alert) => alert.status === 'active');
-    const healthy = entry.ok && !activeAlert;
-    const statusPill = healthy ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(activeAlert?.severity || entry.severity);
-    const lastAt = entry.alerts[0]?.lastSeenAt || snapshot?.checkedAt;
-    const expanded = healthExpanded.has(entry.key);
+    const statusPill = entry.healthy ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(entry.severity);
+    const expanded = healthExpanded.has(entry.component);
+    const subChecks = entry.checks.length
+      ? entry.checks.map((check) => `<div class="ops-health-subcheck">
+          <span>${esc(check.title)}</span>
+          <span>${esc(check.message)}${check.action ? `<small>建议：${esc(check.action)}</small>` : ''}</span>
+          <span>${check.ok ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(check.severity)}</span>
+        </div>`).join('')
+      : '<div class="ops-health-subcheck empty">暂无检查结果</div>';
     const history = entry.alerts.length
       ? entry.alerts.map((alert) => `<div class="ops-health-history-row">
           <span class="num">${borrowTime(alert.lastSeenAt)}</span>
@@ -1931,17 +1939,19 @@ function renderOps() {
         </div>`).join('')
       : '<div class="ops-health-history-row empty">暂无告警历史</div>';
     return `<div class="ops-health-entry">
-      <button class="ops-health-main" type="button" data-ops-health-toggle="${esc(entry.key)}" aria-expanded="${expanded}">
-        <span class="ops-health-title"><strong>${esc(entry.component)}</strong><small>${esc(entry.title)}</small></span>
+      <button class="ops-health-main" type="button" data-ops-health-toggle="${esc(entry.component)}" aria-expanded="${expanded}">
+        <span class="ops-health-title"><strong>${esc(entry.component)}</strong><small>${entry.checks.length} 项检查${entry.abnormalChecks ? ` · ${entry.abnormalChecks} 项异常` : ''}</small></span>
         <span class="ops-health-detail">${esc(activeAlert?.message || entry.message)}${(activeAlert?.action || entry.action) ? `<small>建议：${esc(activeAlert?.action || entry.action)}</small>` : ''}</span>
-        <span class="num ops-health-time">${lastAt ? esc(borrowTime(lastAt)) : '—'}</span>
+        <span class="num ops-health-time">${entry.lastAt ? esc(borrowTime(entry.lastAt)) : '—'}</span>
         ${statusPill}
         <i class="ops-health-chevron" data-lucide="${expanded ? 'chevron-down' : 'chevron-right'}"></i>
       </button>
-      ${expanded ? `<div class="ops-health-history">${history}</div>` : ''}
+      ${expanded ? `<div class="ops-health-history"><div class="ops-health-subchecks">${subChecks}</div>${history}</div>` : ''}
     </div>`;
   }).join('');
-  host.innerHTML = `<div class="ops-health-table">${rowHtml}</div>`;
+
+  host.innerHTML = `<div class="ops-health-table">${rows}</div>
+    <button class="btn ghost compact ops-health-showall" type="button" data-ops-health-show-all>${esc(toggleLabel)}</button>`;
   refreshIcons(host);
 }
 

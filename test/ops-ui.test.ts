@@ -38,6 +38,9 @@ test('监控样式存在', () => {
   assert.match(css, /\.ops-health-table/);
   assert.match(css, /\.ops-health-main/);
   assert.match(css, /\.ops-health-history/);
+  assert.match(css, /\.ops-health-subcheck/);
+  assert.match(app, /data-ops-health-show-all/);
+  assert.match(app, /按组件聚合/);
 });
 
 test('资源版本号已更新', () => {

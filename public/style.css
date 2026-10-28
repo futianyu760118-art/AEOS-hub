@@ -2547,6 +2547,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .ops-health-history-row { display: grid; grid-template-columns: 120px 70px minmax(0, 1fr) 80px; gap: 8px; align-items: start; font-size: 10px; color: var(--text-2); }
 .ops-health-history-row small { display: block; color: var(--text-3); }
 .ops-health-history-row.empty { display: block; color: var(--text-3); }
+.ops-health-subchecks { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 6px; }
+.ops-health-subcheck { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) 70px; gap: 10px; align-items: start; font-size: 10px; color: var(--text-2); }
+.ops-health-subcheck small { display: block; color: var(--text-3); }
+.ops-health-subcheck.empty { display: block; color: var(--text-3); }
+.ops-health-showall { align-self: flex-start; margin: 2px 18px 12px; }
 
 .execution-timeline { display: flex; flex-direction: column; padding: 6px 0; }
 .execution-step { display: grid; grid-template-columns: 110px minmax(0, 1fr) 100px; gap: 10px; padding: 7px 0; border-bottom: 1px solid rgba(18, 18, 24, 0.055); }
