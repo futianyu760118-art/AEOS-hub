@@ -2,9 +2,9 @@
 // 边界：一期只允许提供方声明的写能力；每次写都必须人工审批；不绕过权限表与租户。
 import type { CallerContext } from './caller-context.ts';
 import type { EvidenceInput } from './evidence.ts';
-import type { ExecutionAgentCapability, ExecutionAgentRecord, ExecutionPlaneRegistry } from './execution-plane.ts';
+import type { ExecutionAgentCapability, ExecutionAgentRecord, ExecutionCapabilityOperation, ExecutionPlaneRegistry } from './execution-plane.ts';
 import { authorizeCapability, type ExecutionAgentPermissions } from './execution-agent-permissions.ts';
-import { validateAgainstSchema } from './schema-validation.ts';
+import { validateAgainstSchema, type Schema } from './schema-validation.ts';
 import type { WriteRequestRecord, WriteRequestStatus, WriteRequestStore } from './write-request-store.ts';
 
 export class WriteRequestError extends Error {
@@ -59,6 +59,10 @@ export interface WriteCapabilityDescriptor {
   operations: string[];
   riskLevel: string | null;
   approvalRequired: boolean;
+  /** 提供方声明的输入 schema，用于通用意图解析与校验。 */
+  inputSchema: Schema | null;
+  /** 提供方声明的操作元数据；有它时无需模型也能解析写命令。 */
+  operationDetails: ExecutionCapabilityOperation[];
 }
 
 const APPROVER_ROLES = new Set(['manager', 'supervisor']);
@@ -115,6 +119,8 @@ export class WriteRequestService {
           operations: this.operationsOf(capability),
           riskLevel: capability.constraints?.riskLevel ?? null,
           approvalRequired: capability.constraints?.approvalRequired !== false,
+          inputSchema: capability.inputSchema ?? null,
+          operationDetails: Array.isArray(capability.operations) ? capability.operations : [],
         });
       }
     }

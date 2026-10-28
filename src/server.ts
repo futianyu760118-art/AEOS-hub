@@ -101,7 +101,7 @@ import { parseCallerContext } from './caller-context.ts';
 import { WriteRequestStore, type WriteRequestRecord } from './write-request-store.ts';
 import { WriteRequestError, WriteRequestService } from './write-request-service.ts';
 import { buildConnectivitySummary } from './connectivity-summary.ts';
-import { parseWriteIntent } from './write-intent.ts';
+import { looksLikeWriteCommand, parseWriteConfirmation, parseWriteIntentWithLLM } from './write-intent.ts';
 import { buildTrace, readEvidenceEntries } from './trace.ts';
 import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 import {
@@ -1179,12 +1179,10 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
 const pendingWriteByConversation = new Map<string, { id: string; summary: string }>();
 const writeConversationByRequest = new Map<string, string>();
 
-function describeWriteIntent(intent: { operation: string; orderNo: string; changes: Record<string, string> }): string {
-  const target = `订单 ${intent.orderNo}`;
-  if (intent.operation === 'order.update_delivery_date') return `改写${target}的交付日期为 ${intent.changes.deliveryDate}`;
-  if (intent.operation === 'order.update_note') return `改写${target}的备注为“${intent.changes.remark}”`;
-  if (intent.operation === 'order.update_status') return `更新${target}的状态为 ${intent.changes.status}`;
-  return `对${target}执行 ${intent.operation}`;
+function describeWriteIntent(intent: { operation: string; input: Record<string, unknown> }): string {
+  const orderNo = typeof intent.input.orderNo === 'string' ? intent.input.orderNo : '';
+  const changes = isRecord(intent.input.changes) ? JSON.stringify(intent.input.changes) : '';
+  return `${orderNo ? `订单 ${orderNo} · ` : ''}${intent.operation}${changes ? `：${changes}` : ''}`;
 }
 
 function pushAssistantReply(convId: string, text: string): void {
@@ -1209,21 +1207,19 @@ async function handleConversationalWrite(
   text: string,
   actor?: { actorId: string; roles: string[]; tenantId?: string },
 ): Promise<boolean> {
-  const intent = parseWriteIntent(text);
-  if (!intent) return false;
-  if (!actor) return false;
-  const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
-  const roles = Array.isArray(actor.roles) ? actor.roles : [];
-  const canWrite = roles.includes('manager') || roles.includes('supervisor');
   const pending = pendingWriteByConversation.get(convId);
-
-  if (intent.kind === 'confirm' || intent.kind === 'cancel') {
+  const confirmation = parseWriteConfirmation(text);
+  if (confirmation) {
     if (!pending) return false;
+    if (!actor) return false;
+    const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
+    const roles = Array.isArray(actor.roles) ? actor.roles : [];
+    const canWrite = roles.includes('manager') || roles.includes('supervisor');
     if (!canWrite) {
       pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
       return true;
     }
-    if (intent.kind === 'cancel') {
+    if (confirmation === 'cancel') {
       try {
         writeRequestService.reject(pending.id, { id: actor.actorId, roles, tenantId }, '用户在对话中取消');
       } catch {
@@ -1249,31 +1245,39 @@ async function handleConversationalWrite(
     return true;
   }
 
+  if (!looksLikeWriteCommand(text)) return false;
+  if (!actor) return false;
+  const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
+  const roles = Array.isArray(actor.roles) ? actor.roles : [];
+  const canWrite = roles.includes('manager') || roles.includes('supervisor');
   if (!canWrite) {
     pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
     return true;
   }
 
-  const capability = writeRequestService.listCapabilities(tenantId)
-    .find((item) => item.operations.includes(intent.operation));
-  if (!capability) {
-    pushAssistantReply(convId, `中台尚未注册写能力（${intent.operation}），当前无法执行写操作。`);
+  // 由提供方声明的写能力 + 输入 schema 驱动解析，不在 Hub 里硬编码具体写命令。
+  const capabilities = writeRequestService.listCapabilities(tenantId);
+  const intent = await parseWriteIntentWithLLM(text, capabilities);
+  if (intent.kind === 'clarify') {
+    pushAssistantReply(convId, intent.message);
     return true;
   }
+  if (intent.kind !== 'write') return false;
 
   const summary = describeWriteIntent(intent);
   try {
     const { record } = writeRequestService.create({
       tenantId,
-      capability: capability.capability,
-      systemId: capability.systemId,
-      input: { operation: intent.operation, orderNo: intent.orderNo, changes: intent.changes },
+      capability: intent.capability,
+      systemId: intent.systemId,
+      input: intent.input,
       reason: `对话内发起：${intent.raw}`.slice(0, 500),
       requestedBy: { kind: 'user', id: actor.actorId },
       idempotencyKey: `chat-${randomUUID()}`,
     });
     pendingWriteByConversation.set(convId, { id: record.id, summary });
-    pushAssistantReply(convId, `即将执行：${summary}。\n回复“确认”执行，回复“取消”放弃。`);
+    pushAssistantReply(convId, `即将执行：${summary}。
+回复“确认”执行，回复“取消”放弃。`);
   } catch (error) {
     pushAssistantReply(convId, `写操作未能提交：${(error as Error).message}`);
   }

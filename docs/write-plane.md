@@ -119,7 +119,30 @@ Hub 会解析写意图并回复：
     "riskLevel": "low",
     "idempotent": true,
     "dryRun": true
-  }
+  },
+  "operations": [
+    {
+      "name": "order.update_note",
+      "title": "修改订单备注",
+      "keywords": ["备注", "说明"],
+      "changesField": "changes",
+      "fields": [{ "name": "remark", "label": "备注", "type": "string", "required": true }]
+    },
+    {
+      "name": "order.update_status",
+      "title": "修改订单状态",
+      "keywords": ["状态"],
+      "changesField": "changes",
+      "fields": [{ "name": "status", "label": "状态", "type": "string", "required": true }]
+    },
+    {
+      "name": "order.update_delivery_date",
+      "title": "修改交付日期",
+      "keywords": ["交付日期", "交期"],
+      "changesField": "changes",
+      "fields": [{ "name": "deliveryDate", "label": "交付日期", "type": "date", "required": true }]
+    }
+  ]
 }
 ```
 

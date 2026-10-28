@@ -26,6 +26,18 @@ export interface ExecutionCapabilityConstraints {
   dryRun?: boolean;
 }
 
+/** 写操作的声明式元数据：让 Hub 不硬编码具体写命令即可解析与展示。 */
+export interface ExecutionCapabilityOperation {
+  name: string;
+  title?: string;
+  keywords?: string[];
+  /** 业务标识字段名，默认 orderNo。 */
+  targetField?: string;
+  /** 变更字段放在 input 的哪个对象下，默认 changes；设为 null 表示平铺。 */
+  changesField?: string | null;
+  fields: Array<{ name: string; label: string; type?: 'string' | 'date' | 'number'; required?: boolean }>;
+}
+
 export interface ExecutionAgentCapability {
   name: string;
   description: string;
@@ -36,6 +48,7 @@ export interface ExecutionAgentCapability {
   outputSchema?: Schema;
   constraints?: ExecutionCapabilityConstraints;
   intent?: QueryIntent;
+  operations?: ExecutionCapabilityOperation[];
 }
 
 export type ExecutionAgentAuthMode = 'system-token' | 'legacy-root' | 'control-plane' | 'unknown';
@@ -197,6 +210,45 @@ function parseSchema(value: unknown, field: string): Schema | undefined {
   return value as Schema;
 }
 
+function parseOperations(value: unknown): ExecutionCapabilityOperation[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'operations 必须是数组');
+  if (value.length > 50) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'operations 不能超过 50 项');
+  return value.map((entry) => {
+    if (value === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new ExecutionPlaneError('INVALID_ARGUMENT', 'operation 必须是对象');
+    }
+    const record = entry as Record<string, unknown>;
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!name || name.length > 100) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'operation.name 必填且不超过 100 字符');
+    const fields = Array.isArray(record.fields) ? record.fields : [];
+    if (!fields.length) throw new ExecutionPlaneError('INVALID_ARGUMENT', `operation ${name} 缺少 fields`);
+    const parsedFields = fields.map((field) => {
+      if (field === null || typeof field !== 'object' || Array.isArray(field)) {
+        throw new ExecutionPlaneError('INVALID_ARGUMENT', `operation ${name} 的 field 必须是对象`);
+      }
+      const item = field as Record<string, unknown>;
+      const fieldName = typeof item.name === 'string' ? item.name.trim() : '';
+      const label = typeof item.label === 'string' ? item.label.trim() : '';
+      if (!fieldName || !label) throw new ExecutionPlaneError('INVALID_ARGUMENT', `operation ${name} 的 field 需要 name 和 label`);
+      const type: 'string' | 'date' | 'number' = item.type === 'date' || item.type === 'number' ? item.type : 'string';
+      return { name: fieldName, label, type, ...(item.required === true ? { required: true } : {}) };
+    });
+    const keywords = Array.isArray(record.keywords)
+      ? record.keywords.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 20)
+      : undefined;
+    return {
+      name,
+      ...(typeof record.title === 'string' && record.title.trim() ? { title: record.title.trim().slice(0, 100) } : {}),
+      ...(keywords?.length ? { keywords } : {}),
+      ...(typeof record.targetField === 'string' && record.targetField.trim() ? { targetField: record.targetField.trim() } : {}),
+      ...(record.changesField === null ? { changesField: null }
+        : typeof record.changesField === 'string' && record.changesField.trim() ? { changesField: record.changesField.trim() } : {}),
+      fields: parsedFields,
+    };
+  });
+}
+
 function parseConstraints(value: unknown): ExecutionCapabilityConstraints | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -246,6 +298,7 @@ function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
     const outputSchema = parseSchema(record.outputSchema, 'capability.outputSchema');
     const constraints = parseConstraints(record.constraints);
     const intent = parseQueryIntent(record.intent);
+    const operations = parseOperations(record.operations);
     return {
       name,
       description,
@@ -256,6 +309,7 @@ function parseCapabilities(value: unknown): ExecutionAgentCapability[] {
       ...(outputSchema ? { outputSchema } : {}),
       ...(constraints ? { constraints } : {}),
       ...(intent ? { intent } : {}),
+      ...(operations ? { operations } : {}),
     };
   });
 }
