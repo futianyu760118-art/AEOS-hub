@@ -16,7 +16,7 @@ export type WriteIntent =
 
 const CONFIRM_PATTERN = /^(确认|批准|执行|同意|可以)$/;
 const CANCEL_PATTERN = /^(取消|放弃|不执行|算了)$/;
-const WRITE_ACTION_PATTERN = /(改写|修改|更新|调整|变更|设置|设为|改为|改成|录入|提交)/;
+const WRITE_ACTION_PATTERN = /(改写|修改|更新|调整|变更|设置|设为|改为|改成|置为|标记为|录入|提交|写)/;
 const IDENTIFIER_PATTERN = /business:\/\/(?:order|product|batch)\/[^\s，。；,;]+|\b(?:[A-Z]{2,}\d{4,}[-_]\d{2,}(?:[-_]\d+)*|[A-Z]{2,}[-_]\d{2,}(?:[-_]\d+)*)\b/i;
 
 export interface WriteIntentDeps {

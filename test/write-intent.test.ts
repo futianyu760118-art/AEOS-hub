@@ -39,6 +39,7 @@ function fakeFetch(content: unknown, status = 200): typeof fetch {
 
 test('只有写动作 + 业务标识才进入写解析', () => {
   assert.equal(looksLikeWriteCommand('改写订单 HJ202602-0009-0028 的备注为已确认'), true);
+  assert.equal(looksLikeWriteCommand('写订单 HJ202602-0009-0028 的备注为：中台修复后复测'), true);
   assert.equal(looksLikeWriteCommand('分析订单 HJ202602-0009-0028 的交付风险'), false);
   assert.equal(looksLikeWriteCommand('改写订单的备注为已确认'), false);
 });
@@ -171,4 +172,12 @@ test('交付日期支持斜杠格式并规范化', async () => {
   assert.equal(intent.kind, 'write');
   if (intent.kind !== 'write') return;
   assert.deepEqual(intent.input.changes, { deliveryDate: '2026-11-10' });
+});
+
+test('“写订单……”也能走写操作解析', async () => {
+  const intent = await parseWriteIntentWithLLM('写订单 HJ202602-0009-0028 的备注为：中台修复后复测', [CAPABILITY], { apiKey: '' });
+  assert.equal(intent.kind, 'write');
+  if (intent.kind !== 'write') return;
+  assert.equal(intent.operation, 'order.update_note');
+  assert.deepEqual(intent.input.changes, { remark: '中台修复后复测' });
 });
