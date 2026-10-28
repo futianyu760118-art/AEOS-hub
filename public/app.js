@@ -743,7 +743,9 @@ function showView(view, options = {}) {
   if (view === 'ai-obs') loadAiObs();
   if (view === 'ops') loadOps();
   if (view === 'writes') loadWrites();
+  if (view === 'chat') loadConnectivity();
   syncDashboardLiveRefresh();
+  syncConnectivityRefresh();
   syncExecutionRefresh();
   syncBorrowRefresh();
   syncAiObsRefresh();
@@ -1197,6 +1199,71 @@ function renderUsage() {
     root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(filteredSystems, filteredAgents)}</section>`;
   }
   refreshIcons(root);
+}
+
+
+// ---------- 分析通道连通性（只统计外部系统，不包含本地助手运行时） ----------
+let connectivitySummary = null;
+let connectivityRefreshTimer = null;
+
+async function loadConnectivity() {
+  try {
+    const response = await fetch('/api/connectivity', { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    connectivitySummary = await response.json();
+    renderConnectivity();
+  } catch {
+    // 状态读取失败不阻断页面；保留上一次结果，首次失败时给出明确提示。
+    if (!connectivitySummary) {
+      const label = $('#assistant-connectivity-label');
+      if (label) label.textContent = '分析通道 · 状态未知';
+    }
+  }
+}
+
+function renderConnectivity() {
+  const label = $('#assistant-connectivity-label');
+  const dot = $('#assistant-connectivity-dot');
+  const panel = $('#assistant-connectivity-panel');
+  const summary = connectivitySummary;
+  if (!summary) {
+    if (label) label.textContent = '分析通道 · 检查中';
+    return;
+  }
+  const status = summary.summary?.status || 'empty';
+  if (label) {
+    label.textContent = status === 'empty'
+      ? '分析通道 · 暂无系统'
+      : `分析通道 · ${summary.summary.online}/${summary.summary.total} 在线`;
+  }
+  if (dot) dot.className = `live-dot ${status === 'ok' ? 'ok' : status === 'partial' ? 'warn' : status === 'down' ? 'down' : ''}`;
+  if (!panel) return;
+  if (!Array.isArray(summary.systems) || !summary.systems.length) {
+    panel.innerHTML = '<div class="connectivity-empty">暂无外部系统接入</div>';
+    return;
+  }
+  panel.innerHTML = summary.systems.map((system) => (
+    `<div class="connectivity-row"><span>${esc(system.name)}</span><b class="status-pill ${system.online === system.total ? 'ok' : system.online > 0 ? 'warn' : 'danger'}">${system.online}/${system.total}</b><small>${system.lastSeenAt ? `最近 ${esc(formatBeijingTime(system.lastSeenAt))}` : '无连接'}</small></div>`
+  )).join('') + '<button class="btn ghost compact connectivity-more" type="button" data-open-ops>查看运行状态</button>';
+  refreshIcons(panel);
+}
+
+function toggleConnectivityPanel() {
+  const panel = $('#assistant-connectivity-panel');
+  const chip = $('#assistant-connectivity-chip');
+  if (!panel) return;
+  const hidden = panel.classList.toggle('hidden');
+  chip?.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  if (!hidden) void loadConnectivity();
+}
+
+function syncConnectivityRefresh() {
+  window.clearInterval(connectivityRefreshTimer);
+  connectivityRefreshTimer = null;
+  if (currentView !== 'chat') return;
+  connectivityRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void loadConnectivity();
+  }, 30000);
 }
 
 // ---------- 写操作（提交 / 审批 / 追踪） ----------
@@ -8221,6 +8288,10 @@ els.cfgProvider.addEventListener('change', () => { els.cfgProviderHint.textConte
 els.btnAddProvider.addEventListener('click', () => { providerRows.push({ id: `provider-${providerRows.length + 1}`, wire_api: 'responses' }); renderProviders(); });
 els.btnSaveConfig.addEventListener('click', saveConfig);
 document.getElementById('btn-save-dispatch-cfg')?.addEventListener('click', saveDispatchConfig);
+document.getElementById('assistant-connectivity-chip')?.addEventListener('click', toggleConnectivityPanel);
+document.getElementById('assistant-connectivity-panel')?.addEventListener('click', (event) => {
+  if (event.target.closest('[data-open-ops]')) showView('ops');
+});
 els.evRefresh.addEventListener('click', loadEvidence);
 els.evidenceSearch?.addEventListener('input', renderEvidenceRows);
 els.evidenceSourceFilter?.addEventListener('change', renderEvidenceRows);

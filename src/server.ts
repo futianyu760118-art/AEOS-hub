@@ -100,6 +100,7 @@ import { verifySystemToken } from './system-token.ts';
 import { parseCallerContext } from './caller-context.ts';
 import { WriteRequestStore } from './write-request-store.ts';
 import { WriteRequestError, WriteRequestService } from './write-request-service.ts';
+import { buildConnectivitySummary } from './connectivity-summary.ts';
 import { buildTrace, readEvidenceEntries } from './trace.ts';
 import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
 import {
@@ -2240,6 +2241,14 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: (error as Error).message });
       }
     }
+    return;
+  }
+  if (url.pathname === '/api/connectivity') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const agents = executionPlane.list().agents.filter((agent) => (
+      resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId
+    ));
+    sendJson(res, 200, buildConnectivitySummary(agents));
     return;
   }
   let rel: string;
