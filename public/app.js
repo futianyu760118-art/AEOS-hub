@@ -812,16 +812,34 @@ function streamTextInto(element, text) {
   step();
 }
 
+let executionUsageByAgent = new Map();
+let executionUsageBySystem = new Map();
+
 async function loadExecution() {
   wireExecutionControls();
   let data;
+  let usage = null;
   try {
-    const response = await fetch('/api/execution/agents');
-    if (!response.ok) return;
-    data = await response.json();
+    const [agentsResponse, usageResponse] = await Promise.all([
+      fetch('/api/execution/agents'),
+      fetch('/api/usage/summary', { headers: { accept: 'application/json' } }).catch(() => null),
+    ]);
+    if (!agentsResponse.ok) return;
+    data = await agentsResponse.json();
+    if (usageResponse?.ok) usage = await usageResponse.json().catch(() => null);
   } catch { return; }
   executionAgents = Array.isArray(data?.agents) ? data.agents.filter((agent) => !agent.deregisteredAt) : [];
+  const byAgent = Array.isArray(usage?.byAgent) ? usage.byAgent : [];
+  const bySystem = Array.isArray(usage?.bySystem) ? usage.bySystem : [];
+  executionUsageByAgent = new Map(byAgent.map((row) => [row.agentId, row]));
+  executionUsageBySystem = new Map(bySystem.map((row) => [row.systemId, row]));
   renderExecutionAgentList(executionAgents);
+}
+
+function executionUsageText(row) {
+  if (!row || !Number(row.events)) return '';
+  const when = row.lastAt ? ` · ${formatBeijingTime(row.lastAt)}` : '';
+  return `¥${formatUsageCost(row.cost)} · ${formatTokenCount(row.events)} 次${when}`;
 }
 
 function renderExecutionAgentItem(agent) {
@@ -836,8 +854,9 @@ function renderExecutionAgentItem(agent) {
   const gatewayBadge = agent.agentKind === 'system-gateway'
     ? `<span class="execution-agent-identity execution-agent-gateway" title="系统网关${agent.gatewayVersion ? ` · v${esc(agent.gatewayVersion)}` : ''}">网关</span>`
     : '';
+  const usageText = executionUsageText(executionUsageByAgent.get(agent.agentId));
   return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-    <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${gatewayBadge}${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span></span>
+    <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${gatewayBadge}${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span>${usageText ? `<span class="execution-agent-usage" title="调用次数与成本">${esc(usageText)}</span>` : ''}</span>
     <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
   </button>`;
 }
@@ -857,6 +876,7 @@ function renderExecutionAgentList(agents) {
       <button class="execution-system-head" type="button" data-execution-system-toggle="${esc(group.key)}" aria-expanded="${!collapsed}">
         <i data-lucide="${collapsed ? 'chevron-right' : 'chevron-down'}"></i>
         <span class="execution-system-name">${esc(group.label)}</span>
+        <span class="execution-system-usage">${esc(executionUsageText(executionUsageBySystem.get(group.key)))}</span>
         <span class="execution-system-count">${group.onlineCount}/${group.total} 在线</span>
       </button>
       <div class="execution-system-agents${collapsed ? ' hidden' : ''}">${group.agents.map(renderExecutionAgentItem).join('')}</div>

@@ -2448,7 +2448,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .execution-system-head:hover { color: var(--text-2); }
 .execution-system-head svg { width: 13px; height: 13px; }
 .execution-system-name { color: var(--text-2); }
-.execution-system-count { margin-left: auto; color: var(--text-3); font-size: 0.65rem; font-weight: 400; }
+.execution-system-count { margin-left: 8px; color: var(--text-3); font-size: 0.65rem; font-weight: 400; }
+.execution-system-usage { margin-left: auto; color: var(--text-3); font-size: 0.62rem; font-weight: 400; font-family: ui-monospace, Consolas, monospace; }
+.execution-system-usage:empty { display: none; }
+.execution-agent-usage { flex-basis: 100%; color: var(--text-3); font-size: 0.62rem; font-family: ui-monospace, Consolas, monospace; }
 .execution-system-agents { display: flex; flex-direction: column; gap: 0.4rem; padding-left: 0.35rem; }
 .execution-agent-title { display: flex; align-self: stretch; flex-wrap: wrap; align-items: center; gap: 0.35rem; min-width: 0; max-width: 100%; }
 .execution-agent-name { font-weight: 600; }

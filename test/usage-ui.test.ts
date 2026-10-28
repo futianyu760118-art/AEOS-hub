@@ -43,3 +43,12 @@ test('分析成本按系统与 Agent 合并展示，并提供调用方切换', (
   assert.match(app, /usageTab = 'system'/);
   assert.match(app, /data-usage-tab/);
 });
+
+test('分析工作台展示每个 Agent 的成本与调用次数', () => {
+  assert.match(app, /executionUsageByAgent/);
+  assert.match(app, /executionUsageBySystem/);
+  assert.match(app, /function executionUsageText/);
+  assert.match(app, /execution-agent-usage/);
+  assert.match(app, /execution-system-usage/);
+  assert.match(app, /fetch\('\/api\/usage\/summary'/);
+});
