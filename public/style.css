@@ -1287,6 +1287,8 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .write-main small { color: var(--text-2); font-size: 10px; overflow-wrap: anywhere; }
 .write-main .write-meta { color: var(--text-3); }
 .write-actions { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.write-confirm-actions { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; }
+.write-confirm-actions small { color: var(--text-3); font-size: 10px; }
 .usage-table.usage-hierarchy .harbor-row { min-width: 760px; grid-template-columns: minmax(220px, 1fr) 100px 100px 110px 80px 150px; }
 .usage-table.usage-hierarchy.compact .harbor-row { min-width: 420px; grid-template-columns: minmax(180px, 1fr) 110px 90px; }
 .usage-system-row > span:first-child { font-weight: 600; }

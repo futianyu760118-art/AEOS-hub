@@ -7716,6 +7716,27 @@ function connect() {
             filenamePrefix: '智能助手回答',
           });
         }
+        if (message.meta && message.meta.writeConfirmation) {
+          const actions = document.createElement('div');
+          actions.className = 'write-confirm-actions';
+          actions.innerHTML = '<button class="btn primary compact" type="button" data-write-confirm="approve">确认执行</button><button class="btn secondary compact" type="button" data-write-confirm="reject">取消</button>';
+          wrap.appendChild(actions);
+          actions.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-write-confirm]');
+            if (!button) return;
+            const decision = button.getAttribute('data-write-confirm');
+            send({
+              type: 'write_decision',
+              conversationId: message.convId,
+              requestId: message.meta.writeConfirmation.requestId,
+              decision,
+            });
+            actions.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+            const note = document.createElement('small');
+            note.textContent = decision === 'approve' ? '已提交确认…' : '已提交取消…';
+            actions.appendChild(note);
+          });
+        }
         wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 智能助手 · 分析工作台`));
         els.empty.classList.add('hidden');
         finishThinking();

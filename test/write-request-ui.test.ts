@@ -25,6 +25,10 @@ test('写操作调用能力、提交与审批接口', () => {
   assert.match(app, /action === 'reject'/);
   assert.match(app, /data-write-approve/);
   assert.match(app, /data-write-reject/);
+  assert.match(app, /type: 'write_decision'/);
+  assert.match(app, /writeConfirmation/);
+  assert.match(app, /data-write-confirm/);
+  assert.match(app, /write-confirm-actions/);
 });
 
 test('写操作状态与操作类型有中文文案', () => {

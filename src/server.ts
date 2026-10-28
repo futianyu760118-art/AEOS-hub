@@ -1185,10 +1185,49 @@ function describeWriteIntent(intent: { operation: string; input: Record<string, 
   return `${orderNo ? `订单 ${orderNo} · ` : ''}${intent.operation}${changes ? `：${changes}` : ''}`;
 }
 
-function pushAssistantReply(convId: string, text: string): void {
+function pushAssistantReply(convId: string, text: string, meta?: Record<string, unknown>): void {
   appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text });
-  pushConv(convId, { type: 'assistant_reply', convId, text });
+  pushConv(convId, { type: 'assistant_reply', convId, text, ...(meta ? { meta } : {}) });
   pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `write-chat-${randomUUID()}`, sessionId: 'hub-write', occurredAt: new Date().toISOString() });
+}
+
+/** 对话内确认/取消：按钮与文字“确认/取消”共用同一条路径。 */
+function decidePendingWrite(
+  convId: string,
+  pending: { id: string; summary: string },
+  actor: { actorId: string; roles: string[]; tenantId?: string },
+  decision: 'approve' | 'reject',
+): void {
+  const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
+  const roles = Array.isArray(actor.roles) ? actor.roles : [];
+  const canWrite = roles.includes('manager') || roles.includes('supervisor');
+  if (!canWrite) {
+    pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
+    return;
+  }
+  if (decision === 'reject') {
+    try {
+      writeRequestService.reject(pending.id, { id: actor.actorId, roles, tenantId }, '用户在对话中取消');
+    } catch {
+      // 已不在待审批状态时忽略。
+    }
+    pendingWriteByConversation.delete(convId);
+    pushAssistantReply(convId, '已取消本次写操作，未修改任何数据。');
+    return;
+  }
+  writeConversationByRequest.set(pending.id, convId);
+  try {
+    const record = writeRequestService.approve(pending.id, { id: actor.actorId, roles, tenantId });
+    pendingWriteByConversation.delete(convId);
+    if (record.status === 'completed' || record.status === 'failed') {
+      notifyWriteRecord(writeRequestStore.get(record.id) ?? record);
+    } else {
+      pushAssistantReply(convId, `已确认并派单：${pending.summary}。执行完成后会在这里回报结果。`);
+    }
+  } catch (error) {
+    writeConversationByRequest.delete(pending.id);
+    pushAssistantReply(convId, `写操作未能执行：${(error as Error).message}`);
+  }
 }
 
 function notifyWriteRecord(record: WriteRequestRecord): void {
@@ -1214,38 +1253,8 @@ async function handleConversationalWrite(
   const pending = pendingWriteByConversation.get(convId);
   const confirmation = parseWriteConfirmation(text);
   if (confirmation) {
-    if (!pending) return false;
-    if (!actor) return false;
-    const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
-    const roles = Array.isArray(actor.roles) ? actor.roles : [];
-    const canWrite = roles.includes('manager') || roles.includes('supervisor');
-    if (!canWrite) {
-      pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
-      return true;
-    }
-    if (confirmation === 'cancel') {
-      try {
-        writeRequestService.reject(pending.id, { id: actor.actorId, roles, tenantId }, '用户在对话中取消');
-      } catch {
-        // 已不在待审批状态时忽略。
-      }
-      pendingWriteByConversation.delete(convId);
-      pushAssistantReply(convId, '已取消本次写操作，未修改任何数据。');
-      return true;
-    }
-    writeConversationByRequest.set(pending.id, convId);
-    try {
-      const record = writeRequestService.approve(pending.id, { id: actor.actorId, roles, tenantId });
-      pendingWriteByConversation.delete(convId);
-      if (record.status === 'completed' || record.status === 'failed') {
-        notifyWriteRecord(writeRequestStore.get(record.id) ?? record);
-      } else {
-        pushAssistantReply(convId, `已确认并派单：${pending.summary}。执行完成后会在这里回报结果。`);
-      }
-    } catch (error) {
-      writeConversationByRequest.delete(pending.id);
-      pushAssistantReply(convId, `写操作未能执行：${(error as Error).message}`);
-    }
+    if (!pending || !actor) return false;
+    decidePendingWrite(convId, pending, actor, confirmation === 'confirm' ? 'approve' : 'reject');
     return true;
   }
 
@@ -1280,8 +1289,12 @@ async function handleConversationalWrite(
       idempotencyKey: `chat-${randomUUID()}`,
     });
     pendingWriteByConversation.set(convId, { id: record.id, summary });
-    pushAssistantReply(convId, `即将执行：${summary}。
-回复“确认”执行，回复“取消”放弃。`);
+    pushAssistantReply(
+      convId,
+      `即将执行：${summary}。
+点击「确认执行」或回复“确认”；点击「取消」或回复“取消”放弃。`,
+      { writeConfirmation: { requestId: record.id, summary } },
+    );
   } catch (error) {
     pushAssistantReply(convId, `写操作未能提交：${(error as Error).message}`);
   }
@@ -3652,6 +3665,17 @@ wss.on('connection', (ws, request) => {
         pushConv(convId, { type: 'user_message', convId, text });
         if (await routeHubExecutionTurn(convId, text, actorContextOf.get(ws))) return;
         await startTurn(convId, text, choice, dispatch);
+      } else if (type === 'write_decision') {
+        const convId = String(msg.conversationId ?? '').trim();
+        const requestId = String(msg.requestId ?? '').trim();
+        const actor = actorContextOf.get(ws);
+        const pending = convId ? pendingWriteByConversation.get(convId) : undefined;
+        const decision = msg.decision === 'reject' ? 'reject' : msg.decision === 'approve' ? 'approve' : null;
+        if (!actor || !convId || !requestId || !pending || pending.id !== requestId || !decision) {
+          send(ws, { type: 'error', convId: convId || null, message: '写操作确认已失效，请重新发起。' });
+          return;
+        }
+        decidePendingWrite(convId, pending, actor, decision);
       } else if (type === 'interrupt') {
         const convId = String(msg.conversationId ?? '');
         const conv = getConv(convId);
