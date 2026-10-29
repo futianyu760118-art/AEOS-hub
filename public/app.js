@@ -7735,6 +7735,27 @@ function connect() {
         if (message.convId === curConvId) renderDispatchProgress(message);
         break;
       }
+      case 'write_pending': {
+        if (message.convId !== curConvId) break;
+        if (document.querySelector(`[data-write-pending-id="${message.requestId}"]`)) break;
+        const pendingWrap = appendMsg('agent', '');
+        const pendingBubble = $('.bubble', pendingWrap);
+        if (pendingBubble) pendingBubble.innerHTML = md(`待确认的写操作：${message.summary}。`);
+        const pendingActions = document.createElement('div');
+        pendingActions.className = 'write-confirm-actions';
+        pendingActions.dataset.writePendingId = message.requestId;
+        pendingActions.innerHTML = '<button class="btn primary compact" type="button" data-write-confirm="approve">确认执行</button><button class="btn secondary compact" type="button" data-write-confirm="reject">取消</button>';
+        pendingActions.addEventListener('click', (event) => {
+          const button = event.target.closest('[data-write-confirm]');
+          if (!button) return;
+          const decision = button.getAttribute('data-write-confirm');
+          send({ type: 'write_decision', conversationId: message.convId, requestId: message.requestId, decision });
+          pendingActions.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+        });
+        pendingWrap.appendChild(pendingActions);
+        els.messages.scrollTop = els.messages.scrollHeight;
+        break;
+      }
       case 'assistant_reply': {
         if (message.convId !== curConvId) {
           if (message.meta && message.meta.dispatchComplete) toast('自动分发完成，结果已写入会话');
@@ -7766,6 +7787,7 @@ function connect() {
         if (message.meta && message.meta.writeConfirmation) {
           const actions = document.createElement('div');
           actions.className = 'write-confirm-actions';
+          actions.dataset.writePendingId = message.meta.writeConfirmation.requestId;
           actions.innerHTML = '<button class="btn primary compact" type="button" data-write-confirm="approve">确认执行</button><button class="btn secondary compact" type="button" data-write-confirm="reject">取消</button>';
           wrap.appendChild(actions);
           actions.addEventListener('click', (event) => {

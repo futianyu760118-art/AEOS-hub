@@ -29,6 +29,8 @@ test('写操作调用能力、提交与审批接口', () => {
   assert.match(app, /writeConfirmation/);
   assert.match(app, /data-write-confirm/);
   assert.match(app, /writeTraceId/);
+  assert.match(app, /case 'write_pending':/);
+  assert.match(app, /data-write-pending-id/);
   assert.match(app, /assistant-reply-actions/);
   assert.match(app, /write-confirm-actions/);
 });

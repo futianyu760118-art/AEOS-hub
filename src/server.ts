@@ -3572,6 +3572,10 @@ wss.on('connection', (ws, request) => {
   if (actorContext) actorContextOf.set(ws, actorContext);
   sessionSockets.attach(sessionId, ws);
   send(ws, { type: 'hello', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), modelOptions: buildModelOptions(), dataDir, evidenceFile });
+  for (const conv of convCache.values()) {
+    const pendingWrite = pendingWriteByConversation.get(conv.id);
+    if (pendingWrite) send(ws, { type: 'write_pending', conversationId: conv.id, requestId: pendingWrite.id, summary: pendingWrite.summary });
+  }
 
   ws.on('message', async (raw) => {
     let msg: Record<string, unknown>;
@@ -3583,6 +3587,8 @@ wss.on('connection', (ws, request) => {
         viewOf.set(ws, convId || null);
         const conv = convId ? getConv(convId) : null;
         if (conv) send(ws, { type: 'conversation_transcript', convId, messages: await hydrateConversationTranscript(conv) });
+        const pendingWrite = pendingWriteByConversation.get(convId);
+        if (pendingWrite) send(ws, { type: 'write_pending', conversationId: convId, requestId: pendingWrite.id, summary: pendingWrite.summary });
       }
       else if (type === 'new') {
         const requestedScope = msg.scope === 'agent' ? 'agent' : 'hub';
