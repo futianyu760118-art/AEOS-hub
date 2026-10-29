@@ -46,6 +46,8 @@ export interface CreateWriteRequestInput {
   input: unknown;
   reason: string;
   requestedBy: { kind: 'user' | 'system'; id: string; name?: string | null };
+  /** 对话内发起时的来源会话，用于刷新/重启后恢复待确认按钮。 */
+  conversationId?: string | null;
   caller?: CallerContext | null;
   idempotencyKey?: string | null;
 }
@@ -191,6 +193,7 @@ export class WriteRequestService {
         id: text(input.requestedBy.id, 200) || 'unknown',
         name: text(input.requestedBy.name, 200) || null,
       },
+      conversationId: text(input.conversationId, 200) || null,
       caller: input.caller ?? null,
     });
     this.audit(record, 'created', { requestedBy: record.requestedBy.id });
@@ -245,15 +248,16 @@ export class WriteRequestService {
     const record = this.store.load().find((item) => item.runId === runId);
     if (!record || (record.status !== 'dispatched')) return;
     if (outcome.state === 'completed') {
-      this.store.update(record.id, { status: 'completed', result: outcome.result ?? null });
-      this.audit(record, 'completed', { runId });
+      const updated = this.store.update(record.id, { status: 'completed', result: outcome.result ?? null });
+      // 审计要记录更新后的状态；用旧 record 会把 payload.status 写成 dispatched。
+      this.audit(updated, 'completed', { runId });
       return;
     }
-    this.store.update(record.id, {
+    const updated = this.store.update(record.id, {
       status: 'failed',
       error: outcome.error ?? { code: 'WRITE_FAILED', message: '写操作执行失败' },
     });
-    this.audit(record, 'failed', { runId, code: outcome.error?.code ?? 'WRITE_FAILED' });
+    this.audit(updated, 'failed', { runId, code: outcome.error?.code ?? 'WRITE_FAILED' });
   }
 
   private resolveTarget(tenantId: string, capabilityName: string, requestedSystemId: string | null): {

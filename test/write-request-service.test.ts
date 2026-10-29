@@ -105,6 +105,22 @@ test('提交写操作后进入待审批，不直接派单', (t) => {
   assert.equal(f.dispatched.length, 0);
 });
 
+test('对话内发起时记录来源会话，便于重启后恢复待确认按钮', (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const { record } = f.service.create({
+    tenantId: TENANT,
+    capability: 'write_control_platform',
+    input,
+    reason: '原因',
+    requestedBy: { kind: 'user', id: 'u1' },
+    conversationId: 'conv-1',
+    idempotencyKey: 'key-conv',
+  });
+  assert.equal(record.conversationId, 'conv-1');
+  assert.equal(f.store.get(record.id)?.conversationId, 'conv-1');
+});
+
 test('审批通过后以 writeApproved 派单并记录审批人', (t) => {
   const f = fixture();
   t.after(f.cleanup);
@@ -131,6 +147,8 @@ test('执行回执完成后写回结果', (t) => {
   const updated = f.store.get(record.id);
   assert.equal(updated?.status, 'completed');
   assert.deepEqual(updated?.result, { ok: true, before: { remark: '' }, after: { remark: '客户要求改期' } });
+  const completedAudit = f.audits.filter((entry) => entry.correlation_id === 'write-request-completed').pop();
+  assert.equal((completedAudit?.payload as { status?: string } | undefined)?.status, 'completed');
 });
 
 test('拒绝后不派单', (t) => {

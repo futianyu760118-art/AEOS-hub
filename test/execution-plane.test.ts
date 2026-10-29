@@ -457,6 +457,65 @@ test('重启后从持久化文件恢复为离线', (t) => {
   assert.equal(agent.connectionStatus, 'offline');
 });
 
+test('心跳落盘按 heartbeatPersistIntervalMs 节流', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-throttle-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'execution-plane.json');
+  const clock = { current: new Date('2026-10-14T00:00:00.000Z') };
+  const registry = new ExecutionPlaneRegistry({
+    file,
+    clock: () => clock.current,
+    heartbeatPersistIntervalMs: 30_000,
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-1',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  const registeredAt = JSON.parse(readFileSync(file, 'utf8')).agents[0].lastSeenAt;
+
+  clock.current = new Date('2026-10-14T00:00:05.000Z');
+  registry.onHeartbeat('agent-query-1', { status: 'idle' });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).agents[0].lastSeenAt, registeredAt);
+
+  clock.current = new Date('2026-10-14T00:00:35.000Z');
+  registry.onHeartbeat('agent-query-1', { status: 'idle' });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).agents[0].lastSeenAt, '2026-10-14T00:00:35.000Z');
+});
+
+test('run 快照按 maxRuns 保留最近记录', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-maxruns-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'execution-plane.json');
+  const registry = new ExecutionPlaneRegistry({
+    file,
+    maxRuns: 2,
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => { let n = 0; return () => `run-${++n}`; })(),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-1',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  for (let i = 0; i < 3; i += 1) {
+    const { runId } = registry.dispatch('agent-query-1', 'query_control_platform', { path: '/external/orders/list', params: {} });
+    registry.onRunComplete('agent-query-1', { runId, result: { rows: [] } });
+  }
+  assert.equal(registry.list().runs.length, 2);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).runs.length, 2);
+});
+
 test('历史执行面记录缺少来源系统时标记待补充', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);

@@ -80,7 +80,7 @@ import { AgentControlApi } from './agent-control-api.ts';
 import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, executionPlaneTimeoutsFromEnv } from './execution-plane.ts';
 import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
-import { ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
+import { beijingDateString, ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
 import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport, loadConclusionDispatchPolicy, saveConclusionDispatchPolicy } from './conclusion-dispatcher.ts';
 import { RecentAnalysisCache } from './recent-analysis-cache.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
@@ -248,12 +248,24 @@ const EXECUTION_PLANE_TOKEN = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const executionHealthSyncedAt = new Map<string, { status: 'healthy' | 'unhealthy'; at: number }>();
 // 借调服务晚绑定：执行面回调在运行期才会触发，构造顺序无 TDZ 风险。
 let borrowOrderService: BorrowOrderService | null = null;
+// 写服务同样晚绑定：run 状态回调（完成/失败/召回/离线回收）要把结果回填到写请求台账。
+let writeRequestServiceForRunEvents: WriteRequestService | null = null;
 const executionPlane = new ExecutionPlaneRegistry({
   file: join(dataDir, 'execution-plane.json'),
   ...executionPlaneTimeoutsFromEnv(),
   onChange: () => syncExecutionHealth(),
   onUsageEvent: (event) => recordUsageEvent(borrowOrderService ? borrowOrderService.attributeUsage(event) : event),
-  onRunStateChange: (event) => borrowOrderService?.handleRunStateChange(event),
+  onRunStateChange: (event) => {
+    borrowOrderService?.handleRunStateChange(event);
+    if (!writeRequestServiceForRunEvents) return;
+    if (event.state === 'completed') {
+      writeRequestServiceForRunEvents.onRunFinished(event.runId, { state: 'completed', result: event.result });
+    } else if (event.state === 'failed') {
+      writeRequestServiceForRunEvents.onRunFinished(event.runId, { state: 'failed', error: event.error ?? null });
+    } else if (event.state === 'recalled') {
+      writeRequestServiceForRunEvents.onRunFinished(event.runId, { state: 'failed', error: { code: 'RECALLED', message: '写操作已召回' } });
+    }
+  },
   onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
   isCapabilityAuthorized: (agent, capability) => {
     const systemId = agent.systemId ?? agent.sourceSystem;
@@ -294,6 +306,7 @@ const writeRequestService = new WriteRequestService({
   tenantIdOf: (systemId) => systemId ? resolveTenantId(systemId, listSystems()) : null,
   appendEvidence,
 });
+writeRequestServiceForRunEvents = writeRequestService;
 const catalogApi = new CatalogApi((tenantId) => {
   const allSystems = listSystems();
   const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
@@ -1180,6 +1193,29 @@ const pendingWriteByConversation = new Map<string, { id: string; summary: string
 const lastOrderByConversation = new Map<string, string>();
 const writeConversationByRequest = new Map<string, string>();
 
+/** Hub 重启后从写请求台账恢复对话内的待确认/已派单状态，避免请求变成无人可批的孤儿。 */
+function rehydrateConversationWrites(): void {
+  try {
+    for (const record of writeRequestStore.load()) {
+      const convId = typeof record.conversationId === 'string' ? record.conversationId.trim() : '';
+      if (!convId || !convCache.has(convId)) continue;
+      if (record.status === 'pending_approval') {
+        if (pendingWriteByConversation.has(convId)) continue;
+        const summary = describeWriteIntent({
+          operation: record.operation,
+          input: isRecord(record.input) ? record.input : {},
+        });
+        pendingWriteByConversation.set(convId, { id: record.id, summary });
+      } else if (record.status === 'dispatched') {
+        if (!writeConversationByRequest.has(record.id)) writeConversationByRequest.set(record.id, convId);
+      }
+    }
+  } catch (error) {
+    console.warn('[write-chat] 恢复待确认写操作失败:', (error as Error).message);
+  }
+}
+rehydrateConversationWrites();
+
 function describeWriteIntent(
   intent: { operation: string; input: Record<string, unknown> },
   operationDetails?: Array<{ name: string; title?: string; fields?: Array<{ name: string; label: string }> }>,
@@ -1263,6 +1299,20 @@ function notifyWriteRecord(record: WriteRequestRecord): void {
   pushAssistantReply(convId, text, record.runId ? { writeTraceId: `write-${record.id}` } : undefined);
 }
 
+/** 页面/API 审批后同步对话侧状态：清掉“待确认”按钮，并让完成/失败消息回到原会话。 */
+function syncConversationWriteState(record: WriteRequestRecord): void {
+  const convId = typeof record.conversationId === 'string' ? record.conversationId.trim() : '';
+  if (!convId) return;
+  const pending = pendingWriteByConversation.get(convId);
+  if (pending && pending.id === record.id && record.status !== 'pending_approval') {
+    pendingWriteByConversation.delete(convId);
+    if (record.status === 'rejected') pushAssistantReply(convId, '写操作已取消，未修改任何数据。');
+  }
+  if (record.status === 'dispatched' && !writeConversationByRequest.has(record.id)) {
+    writeConversationByRequest.set(record.id, convId);
+  }
+}
+
 async function handleConversationalWrite(
   convId: string,
   text: string,
@@ -1285,6 +1335,16 @@ async function handleConversationalWrite(
   if (!canWrite) {
     pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
     return true;
+  }
+
+  // 同一会话同时只允许一笔待确认写操作；否则旧请求会失去按钮、变成孤儿。
+  if (pending) {
+    const current = writeRequestStore.get(pending.id);
+    if (current && current.status === 'pending_approval') {
+      pushAssistantReply(convId, `还有一笔待确认的写操作：${pending.summary}。请先回复“确认”或“取消”，再发起新的写操作。`);
+      return true;
+    }
+    pendingWriteByConversation.delete(convId);
   }
 
   // 由提供方声明的写能力 + 输入 schema 驱动解析，不在 Hub 里硬编码具体写命令。
@@ -1321,6 +1381,7 @@ async function handleConversationalWrite(
       input: intent.input,
       reason: `对话内发起：${intent.raw}`.slice(0, 500),
       requestedBy: { kind: 'user', id: actor.actorId },
+      conversationId: convId,
       idempotencyKey: `chat-${randomUUID()}`,
     });
     pendingWriteByConversation.set(convId, { id: record.id, summary });
@@ -1412,10 +1473,11 @@ async function routeHubExecutionTurn(convId: string, text: string, actor?: { act
   const runId = `hub-orch-${randomUUID()}`;
   // 短时缓存：同一问题 5 分钟内重复提问直接复用上次结果；“重新分析/下一条”不走缓存。
   const forceRefresh = /重新分析|再分析|重跑/.test(text);
-  const cacheKey = `highest-risk|${text.trim().replace(/\s+/g, ' ').toLowerCase()}`;
+  const cacheKey = `highest-risk|${beijingDateString()}|${text.trim().replace(/\s+/g, ' ').toLowerCase()}`;
   const cached = !forceRefresh && !wantsNextOrder ? highestRiskAnswerCache.get(cacheKey) : null;
   if (cached) {
-    const answer = `${cached.answer}\n\n（5 分钟内已分析过同一问题，本次直接返回上次结果；如需重新分析，请回复“重新分析”。）`;
+    const analyzedAt = new Date(cached.cachedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    const answer = `${cached.answer}\n\n（本次结果来自 ${analyzedAt} 的分析，5 分钟内重复提问会直接复用；如需重新分析，请回复“重新分析”。）`;
     appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
     pushConv(convId, {
       type: 'assistant_reply',
@@ -2394,6 +2456,7 @@ const server = createServer(async (req, res) => {
           const record = match[2] === 'approve'
             ? writeRequestService.approve(id, actor, isRecord(body) && typeof body.note === 'string' ? body.note : null)
             : writeRequestService.reject(id, actor, isRecord(body) && typeof body.reason === 'string' ? body.reason : null);
+          syncConversationWriteState(record);
           sendJson(res, 200, { request: record });
           return;
         }
@@ -3579,10 +3642,7 @@ wss.on('connection', (ws, request) => {
   if (actorContext) actorContextOf.set(ws, actorContext);
   sessionSockets.attach(sessionId, ws);
   send(ws, { type: 'hello', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), modelOptions: buildModelOptions(), dataDir, evidenceFile });
-  for (const conv of convCache.values()) {
-    const pendingWrite = pendingWriteByConversation.get(conv.id);
-    if (pendingWrite) send(ws, { type: 'write_pending', conversationId: conv.id, requestId: pendingWrite.id, summary: pendingWrite.summary });
-  }
+  // 待确认写操作只推当前查看的会话（客户端收到 hello 后会立即发 view），避免把别的会话摘要发给每个连接。
 
   ws.on('message', async (raw) => {
     let msg: Record<string, unknown>;
@@ -3595,7 +3655,7 @@ wss.on('connection', (ws, request) => {
         const conv = convId ? getConv(convId) : null;
         if (conv) send(ws, { type: 'conversation_transcript', convId, messages: await hydrateConversationTranscript(conv) });
         const pendingWrite = pendingWriteByConversation.get(convId);
-        if (pendingWrite) send(ws, { type: 'write_pending', conversationId: convId, requestId: pendingWrite.id, summary: pendingWrite.summary });
+        if (pendingWrite) send(ws, { type: 'write_pending', convId, requestId: pendingWrite.id, summary: pendingWrite.summary });
       }
       else if (type === 'new') {
         const requestedScope = msg.scope === 'agent' ? 'agent' : 'hub';

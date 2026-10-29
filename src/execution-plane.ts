@@ -2,8 +2,9 @@
 // 管理面是控制面：接收执行面智能体反向连接、心跳、任务结果，并下发派单/召回指令。
 // 状态双份：内存为在线连接事实源；data/execution-plane.json 持久化最近状态（重启后可显示离线）。
 import { randomUUID } from 'node:crypto';
-import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { atomicWrite } from './atomic-file.ts';
 import { validateAgainstSchema, type Schema } from './schema-validation.ts';
 import type { CallerContext } from './caller-context.ts';
 import { type QueryIntent } from './execution-intent-types.ts';
@@ -143,6 +144,10 @@ const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_TIMEOUT_MS = 60_000;
 const DEFAULT_REASONING_TIMEOUT_MS = 240_000;
 const DEFAULT_IDLE_RECONCILE_GRACE_MS = 30_000;
+/** 心跳只更新在线状态/上一可见时间：落盘节流，避免每 5 秒重写整份快照。 */
+const DEFAULT_HEARTBEAT_PERSIST_INTERVAL_MS = 30_000;
+/** 快照里最多保留的 run 数；更早的 run 仍可从 evidence/借调台账追溯。 */
+const DEFAULT_MAX_RUNS = 1_000;
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0']);
 
 export interface ExecutionPlaneTimeouts {
@@ -338,12 +343,6 @@ function normalizeUsage(value: unknown): { modelId: string | null; tokensIn: num
   };
 }
 
-function atomicWrite(file: string, content: string): void {
-  const tmp = `${file}.tmp-${randomUUID()}`;
-  writeFileSync(tmp, content, 'utf8');
-  renameSync(tmp, file);
-}
-
 export class ExecutionPlaneRegistry {
   private agents = new Map<string, ConnectedAgent>();
   private runs = new Map<string, ExecutionRunRecord>();
@@ -354,6 +353,9 @@ export class ExecutionPlaneRegistry {
   private readonly queryTimeoutMs: number;
   private readonly reasoningTimeoutMs: number;
   private readonly idleReconcileGraceMs: number;
+  private readonly heartbeatPersistIntervalMs: number;
+  private readonly maxRuns: number;
+  private lastPersistAt = 0;
   private readonly idFactory: () => string;
   private readonly clock: () => Date;
   private readonly onChange?: () => void;
@@ -375,6 +377,8 @@ export class ExecutionPlaneRegistry {
     queryTimeoutMs?: number;
     reasoningTimeoutMs?: number;
     idleReconcileGraceMs?: number;
+    heartbeatPersistIntervalMs?: number;
+    maxRuns?: number;
     idFactory?: () => string;
     clock?: () => Date;
     onChange?: () => void;
@@ -394,6 +398,8 @@ export class ExecutionPlaneRegistry {
     this.queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
     this.reasoningTimeoutMs = options.reasoningTimeoutMs ?? DEFAULT_REASONING_TIMEOUT_MS;
     this.idleReconcileGraceMs = options.idleReconcileGraceMs ?? DEFAULT_IDLE_RECONCILE_GRACE_MS;
+    this.heartbeatPersistIntervalMs = options.heartbeatPersistIntervalMs ?? DEFAULT_HEARTBEAT_PERSIST_INTERVAL_MS;
+    this.maxRuns = Math.max(1, options.maxRuns ?? DEFAULT_MAX_RUNS);
     this.idFactory = options.idFactory ?? randomUUID;
     this.clock = options.clock ?? (() => new Date());
     this.onChange = options.onChange;
@@ -449,17 +455,36 @@ export class ExecutionPlaneRegistry {
   }
 
   private persist(): void {
+    this.pruneRuns();
     try {
       if (!existsSync(dirname(this.file))) return;
       const snapshot: ExecutionPlaneSnapshot = {
         agents: [...this.agents.values()].map((entry) => entry.record),
         runs: [...this.runs.values()],
       };
-      atomicWrite(this.file, JSON.stringify(snapshot, null, 2));
-    } catch {
-      // 持久化失败不影响在线通道。
+      // 快照只做机器读取：紧凑 JSON + 不生成 .bak，减少高频落盘的 I/O。
+      atomicWrite(this.file, JSON.stringify(snapshot), { backup: false });
+      this.lastPersistAt = this.clock().getTime();
+    } catch (error) {
+      // 落盘失败不阻断在线通道，但必须留痕，否则状态丢失不可见。
+      console.warn('[execution-plane] 持久化失败:', (error as Error).message);
     }
     this.onChange?.();
+  }
+
+  /** 心跳是高频事件：按 heartbeatPersistIntervalMs 节流落盘。 */
+  private persistIfDue(): void {
+    const now = this.clock().getTime();
+    if (now - this.lastPersistAt < this.heartbeatPersistIntervalMs) return;
+    this.persist();
+  }
+
+  private pruneRuns(): void {
+    while (this.runs.size > this.maxRuns) {
+      const oldest = this.runs.keys().next();
+      if (oldest.done) break;
+      this.runs.delete(oldest.value);
+    }
   }
 
   private nowIso(): string {
@@ -628,7 +653,7 @@ export class ExecutionPlaneRegistry {
     }
     entry.record.lastSeenAt = this.nowIso();
     entry.record.connectionStatus = 'online';
-    this.persist();
+    this.persistIfDue();
   }
 
   onRunUpdate(agentId: string, input: { runId?: unknown; state?: unknown }): void {

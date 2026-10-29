@@ -21,6 +21,14 @@ test('写入文件并在覆盖前生成 .bak', (t) => {
   assert.equal(readFileSync(`${file}.bak`, 'utf8'), '{"a":1}');
 });
 
+test('backup=false 时不生成 .bak', (t) => {
+  const file = sandbox(t);
+  atomicWrite(file, '{"a":1}', { backup: false });
+  atomicWrite(file, '{"a":2}', { backup: false });
+  assert.equal(readFileSync(file, 'utf8'), '{"a":2}');
+  assert.equal(existsSync(`${file}.bak`), false);
+});
+
 test('EPERM 等占用错误短重试后成功', (t) => {
   const file = sandbox(t);
   let calls = 0;

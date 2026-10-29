@@ -5,6 +5,13 @@ import test from 'node:test';
 
 const app = readFileSync(join(process.cwd(), 'public', 'app.js'), 'utf8');
 const html = readFileSync(join(process.cwd(), 'public', 'index.html'), 'utf8');
+const server = readFileSync(join(process.cwd(), 'src', 'server.ts'), 'utf8');
+
+test('write_pending 恢复消息使用 convId 字段（两端一致）', () => {
+  assert.match(server, /type: 'write_pending', convId/);
+  assert.doesNotMatch(server, /type: 'write_pending', conversationId/);
+  assert.match(app, /case 'write_pending':[\s\S]{0,200}message\.convId/);
+});
 
 test('写操作页面与导航存在', () => {
   assert.match(html, /data-view="writes"/);

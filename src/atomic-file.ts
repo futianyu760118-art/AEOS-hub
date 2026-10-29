@@ -16,6 +16,8 @@ export interface AtomicWriteOptions {
   attempts?: number;
   /** 首次重试等待毫秒数，之后线性递增。 */
   waitMs?: number;
+  /** 覆盖前是否生成 .bak；高频大文件（如执行面快照）可关闭以省一次整文件拷贝。 */
+  backup?: boolean;
 }
 
 function sleepSync(ms: number): void {
@@ -32,7 +34,7 @@ export function atomicWrite(file: string, content: string, options: AtomicWriteO
   const waitMs = Math.max(0, options.waitMs ?? DEFAULT_RENAME_WAIT_MS);
   try {
     writeFileSync(temp, content, { encoding: 'utf8', mode: 0o600, flush: true });
-    if (existsSync(file)) {
+    if (options.backup !== false && existsSync(file)) {
       try {
         copyFileSync(file, `${file}.bak`);
       } catch (error) {

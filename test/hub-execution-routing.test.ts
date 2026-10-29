@@ -36,6 +36,32 @@ test('只选择在线、非模拟、有推理能力的中台 Agent', () => {
   assert.equal(selectHubReasoningAgent([agent({ agentId: 'plm', systemId: 'hengjian-plm', sourceSystem: 'hengjian-plm' })]), null);
 });
 
+test('格式化结果展示筛选口径、快照时间与查询置信度', () => {
+  const result: HighestRiskOrderResult = {
+    requestId: 'orch-2',
+    order: { orderNo: 'HJ-2', riskLevel: 'red', riskRank: 3, amount: 200, promisedDate: '2026-06-30', businessObjectRef: 'business://order/HJ-2', raw: {} },
+    queryRunId: 'run-q1',
+    reasoningRunId: 'run-r',
+    query: {
+      windowEnd: '2026-10-29',
+      runIds: ['run-q1', 'run-q2'],
+      dataAsOf: '2026-10-25T20:33:59.415427',
+      stale: true,
+      confidence: 'low',
+      total: 201,
+      scanned: 201,
+    },
+    result: { summary: '风险较高。', conclusions: [], data_confidence: 'high' },
+  };
+  const answer = formatHighestRiskAnswer(result);
+  assert.match(answer, /需求日期 ≤ 2026-10-29/);
+  assert.match(answer, /快照 2026-10-25T20:33:59.415427（已过期）/);
+  assert.match(answer, /扫描 201\/201 条红色风险/);
+  assert.match(answer, /查询 low（快照已过期）/);
+  assert.match(answer, /推理 high/);
+  assert.match(answer, /run-q1、run-q2/);
+});
+
 test('格式化结果包含订单、证据与两条 runId', () => {
   const result: HighestRiskOrderResult = {
     requestId: 'orch-1',

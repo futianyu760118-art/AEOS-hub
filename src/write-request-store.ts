@@ -24,6 +24,8 @@ export interface WriteRequestRecord {
   reason: string;
   idempotencyKey: string;
   requestedBy: { kind: 'user' | 'system'; id: string; name: string | null };
+  /** 对话内发起时记录来源会话；Hub 重启后据此恢复“待确认”按钮。 */
+  conversationId?: string | null;
   caller: CallerContext | null;
   status: WriteRequestStatus;
   runId: string | null;
@@ -101,6 +103,9 @@ export class WriteRequestStore {
     const at = this.now().toISOString();
     const record: WriteRequestRecord = {
       ...input,
+      conversationId: typeof input.conversationId === 'string' && input.conversationId.trim()
+        ? input.conversationId.trim()
+        : null,
       id: `write-${this.idFactory()}`,
       status: 'pending_approval',
       runId: null,

@@ -31,9 +31,17 @@ function text(value: unknown): string {
 export function formatHighestRiskAnswer(result: HighestRiskOrderResult): string {
   const order = result.order;
   const payload = record(result.result) ?? {};
-  const lines = [
-    `已定位当前风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}）。`,
-  ];
+  const query = result.query;
+  const head = query?.windowEnd
+    ? `已按需求日期 ≤ ${query.windowEnd}（含今天到期与已逾期）筛选红色齐套风险，定位风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}）。`
+    : `已定位当前风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}）。`;
+  const lines = [head];
+  if (query) {
+    const snapshot = query.dataAsOf ? `快照 ${query.dataAsOf}` : '快照时间未知';
+    const staleText = query.stale === true ? '（已过期）' : '';
+    const scanned = query.total !== null ? `；扫描 ${query.scanned}/${query.total} 条红色风险` : `；扫描 ${query.scanned} 条红色风险`;
+    lines.push('', `数据口径：${snapshot}${staleText}；查询置信度 ${query.confidence ?? '未知'}${scanned}。`);
+  }
   const summary = text(payload.summary);
   if (summary) lines.push('', summary);
   const conclusions = Array.isArray(payload.conclusions) ? payload.conclusions.slice(0, 5) : [];
@@ -51,9 +59,16 @@ export function formatHighestRiskAnswer(result: HighestRiskOrderResult): string 
     });
   }
   const confidence = text(payload.data_confidence);
-  if (confidence) {
-    lines.push('', `数据置信度：${confidence}${confidence === 'low' ? '（部分数据可能不是最新，请以中台最新数据为准）' : ''}`);
+  if (confidence || query) {
+    const parts: string[] = [];
+    if (query) parts.push(`查询 ${query.confidence ?? '未知'}${query.stale === true ? '（快照已过期）' : ''}`);
+    if (confidence) parts.push(`推理 ${confidence}`);
+    const warning = query?.stale === true || query?.confidence === 'low'
+      ? '。数据源可能不是最新，请以中台最新数据为准。'
+      : confidence === 'low' ? '（部分数据可能不是最新，请以中台最新数据为准）' : '';
+    lines.push('', `数据置信度：${parts.join(' · ')}${warning}`);
   }
-  lines.push('', `请求：${result.requestId}；查询 run：${result.queryRunId}；推理 run：${result.reasoningRunId}。`);
+  const queryRuns = query?.runIds?.length ? query.runIds.join('、') : result.queryRunId;
+  lines.push('', `请求：${result.requestId}；查询 run：${queryRuns}；推理 run：${result.reasoningRunId}。`);
   return lines.join('\n').slice(0, 12_000);
 }

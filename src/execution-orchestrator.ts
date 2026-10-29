@@ -8,6 +8,9 @@ const KITTING_RESULTS_PATH = '/external/material-kitting/results';
 const DEFAULT_QUERY_TIMEOUT_MS = 15_000;
 const DEFAULT_REASONING_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
+/** 齐套结果单页上限 200；按需翻页，最多 5 页（1000 条红色风险）。 */
+const KITTING_PAGE_SIZE = 200;
+const MAX_QUERY_PAGES = 5;
 
 type ExecutionPlaneLike = Pick<ExecutionPlaneRegistry, 'list' | 'dispatch' | 'getRun' | 'recall'>;
 
@@ -21,12 +24,41 @@ export interface HighestRiskOrder {
   raw: Record<string, unknown>;
 }
 
+/** 本次“最高风险”查询的数据侧信息：窗口、快照时间、置信度、翻页覆盖范围。 */
+export interface HighestRiskQueryMeta {
+  /** 需求日期窗口右端（YYYY-MM-DD，北京时间）；本次只取 required_date ≤ 该日期。 */
+  windowEnd: string;
+  /** 实际派发的查询 run（翻页时可能多条）。 */
+  runIds: string[];
+  /** 中台返回的快照时间（原样）。 */
+  dataAsOf: string | null;
+  stale: boolean | null;
+  confidence: string | null;
+  /** 中台报告的总行数（无该字段时为 null）。 */
+  total: number | null;
+  /** 实际参与排序的行数。 */
+  scanned: number;
+}
+
 export interface HighestRiskOrderResult {
   requestId: string;
   order: HighestRiskOrder;
   queryRunId: string;
   reasoningRunId: string;
   result: unknown;
+  query?: HighestRiskQueryMeta;
+}
+
+/** 北京时间的日期串（YYYY-MM-DD），用于“今天”口径，避免服务器时区/UTC 偏移算错。 */
+export function beijingDateString(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
 export class ExecutionOrchestrationError extends Error {
@@ -129,14 +161,27 @@ export function rankOrdersFromResult(result: unknown): HighestRiskOrder[] {
   });
 }
 
-export function buildHighestRiskReasoningRequest(text: string, order: HighestRiskOrder, requestId: string): Record<string, unknown> {
+export function buildHighestRiskReasoningRequest(
+  text: string,
+  order: HighestRiskOrder,
+  requestId: string,
+  meta?: Pick<HighestRiskQueryMeta, 'windowEnd' | 'dataAsOf' | 'stale' | 'confidence' | 'scanned' | 'total'>,
+): Record<string, unknown> {
   const details = [
     `订单号：${order.orderNo}`,
     `风险等级：${order.riskLevel || '未知'}`,
     order.amount !== null ? `影响金额：${order.amount}` : '',
     order.promisedDate ? `需求日期：${order.promisedDate}` : '',
   ].filter(Boolean).join('；');
-  const prompt = `${text}\n\n已从物料齐套红色风险中定位影响最大的订单：${details}。请仅基于该订单做只读交付风险分析，结论必须引用 evidence_refs；数据缺失或过期时明确说明数据置信度不足。`;
+  const freshness = meta
+    ? [
+      meta.windowEnd ? `筛选口径：需求日期 ≤ ${meta.windowEnd}（含今天到期与已逾期）` : '',
+      meta.dataAsOf ? `齐套数据快照时间：${meta.dataAsOf}${meta.stale ? '（已过期）' : ''}` : '',
+      meta.confidence ? `查询数据置信度：${meta.confidence}` : '',
+      meta.total !== null ? `本次扫描 ${meta.scanned}/${meta.total} 条红色风险` : `本次扫描 ${meta.scanned} 条红色风险`,
+    ].filter(Boolean).join('；')
+    : '';
+  const prompt = `${text}\n\n${freshness ? `${freshness}。\n` : ''}已从物料齐套红色风险中定位影响最大的订单：${details}。请仅基于该订单做只读交付风险分析，结论必须引用 evidence_refs；数据缺失或过期时明确说明数据置信度不足；不要仅凭“计算时间”判断数据是否最新，须以快照时间为准。`;
   return {
     prompt: prompt.slice(0, 2000),
     task_type: 'order_delivery_analysis',
@@ -221,32 +266,59 @@ export class ExecutionOrchestrator {
     }
 
     const requestId = `orch-${this.idFactory()}`;
+    const windowEnd = beijingDateString(this.clock());
+    const queryRunIds: string[] = [];
+    const scannedRows: Array<Record<string, unknown>> = [];
+    let queryMeta: HighestRiskQueryMeta = { windowEnd, runIds: queryRunIds, dataAsOf: null, stale: null, confidence: null, total: null, scanned: 0 };
     let queryRunId: string | null = null;
     let reasoningRunId: string | null = null;
     try {
-      await this.requireAgentIdle(queryer.agentId, requestId);
-      const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
-        path: KITTING_RESULTS_PATH,
-        params: { page: 1, page_size: 200, risk_level: 'red' },
-      }, { traceId: requestId, requestId });
-      queryRunId = queryDispatch.runId;
-      const queryRun = await this.waitForRun(queryRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
-      if (queryRun.state !== 'completed') {
-        throw new ExecutionOrchestrationError('QUERY_FAILED', queryRun.error?.message || '订单查询未完成', {
-          status: 502, requestId, queryRunId,
-        });
+      // 按“需求日期 ≤ 今天（北京时间）”筛选：包含今天到期与已逾期订单，作为每日检查口径。
+      let page = 1;
+      for (;;) {
+        await this.requireAgentIdle(queryer.agentId, requestId, queryRunId);
+        const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
+          path: KITTING_RESULTS_PATH,
+          params: { page, page_size: KITTING_PAGE_SIZE, risk_level: 'red', required_date_end: windowEnd },
+        }, { traceId: requestId, requestId });
+        queryRunId = queryDispatch.runId;
+        queryRunIds.push(queryRunId);
+        const queryRun = await this.waitForRun(queryRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
+        if (queryRun.state !== 'completed') {
+          throw new ExecutionOrchestrationError('QUERY_FAILED', queryRun.error?.message || '订单查询未完成', {
+            status: 502, requestId, queryRunId,
+          });
+        }
+        const pageRows = rowsFromResult(queryRun.result);
+        scannedRows.push(...pageRows);
+        if (page === 1) {
+          const root = record(queryRun.result);
+          queryMeta = {
+            windowEnd,
+            runIds: queryRunIds,
+            dataAsOf: root ? textOf(root, ['data_as_of', 'dataAsOf']) || null : null,
+            stale: root && typeof root.stale === 'boolean' ? root.stale : null,
+            confidence: root ? textOf(root, ['data_confidence', 'dataConfidence']) || null : null,
+            total: root ? numberOf(root, ['total']) : null,
+            scanned: 0,
+          };
+        }
+        const total = queryMeta.total;
+        if (total === null || scannedRows.length >= total || pageRows.length < KITTING_PAGE_SIZE || page >= MAX_QUERY_PAGES) break;
+        page += 1;
       }
+      queryMeta = { ...queryMeta, runIds: [...queryRunIds], scanned: scannedRows.length };
 
       const excluded = new Set((input.excludeOrderNos ?? []).map((value) => value.trim()).filter(Boolean));
-      const [order] = rankOrdersFromResult(queryRun.result).filter((candidate) => !excluded.has(candidate.orderNo));
+      const [order] = rankOrdersFromResult({ items: scannedRows }).filter((candidate) => !excluded.has(candidate.orderNo));
       if (!order) {
-        throw new ExecutionOrchestrationError('NO_ELIGIBLE_ORDER', '当前查询窗口没有可用于分析的订单', {
+        throw new ExecutionOrchestrationError('NO_ELIGIBLE_ORDER', `需求日期 ≤ ${windowEnd} 的红色齐套风险中没有可用于分析的订单`, {
           status: 422, requestId, queryRunId,
         });
       }
 
       await this.requireAgentIdle(reasoner.agentId, requestId, queryRunId);
-      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId), { traceId: requestId, requestId });
+      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId, queryMeta), { traceId: requestId, requestId });
       reasoningRunId = reasonDispatch.runId;
       const reasonRun = await this.waitForRun(reasoningRunId, this.reasoningTimeoutMs, 'REASONING_TIMEOUT');
       if (reasonRun.state !== 'completed') {
@@ -255,8 +327,23 @@ export class ExecutionOrchestrator {
         });
       }
 
-      this.audit('completed', { requestId, traceId: requestId, queryRunId, reasoningRunId, orderNo: order.orderNo, queryAgentId: queryer.agentId, reasoningAgentId: reasoner.agentId });
-      return { requestId, order, queryRunId, reasoningRunId, result: reasonRun.result };
+      this.audit('completed', {
+        requestId,
+        traceId: requestId,
+        queryRunId,
+        queryRunIds,
+        reasoningRunId,
+        orderNo: order.orderNo,
+        queryAgentId: queryer.agentId,
+        reasoningAgentId: reasoner.agentId,
+        windowEnd,
+        dataAsOf: queryMeta.dataAsOf,
+        queryStale: queryMeta.stale,
+        queryConfidence: queryMeta.confidence,
+        scanned: queryMeta.scanned,
+        total: queryMeta.total,
+      });
+      return { requestId, order, queryRunId, reasoningRunId, result: reasonRun.result, query: queryMeta };
     } catch (error) {
       const mapped = error instanceof ExecutionOrchestrationError
         ? error

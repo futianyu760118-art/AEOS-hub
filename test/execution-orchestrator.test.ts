@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   ExecutionOrchestrationError,
   ExecutionOrchestrator,
+  beijingDateString,
   buildHighestRiskReasoningRequest,
   rankOrdersFromResult,
 } from '../src/execution-orchestrator.ts';
@@ -40,8 +41,9 @@ const GATEWAY_AGENT = agent({
   ],
 });
 
-function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean; busyForMs?: number; busyForever?: boolean; agentIdleTimeoutMs?: number } = {}) {
+function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean; busyForMs?: number; busyForever?: boolean; agentIdleTimeoutMs?: number; pagedOrders?: boolean } = {}) {
   const runs = new Map<string, ExecutionRunRecord>();
+  const dispatches: Array<{ agentId: string; capability: string; input: unknown }> = [];
   let sequence = 0;
   const audits: EvidenceInput[] = [];
   const agents = (options.singleGateway
@@ -64,6 +66,7 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
   const plane = {
     list: () => ({ agents, runs: [] }),
     dispatch: (agentId: string, capability: string, input: unknown) => {
+      dispatches.push({ agentId, capability, input });
       const runId = `run-${++sequence}`;
       const run: ExecutionRunRecord = { runId, agentId, capability, input, state: 'dispatched', startedAt: NOW, endedAt: null };
       runs.set(runId, run);
@@ -72,6 +75,24 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
           if (options.failQuery) {
             run.state = 'failed';
             run.error = { code: 'UPSTREAM_UNAVAILABLE', message: '查询不可达' };
+          } else if (options.pagedOrders) {
+            const page = Number((input as { params?: { page?: unknown } } | null)?.params?.page ?? 1);
+            run.state = 'completed';
+            run.result = page === 1
+              ? {
+                items: Array.from({ length: 200 }, (_, index) => ({ demand_no: `HJ-P1-${index}`, risk_level: 'red', affected_order_amount: 1 })),
+                total: 201,
+                data_as_of: '2026-10-25T20:33:59.415427',
+                stale: true,
+                data_confidence: 'low',
+              }
+              : {
+                items: [{ demand_no: 'HJ-PAGE2-BIG', risk_level: 'red', affected_order_amount: 999 }],
+                total: 201,
+                data_as_of: '2026-10-25T20:33:59.415427',
+                stale: true,
+                data_confidence: 'low',
+              };
           } else {
             run.state = 'completed';
             run.result = options.emptyOrders ? { items: [] } : {
@@ -99,9 +120,34 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
     pollIntervalMs: 1,
     agentIdleTimeoutMs: options.agentIdleTimeoutMs ?? 60_000,
     idFactory: () => 'test',
+    clock: () => new Date('2026-10-29T08:00:00.000Z'),
   });
-  return { orchestrator, audits };
+  return { orchestrator, audits, dispatches };
 }
+
+test('北京时间日期串按东八区计算', () => {
+  assert.equal(beijingDateString(new Date('2026-10-29T08:00:00.000Z')), '2026-10-29');
+  assert.equal(beijingDateString(new Date('2026-10-29T16:30:00.000Z')), '2026-10-30');
+});
+
+test('按需求日期筛选并翻页汇总后再选最高风险', async () => {
+  const { orchestrator, dispatches } = planeFixture({ pagedOrders: true });
+  const result = await orchestrator.highestRiskOrder({ reasoningAgentId: 'reason-agent', text: '查询今天风险最高的订单' });
+
+  const firstQuery = dispatches[0]?.input as { params?: Record<string, unknown> } | undefined;
+  assert.equal(firstQuery?.params?.required_date_end, '2026-10-29');
+  assert.equal(firstQuery?.params?.risk_level, 'red');
+  const secondQuery = dispatches[1]?.input as { params?: Record<string, unknown> } | undefined;
+  assert.equal(secondQuery?.params?.page, 2);
+  assert.equal(result.order.orderNo, 'HJ-PAGE2-BIG');
+  assert.equal(result.query?.scanned, 201);
+  assert.equal(result.query?.total, 201);
+  assert.deepEqual(result.query?.runIds, ['run-1', 'run-2']);
+  assert.equal(result.query?.dataAsOf, '2026-10-25T20:33:59.415427');
+  assert.equal(result.query?.stale, true);
+  assert.equal(result.query?.confidence, 'low');
+  assert.equal(result.reasoningRunId, 'run-3');
+});
 
 test('订单排序：红色优先，同等级金额降序', () => {
   const orders = rankOrdersFromResult({
