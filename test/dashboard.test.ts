@@ -382,3 +382,8 @@ test('看板读取使用分页上限与工单日期过滤', () => {
   assert.match(server, /readLimits\.shortages/);
   assert.match(server, /readLimits\.workOrders/);
 });
+
+test('旧版 detail_orders_list 分页不超过 100', () => {
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.match(server, /Math\.min\(readLimits\.pageSize, 100\)/);
+});

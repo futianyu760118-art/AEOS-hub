@@ -1742,12 +1742,14 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             readInventory: () => codexRuntime.listMcpServerStatus(),
             server: 'company-control',
             tools: dashboardTools,
+            attempts: 40,
           });
           registry = buildCapabilityRegistry(registeredServers, runtimeInventory, warnings[0]);
         } catch (error) {
           const message = error instanceof McpReadinessError
             ? error.message
             : '中控只读能力清单读取失败，请稍后刷新';
+          console.warn('[dashboard] MCP 未就绪：', message);
           warnings.push(message);
           const unavailable = { source: 'company-control', error: { code: 'MCP_NOT_READY', message } };
           orderRiskResponse = unavailable;
@@ -1769,7 +1771,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-order-risk',
             runtimeInventory,
-          }), readPlan.orders, readLimits.orders, readLimits.pageSize),
+          }), readPlan.orders, readLimits.orders, Math.min(readLimits.pageSize, 100)),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1949,6 +1951,14 @@ async function refreshDecisionData(): Promise<DashboardSnapshot> {
     } else {
       console.warn('[dashboard] 快照没有业务数据，暂不缓存；下次刷新会重试', (snapshot.warnings ?? []).slice(0, 3).join('；'));
     }
+    console.log('[dashboard] snapshot', JSON.stringify({
+      orders: snapshot.risks.length,
+      kitting: snapshot.kittingRisks.length,
+      quality: snapshot.qualityRisks.length,
+      attention: snapshot.attentionRisks.length,
+      available: snapshot.businessData?.available ?? false,
+      warnings: (snapshot.warnings ?? []).slice(0, 3),
+    }));
     return snapshot;
   })();
   try {
