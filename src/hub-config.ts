@@ -139,6 +139,9 @@ export function saveModelConfig(cfg: { model: string; modelProvider: string; pro
   parts.push('');
   if (cfg.model.trim()) parts.push(`model = ${JSON.stringify(cfg.model.trim())}`);
   if (cfg.modelProvider.trim()) parts.push(`model_provider = ${JSON.stringify(cfg.modelProvider.trim())}`);
+  // DeepSeek V4 系列：显式声明元数据，避免 Codex 因 /models 格式不兼容而降级兜底。
+  parts.push('model_context_window = 1048576');
+  parts.push('model_max_output_tokens = 393216');
   if (parts.length > 2) parts.push('');
   for (const p of cfg.providers) {
     if (!p.id.trim()) continue;
