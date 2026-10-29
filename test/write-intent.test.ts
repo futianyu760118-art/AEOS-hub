@@ -181,3 +181,50 @@ test('“写订单……”也能走写操作解析', async () => {
   assert.equal(intent.operation, 'order.update_note');
   assert.deepEqual(intent.input.changes, { remark: '中台修复后复测' });
 });
+
+test('上下文指代：无订单号时自动使用最近分析的订单（元数据路径）', async () => {
+  const intent = await parseWriteIntentWithLLM(
+    '改写它的备注为测试',
+    [CAPABILITY],
+    { apiKey: '' },
+    { fallbackOrderNo: 'HJ202602-0009-0028' },
+  );
+  assert.equal(intent.kind, 'write');
+  if (intent.kind !== 'write') return;
+  assert.equal(intent.operation, 'order.update_note');
+  assert.equal(intent.input.orderNo, 'HJ202602-0009-0028');
+});
+
+test('模型解析时自动注入上下文订单号', async () => {
+  let capturedPrompt = '';
+  const fetchImpl = (async (url: unknown, init?: { body?: string }) => {
+    const body = JSON.parse(init?.body || '{}');
+    capturedPrompt = body.messages?.[0]?.content || '';
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              kind: 'write',
+              systemId: 'control-platform',
+              capability: 'write_control_platform',
+              input: { operation: 'order.update_note', changes: { remark: '测试' } },
+            }),
+          },
+        }],
+      }),
+    } as unknown as Response;
+  }) as typeof fetch;
+  const intent = await parseWriteIntentWithLLM(
+    '调整订单的附加信息为测试',
+    [CAPABILITY],
+    { apiKey: 'test-key', fetchImpl },
+    { fallbackOrderNo: 'HJ202602-0009-0028' },
+  );
+  assert.equal(intent.kind, 'write');
+  if (intent.kind !== 'write') return;
+  assert.equal(intent.input.orderNo, 'HJ202602-0009-0028');
+  assert.match(capturedPrompt, /最近分析过的订单：HJ202602-0009-0028/);
+});

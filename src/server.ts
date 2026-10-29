@@ -87,7 +87,7 @@ import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
 import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
 import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
 import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
-import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
+import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, extractBusinessIdentifier, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
 import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
 import { estimateUsageCostCny } from './model-pricing.ts';
 import { estimateUsageCostForModel } from './usage-cost.ts';
@@ -1177,6 +1177,7 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
 
 // ---------- 对话内写操作：自然语言发起 → 对话内确认 → 审批派单 ----------
 const pendingWriteByConversation = new Map<string, { id: string; summary: string }>();
+const lastOrderByConversation = new Map<string, string>();
 const writeConversationByRequest = new Map<string, string>();
 
 function describeWriteIntent(intent: { operation: string; input: Record<string, unknown> }): string {
@@ -1251,6 +1252,7 @@ async function handleConversationalWrite(
   text: string,
   actor?: { actorId: string; roles: string[]; tenantId?: string },
 ): Promise<boolean> {
+  const contextLastOrder = lastOrderByConversation.get(convId);
   const pending = pendingWriteByConversation.get(convId);
   const confirmation = parseWriteConfirmation(text);
   if (confirmation) {
@@ -1271,7 +1273,20 @@ async function handleConversationalWrite(
 
   // 由提供方声明的写能力 + 输入 schema 驱动解析，不在 Hub 里硬编码具体写命令。
   const capabilities = writeRequestService.listCapabilities(tenantId);
-  const intent = await parseWriteIntentWithLLM(text, capabilities);
+  const hasOrderRef = /business:\/\//.test(text)
+    || Boolean(extractBusinessIdentifier(text))
+    || /(它|该|这条|这个订单|上一条)/.test(text)
+    || contextLastOrder != null;
+  if (!hasOrderRef) {
+    pushAssistantReply(convId, '请提供要修改的订单号，例如：改写订单 HJ202602-0009-0028 的交付日期为 2026-11-15。');
+    return true;
+  }
+  const intent = await parseWriteIntentWithLLM(
+    text,
+    capabilities,
+    {},
+    contextLastOrder ? { fallbackOrderNo: contextLastOrder } : {},
+  );
   if (intent.kind === 'clarify') {
     pushAssistantReply(convId, intent.message);
     return true;
@@ -1422,6 +1437,7 @@ async function routeHubExecutionTurn(convId: string, text: string, actor?: { act
       text,
       ...(excludeOrderNos && excludeOrderNos.length ? { excludeOrderNos } : {}),
     });
+    lastOrderByConversation.set(convId, result.order.orderNo);
     const answer = formatHighestRiskAnswer(result);
     if (!forceRefresh && !wantsNextOrder) {
       highestRiskAnswerCache.set(cacheKey, {

@@ -113,8 +113,8 @@ function extractFieldValue(text: string, field: { label: string; type?: 'string'
 }
 
 /** 提供方声明了 operations 元数据时，不依赖模型即可解析；新增命令无需改 Hub 代码。 */
-function parseByMetadata(text: string, capabilities: WriteCapabilityDescriptor[]): WriteIntent | null {
-  const identifier = extractBusinessIdentifier(text);
+function parseByMetadata(text: string, capabilities: WriteCapabilityDescriptor[], fallbackOrderNo?: string): WriteIntent | null {
+  const identifier = extractBusinessIdentifier(text) || fallbackOrderNo || null;
   if (!identifier) return null;
   const candidates = capabilities
     .flatMap((capability) => capability.operationDetails.map((detail) => ({
@@ -160,7 +160,7 @@ function parseByMetadata(text: string, capabilities: WriteCapabilityDescriptor[]
   return { kind: 'write', systemId: capability.systemId, capability: capability.capability, operation: detail.name, input, raw: text };
 }
 
-function buildPrompt(capabilities: WriteCapabilityDescriptor[]): string {
+function buildPrompt(capabilities: WriteCapabilityDescriptor[], fallbackOrderNo?: string): string {
   const lines = [
     '你是 AEOS Hub 的写操作意图解析器。根据用户输入，输出且只输出一个 JSON 对象，必须是以下两种之一：',
     '1. 可执行的写操作：{"kind":"write","systemId":"<系统ID>","capability":"<能力名>","input":{...}}',
@@ -172,6 +172,9 @@ function buildPrompt(capabilities: WriteCapabilityDescriptor[]): string {
     lines.push(`- 系统 ${capability.systemName}（${capability.systemId}）/ 能力 ${capability.capability}`);
     lines.push(`  操作枚举：${capability.operations.join('、') || '无'}`);
     lines.push(`  inputSchema：${JSON.stringify(capability.inputSchema ?? {})}`);
+  }
+  if (fallbackOrderNo) {
+    lines.push(`用户可能用“它 / 该订单 / 这条订单”指代最近分析过的订单：${fallbackOrderNo}；此时 input 中的业务标识字段必须使用该订单号。`);
   }
   lines.push(
     '',
@@ -205,6 +208,7 @@ export async function parseWriteIntentWithLLM(
   text: string,
   capabilities: WriteCapabilityDescriptor[],
   deps: WriteIntentDeps = {},
+  context: { fallbackOrderNo?: string } = {},
 ): Promise<WriteIntent> {
   const raw = String(text || '').trim();
   const confirmation = parseWriteConfirmation(raw);
@@ -213,7 +217,7 @@ export async function parseWriteIntentWithLLM(
     return { kind: 'clarify', message: '当前没有可用的写能力，提供方尚未注册写操作。' };
   }
   // 优先使用提供方声明的 operations 元数据（确定性、无需模型）；没有匹配时再走模型。
-  const byMetadata = parseByMetadata(raw, capabilities);
+  const byMetadata = parseByMetadata(raw, capabilities, context.fallbackOrderNo);
   if (byMetadata) return byMetadata;
   const { baseUrl, model, apiKey } = deepSeekConfig(deps);
   if (!apiKey) {
@@ -232,7 +236,7 @@ export async function parseWriteIntentWithLLM(
         model,
         temperature: 0,
         messages: [
-          { role: 'system', content: buildPrompt(capabilities) },
+          { role: 'system', content: buildPrompt(capabilities, context?.fallbackOrderNo) },
           { role: 'user', content: raw },
         ],
       }),
@@ -273,6 +277,9 @@ export async function parseWriteIntentWithLLM(
   const operation = typeof parsed.input.operation === 'string' ? parsed.input.operation.trim() : '';
   if (!operation || !capability.operations.includes(operation)) {
     return { kind: 'clarify', message: `不支持的操作：${operation || '（空）'}。可用操作：${capability.operations.join('、')}。` };
+  }
+  if (!parsed.input.orderNo && context.fallbackOrderNo) {
+    parsed.input.orderNo = context.fallbackOrderNo;
   }
   if (capability.inputSchema) {
     const validationError = validateAgainstSchema(parsed.input, capability.inputSchema);
