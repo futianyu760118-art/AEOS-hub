@@ -6823,25 +6823,20 @@ function renderCapabilityPrompts(snapshot) {
   const servers = new Set(capabilities.map((capability) => capability.server));
   const businessData = snapshot.businessData || {};
   const riskAssessment = snapshot.riskAssessment || {};
+  // 面向使用者的示例问题：短句、可直接点击发送（写操作仍需点击确认）。
   const prompts = [];
   if (servers.has('company-control')) {
-    prompts.push({
-      label: businessData.available && riskAssessment.available ? '中控经营风险核查' : '中控数据可用性核查',
-      prompt: businessData.available && riskAssessment.available
-        ? '使用 company-control 的只读能力核查当前订单、订单明细、BOM、物料、供应商、齐套结果、缺料、库存可用量和未来供给。只基于返回的 evidence_refs 输出结论；数据过期或 UPSTREAM_UNAVAILABLE 不得解读为没有风险或没有缺料。'
-        : '调用 company-control/get_system_health，说明中控平台当前业务数据端点和订单风险字段是否可用、缺少哪些数据；不要调用 demo-erp，不要编造订单、物料或风险结论。',
-    });
-  }
-  if (!servers.has('company-control') && servers.has('demo-erp')) {
+    prompts.push(
+      { label: '当前交付风险最高的订单', prompt: '当前交付风险最高的订单有哪些' },
+      { label: '查订单明细', prompt: '查 HJ202602-0009-0028 的订单明细' },
+      { label: '改交付日期', prompt: '改写订单 HJ202602-0009-0028 的交付日期为 2026-11-15' },
+    );
+  } else if (servers.has('demo-erp')) {
     prompts.push({
       label: '演示订单风险',
       prompt: '调用 demo-erp/list_order_risks 扫描演示订单风险。请明确标注这是演示数据，不可作为真实经营结论。',
     });
   }
-  prompts.push({
-    label: '能力与数据边界',
-    prompt: '简要说明当前可调用的业务系统能力、哪些能力仅为已注册、哪些能够提供真实业务数据，并说明 evidence_refs 与数据置信度要求。',
-  });
   els.capabilityPromptChips.innerHTML = prompts.map((item) => `
     <button class="chip" type="button" data-capability-prompt="${esc(item.prompt)}">${esc(item.label)}<i data-lucide="arrow-up-right"></i></button>`).join('');
   $$('[data-capability-prompt]', els.capabilityPromptChips).forEach((button) => button.addEventListener('click', () => doSend(button.dataset.capabilityPrompt)));
