@@ -1250,8 +1250,15 @@ function notifyWriteRecord(record: WriteRequestRecord): void {
   const handler = typeof handledBy.agentName === 'string' ? handledBy.agentName
     : typeof handledBy.agentId === 'string' ? handledBy.agentId : '';
   const runRef = record.runId ? ` · run ${record.runId}` : '';
+  const hints: string[] = [];
+  if (record.status === 'completed') {
+    const after = isRecord(record.result) && isRecord(record.result.after) ? record.result.after : {};
+    if (typeof after.status === 'string' && after.status === 'closed') {
+      hints.push(`该订单状态已变为 closed，如需恢复可回复：更新订单 ${orderNo || '…'} 状态为 open`);
+    }
+  }
   const text = record.status === 'completed'
-    ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}${handler ? ` · 处理方 ${handler}` : ''}。`
+    ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}${handler ? ` · 处理方 ${handler}` : ''}。${hints.length ? ` ${hints.join(' ')}` : ''}`
     : `写操作失败：${record.error?.message || '未知错误'}（请求 ${record.id}${runRef}）。`;
   pushAssistantReply(convId, text, record.runId ? { writeTraceId: `write-${record.id}` } : undefined);
 }
