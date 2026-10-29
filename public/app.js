@@ -7751,6 +7751,18 @@ function connect() {
             filenamePrefix: '智能助手回答',
           });
         }
+        const traceTarget = message.meta?.requestId || message.meta?.writeTraceId || null;
+        if (message.convId === curConvId && traceTarget) {
+          const actions = document.createElement('div');
+          actions.className = 'assistant-reply-actions';
+          const viewButton = document.createElement('button');
+          viewButton.className = 'btn ghost compact';
+          viewButton.type = 'button';
+          viewButton.textContent = '查看处理记录';
+          viewButton.addEventListener('click', () => openTraceFor(String(traceTarget)));
+          actions.appendChild(viewButton);
+          wrap.appendChild(actions);
+        }
         if (message.meta && message.meta.writeConfirmation) {
           const actions = document.createElement('div');
           actions.className = 'write-confirm-actions';

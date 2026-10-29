@@ -28,6 +28,8 @@ test('写操作调用能力、提交与审批接口', () => {
   assert.match(app, /type: 'write_decision'/);
   assert.match(app, /writeConfirmation/);
   assert.match(app, /data-write-confirm/);
+  assert.match(app, /writeTraceId/);
+  assert.match(app, /assistant-reply-actions/);
   assert.match(app, /write-confirm-actions/);
 });
 

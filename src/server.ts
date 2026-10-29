@@ -1180,10 +1180,19 @@ const pendingWriteByConversation = new Map<string, { id: string; summary: string
 const lastOrderByConversation = new Map<string, string>();
 const writeConversationByRequest = new Map<string, string>();
 
-function describeWriteIntent(intent: { operation: string; input: Record<string, unknown> }): string {
+function describeWriteIntent(
+  intent: { operation: string; input: Record<string, unknown> },
+  operationDetails?: Array<{ name: string; title?: string; fields?: Array<{ name: string; label: string }> }>,
+): string {
   const orderNo = typeof intent.input.orderNo === 'string' ? intent.input.orderNo : '';
-  const changes = isRecord(intent.input.changes) ? JSON.stringify(intent.input.changes) : '';
-  return `${orderNo ? `订单 ${orderNo} · ` : ''}${intent.operation}${changes ? `：${changes}` : ''}`;
+  const detail = operationDetails?.find((item) => item.name === intent.operation);
+  const changesSource = isRecord(intent.input.changes) ? intent.input.changes : {};
+  const parts = Object.entries(changesSource).map(([key, value]) => {
+    const label = detail?.fields?.find((field) => field.name === key)?.label ?? key;
+    return `${label}：${String(value)}`;
+  });
+  const head = detail?.title ?? intent.operation;
+  return `${head}${orderNo ? ` · 订单 ${orderNo}` : ''}${parts.length ? `（${parts.join('；')}）` : ''}`;
 }
 
 function pushAssistantReply(convId: string, text: string, meta?: Record<string, unknown>): void {
@@ -1244,7 +1253,7 @@ function notifyWriteRecord(record: WriteRequestRecord): void {
   const text = record.status === 'completed'
     ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}${handler ? ` · 处理方 ${handler}` : ''}。`
     : `写操作失败：${record.error?.message || '未知错误'}（请求 ${record.id}${runRef}）。`;
-  pushAssistantReply(convId, text);
+  pushAssistantReply(convId, text, record.runId ? { writeTraceId: `write-${record.id}` } : undefined);
 }
 
 async function handleConversationalWrite(
@@ -1293,7 +1302,10 @@ async function handleConversationalWrite(
   }
   if (intent.kind !== 'write') return false;
 
-  const summary = describeWriteIntent(intent);
+  const summary = describeWriteIntent(
+    intent,
+    capabilities.find((item) => item.systemId === intent.systemId && item.capability === intent.capability)?.operationDetails,
+  );
   try {
     const { record } = writeRequestService.create({
       tenantId,
