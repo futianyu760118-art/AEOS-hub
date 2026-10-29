@@ -1,12 +1,16 @@
 {
   "version": 1,
-  "revision": 1,
-  "updatedAt": "2026-10-28T00:00:00.000Z",
+  "revision": 2,
+  "updatedAt": "2026-10-29T01:17:41.020Z",
   "enabled": true,
   "maxItemsPerAnalysis": 2,
   "perItemTimeoutMs": 120000,
   "dedupeHours": 24,
-  "dispatchDomains": ["kitting", "quality"],
+  "dispatchDomains": [
+    "order",
+    "kitting",
+    "quality"
+  ],
   "targets": {
     "order": {
       "systemId": "control-platform",
