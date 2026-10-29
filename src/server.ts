@@ -15,7 +15,7 @@ import { codexHome, configFile, readConfig, saveModelConfig, listEnvKeys, setEnv
 import { appendEvidence, evidenceFile, readRecentEvidence, evidenceHealth } from './evidence.ts';
 import { appendAuthenticationAuditEvidence } from './authentication-audit.ts';
 import { collectMcpPages, payloadOf } from './mcp-pagination.ts';
-import { dashboardReadPlan } from './dashboard-read-plan.ts';
+import { dashboardReadPlan, loadDashboardReadLimits } from './dashboard-read-plan.ts';
 import { serveRuntimeImage, validOrigin, boundedLimit } from './http-security.ts';
 import {
   DailyQuestionConflictError,
@@ -1760,6 +1760,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
           // unverified call merely to replace it with a misleading empty result.
         } else {
         const readPlan = dashboardReadPlan(new Date());
+        const readLimits = loadDashboardReadLimits();
         const [orders, shortages, kitting, quality, workOrders, capacity] = await Promise.allSettled([
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
@@ -1768,7 +1769,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-order-risk',
             runtimeInventory,
-          }), readPlan.orders),
+          }), readPlan.orders, readLimits.orders, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1776,7 +1777,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-material-shortage',
             runtimeInventory,
-          }), {}),
+          }), {}, readLimits.shortages, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1784,7 +1785,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-material-kitting',
             runtimeInventory,
-          }), readPlan.kitting),
+          }), readPlan.kitting, readLimits.kitting, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1794,15 +1795,18 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             runtimeInventory,
           // Attention 同时需要拿到质量事项的终态，才能将此前已进入队列的
           // 事项以中台证据归入“已闭环”；前端仍只把非终态计入待关注指标。
-          }), { status: 'open,in_progress,closed,resolved,completed,cancelled,canceled' }),
+          }), { status: 'open,in_progress,closed,resolved,completed,cancelled,canceled' }, readLimits.quality, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id, server: 'company-control', tool: 'production_work_orders_list',
             args: pageArgs, purpose: 'manager-dashboard-production-work-orders', runtimeInventory,
-          }), {}),
+          }), {
+            planned_end_start: readPlan.orders.date_from,
+            planned_end_end: readPlan.orders.date_to,
+          }, readLimits.workOrders, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id, server: 'company-control', tool: 'production_capacity_list',
             args: pageArgs, purpose: 'manager-dashboard-production-capacity', runtimeInventory,
-          }), readPlan.capacity),
+          }), readPlan.capacity, readLimits.capacity, readLimits.pageSize),
         ]);
         if (orders.status === 'fulfilled') orderRiskResponse = orders.value;
         else warnings.push(`中控平台订单数据读取失败：${orders.reason instanceof Error ? orders.reason.message : String(orders.reason)}`);
@@ -1824,9 +1828,9 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
           const workOrderNo = typeof firstWorkOrder.work_order_no === 'string' ? firstWorkOrder.work_order_no : typeof firstWorkOrder.work_order_id === 'string' ? firstWorkOrder.work_order_id : '';
           if (orderNo || workOrderNo) {
             const [operations, links, reports] = await Promise.allSettled([
-              orderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_operations_list', args: pageArgs, purpose: 'manager-dashboard-production-operations', runtimeInventory }), { order_no: orderNo }) : Promise.resolve(undefined),
-              collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_order_links_list', args: pageArgs, purpose: 'manager-dashboard-production-links', runtimeInventory }), { ...(orderNo ? { order_no: orderNo } : {}), ...(workOrderNo ? { work_order_no: workOrderNo } : {}) }),
-              workOrderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_reports_list', args: pageArgs, purpose: 'manager-dashboard-production-reports', runtimeInventory }), { work_order_no: workOrderNo }) : Promise.resolve(undefined),
+              orderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_operations_list', args: pageArgs, purpose: 'manager-dashboard-production-operations', runtimeInventory }), { order_no: orderNo }, readLimits.productionScoped, readLimits.pageSize) : Promise.resolve(undefined),
+              collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_order_links_list', args: pageArgs, purpose: 'manager-dashboard-production-links', runtimeInventory }), { ...(orderNo ? { order_no: orderNo } : {}), ...(workOrderNo ? { work_order_no: workOrderNo } : {}) }, readLimits.productionScoped, readLimits.pageSize),
+              workOrderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_reports_list', args: pageArgs, purpose: 'manager-dashboard-production-reports', runtimeInventory }), { work_order_no: workOrderNo }, readLimits.productionScoped, readLimits.pageSize) : Promise.resolve(undefined),
             ]);
             if (operations.status === 'fulfilled' && operations.value) productionResponses.operations = operations.value;
             if (links.status === 'fulfilled') productionResponses.orderLinks = links.value;
