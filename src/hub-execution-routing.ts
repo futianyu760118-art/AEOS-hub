@@ -32,15 +32,24 @@ export function formatHighestRiskAnswer(result: HighestRiskOrderResult): string 
   const order = result.order;
   const payload = record(result.result) ?? {};
   const query = result.query;
+  const composite = order.composite;
+  const scoreText = composite
+    ? `，综合风险分 ${composite.score}/100（本次候选订单内归一，齐套金额/缺料/质量/交期加权，本单质量未闭环 ${composite.qualityOpen} 项）`
+    : '';
   const head = query?.windowEnd
-    ? `已按需求日期 ≤ ${query.windowEnd}（含今天到期与已逾期）筛选红色齐套风险，定位风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}）。`
-    : `已定位当前风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}）。`;
+    ? `已按需求日期 ≤ ${query.windowEnd}（含今天到期与已逾期）筛选红色齐套风险，定位风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}${scoreText}）。`
+    : `已定位当前风险最高订单：${order.orderNo}（风险等级：${order.riskLevel || '未知'}${order.amount !== null ? `，影响金额：${order.amount}` : ''}${scoreText}）。`;
   const lines = [head];
   if (query) {
     const snapshot = query.dataAsOf ? `快照 ${query.dataAsOf}` : '快照时间未知';
     const staleText = query.stale === true ? '（已过期）' : '';
     const scanned = query.total !== null ? `；扫描 ${query.scanned}/${query.total} 条红色风险` : `；扫描 ${query.scanned} 条红色风险`;
-    lines.push('', `数据口径：${snapshot}${staleText}；查询置信度 ${query.confidence ?? '未知'}${scanned}。`);
+    const quality = result.quality
+      ? `；质量未闭环 ${result.quality.openIssues} 项${result.quality.warning ? `（${result.quality.warning}）` : ''}`
+      : '';
+    lines.push('', `数据口径：${snapshot}${staleText}；查询置信度 ${query.confidence ?? '未知'}${scanned}${quality}。`);
+  } else if (result.quality?.warning) {
+    lines.push('', `数据说明：${result.quality.warning}`);
   }
   const summary = text(payload.summary);
   if (summary) lines.push('', summary);

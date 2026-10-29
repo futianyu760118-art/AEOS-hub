@@ -81,6 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, e
 import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { beijingDateString, ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
+import { buildDailyBriefing, formatDailyBriefingMarkdown, type DailyBriefing } from './daily-briefing.ts';
 import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport, loadConclusionDispatchPolicy, saveConclusionDispatchPolicy } from './conclusion-dispatcher.ts';
 import { RecentAnalysisCache } from './recent-analysis-cache.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
@@ -509,6 +510,8 @@ try {
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
+// 会话发起人：把 Hub 内对话/分析产生的用量归属到具体 M01 用户（“按调用方”视图）。
+const conversationActorId = new Map<string, string>();
 const convByThread = new Map<string, string>(); // codex threadId -> convId
 const activeTurn = new Map<string, { convId: string; turnId: string | null }>(); // threadId -> 进行中的 turn
 const dailyQuestionGenerationLocks = new Map<string, Promise<DailyQuestionConfig>>();
@@ -894,6 +897,7 @@ function recordCodexTokenUsage(event: RuntimeEvent): void {
 
   const convId = convByThread.get(threadId);
   const conv = convId ? convCache.get(convId) : undefined;
+  const callerUserId = convId ? conversationActorId.get(convId) ?? null : null;
   const configuredModel = readConfig().model?.trim();
   const modelName = conv?.lastChoice?.model?.trim() || configuredModel || 'deepseek-flash';
   const profiles = loadModelProfiles().profiles;
@@ -911,6 +915,7 @@ function recordCodexTokenUsage(event: RuntimeEvent): void {
     systemId: 'aeos-hub',
     modelId: profile?.id ?? modelName,
     runId: null,
+    callerUserId,
     tokensIn: delta.inputTokens,
     cachedTokens: delta.cachedInputTokens,
     tokensOut: delta.outputTokens,
@@ -1404,6 +1409,10 @@ async function handleConversationalWrite(
 async function routeHubExecutionTurn(convId: string, text: string, actor?: { actorId: string; roles: string[]; tenantId?: string }): Promise<boolean> {
   const conv = getConv(convId);
   if ((conv?.scope ?? 'hub') !== 'hub') return false;
+  // 把 M01 用户作为调用方传入执行面，用量台账才能按人归属。
+  const caller = actor?.actorId
+    ? { systemId: 'aeos-hub', agentId: null, userId: actor.actorId, taskId: null, traceId: null }
+    : null;
   if (await handleConversationalWrite(convId, text, actor)) return true;
   const intent = recognizeHubIntent(text);
   // 范围控制：用户可直接要求“下一条高风险订单”，跳过最近已分析过的订单。
@@ -1441,6 +1450,7 @@ async function routeHubExecutionTurn(convId: string, text: string, actor?: { act
           capability: selection.capability,
           input: plan.input,
           timeoutMs: plan.timeoutMs,
+          caller,
         });
         const answer = formatIntentExecutionAnswer(intent, result);
         appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
@@ -1516,6 +1526,7 @@ async function routeHubExecutionTurn(convId: string, text: string, actor?: { act
     const result = await executionOrchestrator.highestRiskOrder({
       reasoningAgentId: selection.agentId,
       text,
+      caller,
       ...(excludeOrderNos && excludeOrderNos.length ? { excludeOrderNos } : {}),
     });
     lastOrderByConversation.set(convId, result.order.orderNo);
@@ -1855,17 +1866,85 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
   }
 }
 
+// ---------- 每日风险简报：按“今天到期 + 已逾期”口径只读汇总齐套红色风险 ----------
+const DAILY_BRIEFING_TTL_MS = 5 * 60_000;
+let dailyBriefingCache: { at: number; windowEnd: string; brief: DailyBriefing; markdown: string } | null = null;
+
+async function loadDailyBriefing(force = false): Promise<{ at: number; windowEnd: string; brief: DailyBriefing; markdown: string }> {
+  const windowEnd = beijingDateString();
+  if (!force && dailyBriefingCache && dailyBriefingCache.windowEnd === windowEnd
+    && Date.now() - dailyBriefingCache.at < DAILY_BRIEFING_TTL_MS) {
+    return dailyBriefingCache;
+  }
+  let sessionId: string | null = null;
+  try {
+    const session = await runtimeSupervisor.createSession(CODEX_RUNTIME_ID, {
+      workingDirectory: root,
+      metadata: { purpose: 'daily-briefing-readonly' },
+    });
+    sessionId = session.id;
+    const runtimeInventory = await waitForReadOnlyMcpTools({
+      readInventory: () => codexRuntime.listMcpServerStatus(),
+      server: 'company-control',
+      tools: ['material_kitting_results_list'],
+    });
+    const response = await collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
+      sessionId: session.id,
+      server: 'company-control',
+      tool: 'material_kitting_results_list',
+      args: pageArgs,
+      purpose: 'daily-briefing-kitting',
+      runtimeInventory,
+    }), { risk_level: 'red', required_date_end: windowEnd }, 5, 200);
+    const payload = payloadOf(response);
+    if (payload.error) throw new Error(`中台齐套查询失败：${JSON.stringify(payload.error)}`);
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    const brief = buildDailyBriefing({
+      rows,
+      windowEnd,
+      dataAsOf: typeof payload.data_as_of === 'string' ? payload.data_as_of : null,
+      confidence: typeof payload.data_confidence === 'string' ? payload.data_confidence : 'unknown',
+      stale: typeof payload.stale === 'boolean' ? payload.stale : null,
+      warnings: Array.isArray(payload.warnings) ? payload.warnings.filter((item): item is string => typeof item === 'string') : [],
+    });
+    const entry = { at: Date.now(), windowEnd, brief, markdown: formatDailyBriefingMarkdown(brief) };
+    dailyBriefingCache = entry;
+    return entry;
+  } finally {
+    if (sessionId) await runtimeSupervisor.deleteSession(CODEX_RUNTIME_ID, sessionId).catch(() => undefined);
+  }
+}
+
 /**
  * AEOS keeps a warm, read-only decision snapshot even while no browser is
  * open. This is intentionally separate from the removed Autopilot: it does
  * not create cases, send notifications, or call any non-read-only tool.
  */
+function dashboardHasBusinessData(snapshot: DashboardSnapshot): boolean {
+  return Boolean(snapshot.businessData?.available)
+    || (snapshot.risks?.length ?? 0) > 0
+    || (snapshot.kittingRisks?.length ?? 0) > 0
+    || (snapshot.qualityRisks?.length ?? 0) > 0
+    || (snapshot.attentionRisks?.length ?? 0) > 0
+    || Boolean(snapshot.productionAssessment?.available);
+}
+
 async function refreshDecisionData(): Promise<DashboardSnapshot> {
   if (decisionDataRefreshPromise) return decisionDataRefreshPromise;
   decisionDataRefreshPromise = (async () => {
-    const snapshot = await loadDashboardSnapshot(true);
-    latestDecisionData = structuredClone(snapshot);
-    latestDecisionDataAt = new Date().toISOString();
+    let snapshot = await loadDashboardSnapshot(true);
+    // MCP/Codex 冷启动时第一次读取可能拿不到业务数据：短暂等待后重试一次，
+    // 且空快照不写入缓存，避免重启后一直返回空看板。
+    if (!dashboardHasBusinessData(snapshot)) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      snapshot = await loadDashboardSnapshot(true);
+    }
+    if (dashboardHasBusinessData(snapshot)) {
+      latestDecisionData = structuredClone(snapshot);
+      latestDecisionDataAt = new Date().toISOString();
+    } else {
+      console.warn('[dashboard] 快照没有业务数据，暂不缓存；下次刷新会重试', (snapshot.warnings ?? []).slice(0, 3).join('；'));
+    }
     return snapshot;
   })();
   try {
@@ -2784,6 +2863,20 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       sendJson(res, 200, await decisionDataForRequest(url.searchParams.get('refresh') === '1'));
+    } catch (error) {
+      sendJson(res, 503, { error: (error as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/api/briefing/daily') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const entry = await loadDailyBriefing(url.searchParams.get('refresh') === '1');
+      sendJson(res, 200, {
+        brief: entry.brief,
+        markdown: entry.markdown,
+        cachedAt: new Date(entry.at).toISOString(),
+      });
     } catch (error) {
       sendJson(res, 503, { error: (error as Error).message });
     }
@@ -3765,7 +3858,9 @@ wss.on('connection', (ws, request) => {
           : requestedChoice;
         appendConversationMessage(convId, { id: `user-${randomUUID()}`, role: 'user', text });
         pushConv(convId, { type: 'user_message', convId, text });
-        if (await routeHubExecutionTurn(convId, text, actorContextOf.get(ws))) return;
+        const chatActor = actorContextOf.get(ws);
+        if (chatActor) conversationActorId.set(convId, chatActor.actorId);
+        if (await routeHubExecutionTurn(convId, text, chatActor)) return;
         await startTurn(convId, text, choice, dispatch);
       } else if (type === 'write_decision') {
         const convId = String(msg.conversationId ?? '').trim();

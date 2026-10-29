@@ -53,6 +53,15 @@ test('分析工作台展示每个 Agent 的成本与调用次数', () => {
   assert.match(app, /fetch\('\/api\/usage\/summary'/);
 });
 
+test('按调用方视图使用台账的 callerId 字段并展示调用方名称', () => {
+  assert.match(app, /usageTableHtml\(byCallerUser, 'callerId'/);
+  assert.match(app, /usageTableHtml\(byCallerAgent, 'callerId'/);
+  assert.match(app, /function usageCallerLabel/);
+  assert.match(app, /USAGE_CALLER_LABELS/);
+  assert.match(app, /验收测试/);
+  assert.match(app, /我（M01 用户）/);
+});
+
 test('系统与 Agent 卡片可跳转到处理记录与分析成本', () => {
   assert.match(app, /function openLatestTraceForAgent/);
   assert.match(app, /function openUsageForAgent/);

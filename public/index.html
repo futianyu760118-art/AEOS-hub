@@ -166,7 +166,7 @@
         <section id="view-dashboard" class="view app-view">
           <div class="page-head">
             <div><span class="page-module">工作台</span><h1>管理者首页</h1><p id="dashboard-data-caption">AEOS V7.2 · 智能助手 第一阶段试点 · 正在同步经营数据</p></div>
-            <div class="page-actions"><button class="btn secondary nav-action" type="button" data-target="cases"><i data-lucide="clipboard-list"></i>进入经营闭环</button><button class="btn primary nav-action" type="button" data-target="chat"><i data-lucide="message-square-text"></i>进入智能分析</button></div>
+            <div class="page-actions"><button id="btn-daily-briefing" class="btn secondary" type="button"><i data-lucide="file-text"></i>今日风险简报</button><button class="btn secondary nav-action" type="button" data-target="cases"><i data-lucide="clipboard-list"></i>进入经营闭环</button><button class="btn primary nav-action" type="button" data-target="chat"><i data-lucide="message-square-text"></i>进入智能分析</button></div>
           </div>
 
           <section class="dashboard-layout-item dashboard-objective-module">
@@ -262,6 +262,7 @@
 
         <section id="view-chat" class="view app-view hidden">
           <div class="page-head compact-head"><div><span class="page-module">助手与待办</span><h1 id="chat-view-title">智能助手</h1><p id="chat-view-desc">跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批</p></div><div class="runtime-state connectivity-state">
+            <span id="data-freshness-chip" class="data-freshness-chip hidden" title="中台数据基准时间"><i data-lucide="database"></i><span id="data-freshness-label">数据基准</span></span>
             <button id="assistant-connectivity-chip" class="connectivity-chip" type="button" aria-expanded="false">
               <span class="live-dot" id="assistant-connectivity-dot"></span>
               <span id="assistant-connectivity-label">分析通道 · 检查中</span>
@@ -903,6 +904,14 @@
         <div id="daily-question-editor" class="modal-body daily-question-editor"></div>
         <div class="modal-foot"><span id="daily-question-form-status"></span><button id="daily-question-form-reload" class="btn secondary hidden" type="button"><i data-lucide="refresh-cw"></i>载入最新版本</button><button id="daily-question-form-cancel" class="btn secondary" type="button">取消</button><button id="daily-question-form-save" class="btn primary" type="submit"><i data-lucide="save"></i><span>保存问题池</span></button></div>
       </form>
+    </div>
+  </div>
+
+  <div id="daily-briefing-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="daily-briefing-title">
+    <div class="modal-panel">
+      <div class="modal-head"><div><span>经营简报</span><h2 id="daily-briefing-title">今日风险简报</h2><p id="daily-briefing-desc">按“需求日期 ≤ 今天（含今天到期与已逾期）”汇总红色齐套风险</p></div><button id="daily-briefing-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div class="modal-body"><pre id="daily-briefing-body" class="briefing-body">正在生成…</pre></div>
+      <div class="modal-foot"><span id="daily-briefing-status"></span><button id="daily-briefing-copy" class="btn secondary" type="button">复制</button><button id="daily-briefing-download" class="btn primary" type="button"><i data-lucide="download"></i>下载 Markdown</button></div>
     </div>
   </div>
 

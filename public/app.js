@@ -113,6 +113,10 @@ const els = {
   metricConversations: $('#metric-conversations'), toasts: $('#toasts'),
 
   dashboardDataCaption: $('#dashboard-data-caption'), metricCapabilities: $('#metric-capabilities'),
+  dataFreshnessChip: $('#data-freshness-chip'), dataFreshnessLabel: $('#data-freshness-label'),
+  btnDailyBriefing: $('#btn-daily-briefing'), dailyBriefingModal: $('#daily-briefing-modal'), dailyBriefingBody: $('#daily-briefing-body'),
+  dailyBriefingDesc: $('#daily-briefing-desc'), dailyBriefingStatus: $('#daily-briefing-status'), dailyBriefingClose: $('#daily-briefing-close'),
+  dailyBriefingCopy: $('#daily-briefing-copy'), dailyBriefingDownload: $('#daily-briefing-download'),
   metricCapabilitiesCaption: $('#metric-capabilities-caption'), metricHighRisks: $('#metric-high-risks'),
   metricHighRisksCaption: $('#metric-high-risks-caption'), metricAttention: $('#metric-attention'),
   metricAttentionCaption: $('#metric-attention-caption'), dashboardRiskCaption: $('#dashboard-risk-caption'),
@@ -988,15 +992,17 @@ function humanizeError(code, message) {
   return detail || '处理失败，请稍后重试';
 }
 
-function usageTableHtml(rows, key, emptyText) {
+function usageTableHtml(rows, key, emptyText, headLabel = '') {
   if (!rows.length) return `<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>${esc(emptyText)}</small></div>`;
-  const head = { agentId: 'Agent', systemId: '系统', callerAgentId: '调用方 Agent', callerUserId: '调用方用户' }[key] || key;
+  const head = headLabel || { agentId: 'Agent', systemId: '系统', callerId: '调用方' }[key] || key;
   const compact = businessMode;
   const body = rows.map((row) => {
     const raw = row[key];
-    const label = key === 'agentId' || key === 'callerAgentId'
-      ? usageAgentLabel(raw)
-      : key === 'systemId' ? usageSystemLabel(raw) : raw;
+    const label = key === 'callerId'
+      ? usageCallerLabel(raw)
+      : key === 'agentId' || key === 'callerAgentId'
+        ? usageAgentLabel(raw)
+        : key === 'systemId' ? usageSystemLabel(raw) : raw;
     const tokens = (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0);
     const queryOnly = (Number(row.events) || 0) > 0
       && Number(row.queryEvents) === Number(row.events)
@@ -1064,6 +1070,32 @@ function usageAgentLabel(agentId) {
 
 function usageSystemLabel(systemId) {
   return USAGE_SYSTEM_LABELS[systemId] || systemId;
+}
+
+/** 验证/验收脚本使用的调用方 ID；显式标注，避免被误读成生产调用方。 */
+const USAGE_CALLER_LABELS = {
+  'AG-SWEEP': '巡检 Agent（验收测试）',
+  'sweep-user': '巡检用户（验收测试）',
+  'AG-FULL': '全量验收 Agent（验收测试）',
+  'sweep': '全量验收用户（验收测试）',
+  'AG-VERIFY': '核验 Agent（验收测试）',
+  'verify-user': '核验用户（验收测试）',
+  'AG-ACCEPT-1': '验收 Agent 1（验收测试）',
+  'accept-user-1': '验收用户 1（验收测试）',
+  'AG-BASELINE': '基线 Agent（验收测试）',
+  'baseline-user': '基线用户（验收测试）',
+  'AG-DEMO-1': '演示 Agent（测试）',
+  '10086': '演示用户（测试）',
+};
+
+/** 调用方 ID 来自外部系统 caller；M01 用户与验收脚本给可读名称，未知 ID 保留原值。 */
+function usageCallerLabel(callerId) {
+  const raw = String(callerId || '').trim();
+  if (!raw) return '—';
+  if (authSession?.actorId && raw === authSession.actorId) return '我（M01 用户）';
+  if (USAGE_CALLER_LABELS[raw]) return USAGE_CALLER_LABELS[raw];
+  if (raw.startsWith('m01:user:')) return `M01 用户 · ${raw.slice(-8)}`;
+  return raw;
 }
 
 async function loadUsage() {
@@ -1194,7 +1226,7 @@ function renderUsage() {
   });
 
   if (usageTab === 'caller') {
-    root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>外部系统用户维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerUserId', '暂无调用方归属：调用尚未携带 caller')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>外部系统 Agent 维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerAgentId', '暂无调用方归属：调用尚未携带 caller')}</section>`;
+    root.innerHTML = `<p class="form-hint usage-caller-note">标注“验收测试/测试”的调用方来自接入验收脚本，不是生产调用；需要从成本中剔除请告知。</p><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>外部系统用户维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerId', '暂无调用方归属：调用尚未携带 caller', '调用方用户')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>外部系统 Agent 维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerId', '暂无调用方归属：调用尚未携带 caller', '调用方 Agent')}</section>`;
   } else {
     root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(filteredSystems, filteredAgents)}</section>`;
   }
@@ -1205,6 +1237,63 @@ function renderUsage() {
 // ---------- 分析通道连通性（只统计外部系统，不包含本地助手运行时） ----------
 let connectivitySummary = null;
 let connectivityRefreshTimer = null;
+
+const DATA_FRESHNESS_STALE_HOURS = 24;
+const DATA_FRESHNESS_LABELS = { order: '订单', shortage: '缺料', kitting: '齐套', quality: '质量', production: '生产' };
+
+function parseDataStamp(value) {
+  if (!value) return null;
+  // 中台历史接口的 data_as_of 可能是不带时区的北京时间，按本地时间解析。
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** 取各业务域 data_as_of 中最早的一条作为整体数据基准；超过 24 小时或置信度低即视为过期。 */
+function computeDataFreshness(snapshot) {
+  if (!snapshot) return null;
+  const entries = [];
+  for (const [name, domain] of Object.entries(snapshot.domains || {})) {
+    const ms = parseDataStamp(domain?.dataAsOf);
+    if (ms === null) continue;
+    entries.push({ name, label: DATA_FRESHNESS_LABELS[name] || name, ms, stamp: domain.dataAsOf });
+  }
+  if (!entries.length) return null;
+  entries.sort((left, right) => left.ms - right.ms);
+  const oldest = entries[0];
+  const ageHours = (Date.now() - oldest.ms) / 3_600_000;
+  const ageStale = ageHours >= DATA_FRESHNESS_STALE_HOURS;
+  const lowConfidence = snapshot.businessData?.confidence === 'low';
+  return {
+    entries,
+    oldest,
+    ageHours,
+    ageStale,
+    lowConfidence,
+    stale: ageStale || lowConfidence,
+    detail: entries.map((entry) => `${entry.label} ${formatBeijingDate(entry.stamp)}`).join(' · '),
+  };
+}
+
+function renderDataFreshness(snapshot) {
+  const chip = els.dataFreshnessChip;
+  const label = els.dataFreshnessLabel;
+  if (!chip || !label) return;
+  const freshness = computeDataFreshness(snapshot);
+  if (!freshness) {
+    chip.classList.add('hidden');
+    return;
+  }
+  chip.classList.remove('hidden');
+  const oldestDate = formatBeijingDate(freshness.oldest.stamp);
+  const days = Math.floor(freshness.ageHours / 24);
+  chip.title = `中台数据基准：${freshness.detail}`;
+  chip.classList.toggle('stale', freshness.stale);
+  label.textContent = freshness.ageStale
+    ? `${freshness.oldest.label}数据 ${oldestDate}${days >= 1 ? ` · 已过期 ${days} 天` : ' · 可能已过期'}`
+    : freshness.lowConfidence
+      ? `数据置信度低 · ${oldestDate}`
+      : `数据基准 ${oldestDate}`;
+}
 
 async function loadConnectivity() {
   try {
@@ -1219,6 +1308,9 @@ async function loadConnectivity() {
       if (label) label.textContent = '分析通道 · 状态未知';
     }
   }
+  // 数据基准提示复用看板快照；进入助手页时按需静默加载一次（服务端有缓存，不会额外打中台）。
+  if (!dashboardSnapshot) loadDashboard({ silent: true });
+  else renderDataFreshness(dashboardSnapshot);
 }
 
 function renderConnectivity() {
@@ -6605,6 +6697,7 @@ async function markAllInboxRead() {
 
 function renderDashboard(snapshot) {
   dashboardSnapshot = snapshot;
+  renderDataFreshness(snapshot);
   const metrics = snapshot.metrics || {};
   const risks = Array.isArray(snapshot.risks) ? snapshot.risks : [];
   const futureRisks = Array.isArray(snapshot.attentionRisks) ? snapshot.attentionRisks : risks;
@@ -6622,7 +6715,12 @@ function renderDashboard(snapshot) {
     .join(' · ');
   const refreshedAt = snapshot.refreshedAt ? formatHarborTime(snapshot.refreshedAt) : (snapshot.generatedAt ? formatHarborTime(snapshot.generatedAt) : '刚刚');
   const asOf = snapshot.dataAsOf ? formatHarborTime(snapshot.dataAsOf) : '数据基准未回传';
-  els.dashboardDataCaption.textContent = `AEOS V7.2 · 服务主动刷新 · 刷新 ${refreshedAt} · 中控数据基准 ${domainAsOf || '未回传'}${snapshot.businessData?.confidence !== 'high' ? ' · 数据置信度需关注' : ''}`;
+  const freshness = computeDataFreshness(snapshot);
+  const freshnessNote = freshness?.ageStale
+    ? ` · 数据已过期：${freshness.oldest.label} ${formatBeijingDate(freshness.oldest.stamp)}`
+    : '';
+  els.dashboardDataCaption.textContent = `AEOS V7.2 · 服务主动刷新 · 刷新 ${refreshedAt} · 中控数据基准 ${domainAsOf || '未回传'}${freshnessNote}${snapshot.businessData?.confidence !== 'high' ? ' · 数据置信度需关注' : ''}`;
+  els.dashboardDataCaption.classList.toggle('stale', Boolean(freshness?.ageStale));
   els.metricCapabilities.textContent = String(metrics.capabilityCount ?? 0);
   els.metricCapabilitiesCaption.textContent = `项 · ${metrics.mcpServerCount ?? 0} 个 MCP Server`;
   els.metricHighRisks.textContent = riskAssessment.available ? String(metrics.highRiskCount ?? 0) : '—';
@@ -6781,6 +6879,16 @@ function renderDashboard(snapshot) {
   renderAttention(snapshot);
 }
 
+function snapshotHasBusinessData(snapshot) {
+  if (!snapshot) return false;
+  return Boolean(snapshot.businessData?.available)
+    || (snapshot.risks || []).length > 0
+    || (snapshot.kittingRisks || []).length > 0
+    || (snapshot.qualityRisks || []).length > 0
+    || (snapshot.attentionRisks || []).length > 0
+    || Boolean(snapshot.productionAssessment?.available);
+}
+
 async function loadDashboard(options = {}) {
   if (dashboardLoading) return;
   dashboardLoading = true;
@@ -6789,6 +6897,10 @@ async function loadDashboard(options = {}) {
     const snapshot = await response.json();
     if (!response.ok) throw new Error(snapshot.error || `HTTP ${response.status}`);
     renderDashboard(snapshot);
+    // MCP 冷启动时首次快照可能为空：自动重试一次，避免用户只看到空看板。
+    if (!snapshotHasBusinessData(snapshot) && !options.retried) {
+      window.setTimeout(() => { void loadDashboard({ silent: true, force: true, retried: true }); }, 12_000);
+    }
   } catch (error) {
     els.dashboardDataCaption.textContent = `AEOS V7.2 · 经营数据同步失败：${error.message}`;
     els.attentionDataStatus.textContent = '同步失败';
@@ -6796,6 +6908,40 @@ async function loadDashboard(options = {}) {
     if (!options.silent) toast(`经营数据加载失败：${error.message}`, true);
   } finally {
     dashboardLoading = false;
+  }
+}
+
+// ---------- 今日风险简报 ----------
+let dailyBriefingMarkdown = '';
+let dailyBriefingWindowEnd = '';
+
+function closeDailyBriefing() {
+  els.dailyBriefingModal?.classList.add('hidden');
+}
+
+async function openDailyBriefing() {
+  if (!els.dailyBriefingModal) return;
+  els.dailyBriefingModal.classList.remove('hidden');
+  els.dailyBriefingBody.textContent = '正在生成…';
+  els.dailyBriefingStatus.textContent = '';
+  els.dailyBriefingStatus.style.color = '';
+  try {
+    const response = await fetch('/api/briefing/daily', { headers: { accept: 'application/json' } });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const brief = payload.brief || {};
+    dailyBriefingMarkdown = String(payload.markdown || '');
+    dailyBriefingWindowEnd = String(brief.windowEnd || '');
+    els.dailyBriefingBody.textContent = dailyBriefingMarkdown || '（简报为空）';
+    const stale = brief.stale === true;
+    els.dailyBriefingDesc.textContent = `数据口径：需求日期 ≤ ${brief.windowEnd || '今天'}（含今天到期与已逾期） · 快照 ${brief.dataAsOf || '未回传'}${stale ? '（已过期）' : ''} · 查询置信度 ${brief.confidence || '未知'}`;
+    if (stale) {
+      els.dailyBriefingStatus.textContent = '数据快照已过期，请以中台最新数据为准';
+      els.dailyBriefingStatus.style.color = 'var(--warning)';
+    }
+  } catch (error) {
+    dailyBriefingMarkdown = '';
+    els.dailyBriefingBody.textContent = `生成失败：${error.message}`;
   }
 }
 
@@ -8297,6 +8443,22 @@ els.harborModal.addEventListener('mousedown', (event) => { if (event.target === 
 els.headerAgent.addEventListener('click', () => showView('chat'));
 els.headerAttention.addEventListener('click', () => showView('attention'));
 els.btnAttentionRefresh.addEventListener('click', () => loadDashboard({ force: true }));
+els.btnDailyBriefing?.addEventListener('click', () => { void openDailyBriefing(); });
+els.dailyBriefingClose?.addEventListener('click', closeDailyBriefing);
+els.dailyBriefingModal?.addEventListener('mousedown', (event) => { if (event.target === els.dailyBriefingModal) closeDailyBriefing(); });
+els.dailyBriefingCopy?.addEventListener('click', async () => {
+  if (!dailyBriefingMarkdown) { toast('简报还没生成好', true); return; }
+  try {
+    await navigator.clipboard.writeText(dailyBriefingMarkdown);
+    toast('简报已复制');
+  } catch {
+    toast('复制失败，请手动选择文本', true);
+  }
+});
+els.dailyBriefingDownload?.addEventListener('click', () => {
+  if (!dailyBriefingMarkdown) { toast('简报还没生成好', true); return; }
+  downloadTextFile(dailyBriefingMarkdown, `AEOS今日风险简报-${dailyBriefingWindowEnd || localDateKey()}.md`);
+});
 els.attentionSearch?.addEventListener('input', () => {
   attentionFilter.query = els.attentionSearch.value;
   attentionResultsDismissed = false;

@@ -1,16 +1,72 @@
 // 窄范围编排：今日/当前风险最高的订单 → 查询智能体定位订单 → 推理智能体只读分析。
 // 只做同系统、只读、确定性排序；不猜测订单号，不使用模拟执行面。
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ExecutionAgentRecord, ExecutionPlaneRegistry, ExecutionRunRecord } from './execution-plane.ts';
 import type { EvidenceInput } from './evidence.ts';
+import type { CallerContext } from './caller-context.ts';
 
 const KITTING_RESULTS_PATH = '/external/material-kitting/results';
+const QUALITY_ISSUES_PATH = '/external/quality-issues/list';
 const DEFAULT_QUERY_TIMEOUT_MS = 15_000;
 const DEFAULT_REASONING_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
-/** 齐套结果单页上限 200；按需翻页，最多 5 页（1000 条红色风险）。 */
+/** 齐套/质量结果单页上限 200；按需翻页，最多 5 页。 */
 const KITTING_PAGE_SIZE = 200;
 const MAX_QUERY_PAGES = 5;
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+export const riskScoringPolicyFile = process.env.AEOS_RISK_SCORING_POLICY_FILE?.trim()
+  || join(root, 'config', 'risk-scoring.json');
+
+export interface RiskScoringWeights {
+  kittingAmount: number;
+  shortageItems: number;
+  qualityOpen: number;
+  urgency: number;
+}
+
+export const DEFAULT_RISK_SCORING_WEIGHTS: RiskScoringWeights = {
+  kittingAmount: 0.4,
+  shortageItems: 0.2,
+  qualityOpen: 0.2,
+  urgency: 0.2,
+};
+
+export interface RiskScoringPolicy {
+  weights: RiskScoringWeights;
+  /** 计入“未闭环质量异常”的状态（逗号分隔）。 */
+  qualityStatuses: string;
+}
+
+/** 读取权重配置；缺失或非法时回落默认值，并归一化到合计 1。 */
+export function loadRiskScoringPolicy(file = riskScoringPolicyFile): RiskScoringPolicy {
+  const fallback: RiskScoringPolicy = { weights: { ...DEFAULT_RISK_SCORING_WEIGHTS }, qualityStatuses: 'open,in_progress' };
+  try {
+    if (!existsSync(file)) return fallback;
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    const rawWeights = raw && typeof raw.weights === 'object' && raw.weights !== null ? raw.weights as Record<string, unknown> : {};
+    const weights: RiskScoringWeights = { ...DEFAULT_RISK_SCORING_WEIGHTS };
+    let sum = 0;
+    for (const key of Object.keys(weights) as Array<keyof RiskScoringWeights>) {
+      const value = rawWeights[key];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        weights[key] = value;
+      }
+      sum += weights[key];
+    }
+    if (sum <= 0) return fallback;
+    for (const key of Object.keys(weights) as Array<keyof RiskScoringWeights>) weights[key] = weights[key] / sum;
+    const statuses = typeof raw.qualityStatuses === 'string' && raw.qualityStatuses.trim()
+      ? raw.qualityStatuses.trim()
+      : fallback.qualityStatuses;
+    return { weights, qualityStatuses: statuses };
+  } catch {
+    return fallback;
+  }
+}
 
 type ExecutionPlaneLike = Pick<ExecutionPlaneRegistry, 'list' | 'dispatch' | 'getRun' | 'recall'>;
 
@@ -22,6 +78,23 @@ export interface HighestRiskOrder {
   promisedDate: string | null;
   businessObjectRef: string;
   raw: Record<string, unknown>;
+  /** 多域综合评分（齐套金额 / 缺料项 / 质量未闭环 / 交期紧急度）。 */
+  composite?: {
+    score: number;
+    kittingAmount: number | null;
+    shortageItems: number | null;
+    qualityOpen: number;
+    urgency: number;
+    overdueDays: number;
+  };
+}
+
+export interface HighestRiskQualityMeta {
+  runIds: string[];
+  dataAsOf: string | null;
+  confidence: string | null;
+  openIssues: number;
+  warning: string | null;
 }
 
 /** 本次“最高风险”查询的数据侧信息：窗口、快照时间、置信度、翻页覆盖范围。 */
@@ -47,6 +120,8 @@ export interface HighestRiskOrderResult {
   reasoningRunId: string;
   result: unknown;
   query?: HighestRiskQueryMeta;
+  /** 多域评分用到的质量异常数据；查询失败时为 warning，不影响主结论。 */
+  quality?: HighestRiskQualityMeta;
 }
 
 /** 北京时间的日期串（YYYY-MM-DD），用于“今天”口径，避免服务器时区/UTC 偏移算错。 */
@@ -161,11 +236,110 @@ export function rankOrdersFromResult(result: unknown): HighestRiskOrder[] {
   });
 }
 
+function daysBetween(date: string, end: string): number | null {
+  const startMs = Date.parse(`${date}T00:00:00Z`);
+  const endMs = Date.parse(`${end}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  return Math.round((endMs - startMs) / 86_400_000);
+}
+
+/** 交期紧急度：7 天内到期/逾期最高，越久远的逾期逐步降权，避免陈年订单霸榜。 */
+function urgencyFor(days: number): number {
+  if (days <= 7) return 1;
+  if (days <= 30) return 0.8;
+  if (days <= 90) return 0.6;
+  return 0.4;
+}
+
+/**
+ * 多域综合排序：齐套金额、缺料项数、质量未闭环数、交期紧急度加权。
+ * 只统计 required_date ≤ windowEnd 的齐套行；同一订单取行级最大值，避免多行重复放大。
+ */
+export function rankOrdersByCompositeScore(
+  result: unknown,
+  qualityByOrder: Map<string, number>,
+  windowEnd: string,
+  weights: RiskScoringWeights = DEFAULT_RISK_SCORING_WEIGHTS,
+): HighestRiskOrder[] {
+  const window = String(windowEnd || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(window)) return [];
+  const grouped = new Map<string, { orderNo: string; riskLevel: string; amount: number | null; shortage: number | null; date: string; row: Record<string, unknown> }>();
+  for (const row of rowsFromResult(result)) {
+    const date = textOf(row, ['required_date', 'requiredDate', 'due_date', 'demand_date']).slice(0, 10);
+    if (!date || date > window) continue;
+    const orderNo = textOf(row, ['demand_no', 'order_no', 'orderNo', 'order_id', 'orderId', 'sales_order_no']);
+    if (!orderNo) continue;
+    const amount = numberOf(row, ['affected_order_amount', 'order_amount', 'orderAmount', 'shortage_amount', 'amount']);
+    const shortage = numberOf(row, ['shortage_item_count', 'shortage_items']);
+    const riskLevel = textOf(row, ['risk_level', 'riskLevel', 'risk']);
+    if (riskLevel && riskRank(riskLevel) < 3) continue;
+    const existing = grouped.get(orderNo);
+    if (!existing) {
+      grouped.set(orderNo, { orderNo, riskLevel, amount, shortage, date, row });
+      continue;
+    }
+    if (!existing.riskLevel && riskLevel) existing.riskLevel = riskLevel;
+    if (amount !== null && (existing.amount === null || amount > existing.amount)) {
+      existing.amount = amount;
+      existing.row = row;
+    }
+    if (shortage !== null && (existing.shortage === null || shortage > existing.shortage)) existing.shortage = shortage;
+    if (date < existing.date) existing.date = date;
+  }
+  const entries = [...grouped.values()];
+  if (!entries.length) return [];
+  const maxAmount = Math.max(0, ...entries.map((entry) => entry.amount ?? 0));
+  const maxShortage = Math.max(0, ...entries.map((entry) => entry.shortage ?? 0));
+  const scored: HighestRiskOrder[] = entries.map((entry) => {
+    const days = daysBetween(entry.date, window) ?? 0;
+    const urgency = urgencyFor(days);
+    const amountScore = maxAmount > 0 ? (entry.amount ?? 0) / maxAmount : 0;
+    const shortageScore = maxShortage > 0 ? (entry.shortage ?? 0) / maxShortage : 0;
+    const qualityOpen = qualityByOrder.get(entry.orderNo) ?? 0;
+    const qualityScore = Math.min(qualityOpen, 5) / 5;
+    const rawScore = amountScore * weights.kittingAmount
+      + shortageScore * weights.shortageItems
+      + qualityScore * weights.qualityOpen
+      + urgency * weights.urgency;
+    return {
+      orderNo: entry.orderNo,
+      riskLevel: entry.riskLevel,
+      riskRank: riskRank(entry.riskLevel),
+      amount: entry.amount,
+      promisedDate: entry.date,
+      businessObjectRef: `business://order/${entry.orderNo}`,
+      raw: entry.row,
+      composite: {
+        score: Math.round(rawScore * 1000) / 10,
+        kittingAmount: entry.amount,
+        shortageItems: entry.shortage,
+        qualityOpen,
+        urgency,
+        overdueDays: Math.max(0, days),
+      },
+    };
+  });
+  return scored.sort((left, right) => {
+    const scoreDiff = (right.composite?.score ?? 0) - (left.composite?.score ?? 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    const amountDiff = (right.amount ?? -1) - (left.amount ?? -1);
+    if (amountDiff !== 0) return amountDiff;
+    const leftDate = left.promisedDate ? Date.parse(left.promisedDate) : Number.POSITIVE_INFINITY;
+    const rightDate = right.promisedDate ? Date.parse(right.promisedDate) : Number.POSITIVE_INFINITY;
+    if (leftDate !== rightDate) return leftDate - rightDate;
+    return left.orderNo.localeCompare(right.orderNo, 'zh-CN');
+  });
+}
+
 export function buildHighestRiskReasoningRequest(
   text: string,
   order: HighestRiskOrder,
   requestId: string,
-  meta?: Pick<HighestRiskQueryMeta, 'windowEnd' | 'dataAsOf' | 'stale' | 'confidence' | 'scanned' | 'total'>,
+  meta?: Pick<HighestRiskQueryMeta, 'windowEnd' | 'dataAsOf' | 'stale' | 'confidence' | 'scanned' | 'total'> & {
+    qualityOpen?: number;
+    compositeScore?: number;
+    weights?: RiskScoringWeights;
+  },
 ): Record<string, unknown> {
   const details = [
     `订单号：${order.orderNo}`,
@@ -181,7 +355,11 @@ export function buildHighestRiskReasoningRequest(
       meta.total !== null ? `本次扫描 ${meta.scanned}/${meta.total} 条红色风险` : `本次扫描 ${meta.scanned} 条红色风险`,
     ].filter(Boolean).join('；')
     : '';
-  const prompt = `${text}\n\n${freshness ? `${freshness}。\n` : ''}已从物料齐套红色风险中定位影响最大的订单：${details}。请仅基于该订单做只读交付风险分析，结论必须引用 evidence_refs；数据缺失或过期时明确说明数据置信度不足；不要仅凭“计算时间”判断数据是否最新，须以快照时间为准。`;
+  const weights = meta?.weights ?? DEFAULT_RISK_SCORING_WEIGHTS;
+  const scoring = meta && meta.compositeScore !== undefined
+    ? `综合风险分：${meta.compositeScore}（齐套金额 ${Math.round(weights.kittingAmount * 100)}% · 缺料 ${Math.round(weights.shortageItems * 100)}% · 质量 ${Math.round(weights.qualityOpen * 100)}% · 交期 ${Math.round(weights.urgency * 100)}%）；质量未闭环：${meta.qualityOpen ?? 0} 项。`
+    : '';
+  const prompt = `${text}\n\n${freshness ? `${freshness}。\n` : ''}已从物料齐套红色风险中定位影响最大的订单：${details}。${scoring ? `${scoring}\n` : ''}请仅基于该订单做只读交付风险分析，结论必须引用 evidence_refs；数据缺失或过期时明确说明数据置信度不足；不要仅凭“计算时间”判断数据是否最新，须以快照时间为准。`;
   return {
     prompt: prompt.slice(0, 2000),
     task_type: 'order_delivery_analysis',
@@ -236,7 +414,7 @@ export class ExecutionOrchestrator {
     this.clock = options.clock ?? (() => new Date());
   }
 
-  async highestRiskOrder(input: { reasoningAgentId: string; text: string; excludeOrderNos?: string[] }): Promise<HighestRiskOrderResult> {
+  async highestRiskOrder(input: { reasoningAgentId: string; text: string; excludeOrderNos?: string[]; caller?: CallerContext | null }): Promise<HighestRiskOrderResult> {
     const text = typeof input.text === 'string' ? input.text.trim() : '';
     const reasoningAgentId = typeof input.reasoningAgentId === 'string' ? input.reasoningAgentId.trim() : '';
     if (!text || text.length > 2000) throw new ExecutionOrchestrationError('INVALID_ARGUMENT', 'text 必填且不超过 2000 字符', { status: 400 });
@@ -280,7 +458,7 @@ export class ExecutionOrchestrator {
         const queryDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
           path: KITTING_RESULTS_PATH,
           params: { page, page_size: KITTING_PAGE_SIZE, risk_level: 'red', required_date_end: windowEnd },
-        }, { traceId: requestId, requestId });
+        }, { traceId: requestId, requestId, caller: input.caller ?? null });
         queryRunId = queryDispatch.runId;
         queryRunIds.push(queryRunId);
         const queryRun = await this.waitForRun(queryRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
@@ -309,8 +487,60 @@ export class ExecutionOrchestrator {
       }
       queryMeta = { ...queryMeta, runIds: [...queryRunIds], scanned: scannedRows.length };
 
+      // 多域评分：补充质量未闭环数；质量查询失败只降级评分，不阻断主分析。
+      const scoringPolicy = loadRiskScoringPolicy();
+      const qualityByOrder = new Map<string, number>();
+      const qualityMeta: HighestRiskQualityMeta = { runIds: [], dataAsOf: null, confidence: null, openIssues: 0, warning: null };
+      const hasCandidate = scannedRows.some((row) => {
+        const date = textOf(row, ['required_date', 'requiredDate', 'due_date', 'demand_date']).slice(0, 10);
+        return Boolean(date) && date <= windowEnd;
+      });
+      if (hasCandidate && supportsQueryPath(queryer, queryCapability, QUALITY_ISSUES_PATH)) {
+        try {
+          let qualityPage = 1;
+          let qualityLoaded = 0;
+          for (;;) {
+            await this.requireAgentIdle(queryer.agentId, requestId, queryRunId);
+            const qualityDispatch = this.plane.dispatch(queryer.agentId, queryCapability, {
+              path: QUALITY_ISSUES_PATH,
+              params: { page: qualityPage, page_size: KITTING_PAGE_SIZE, status: scoringPolicy.qualityStatuses },
+            }, { traceId: requestId, requestId, caller: input.caller ?? null });
+            const qualityRunId = qualityDispatch.runId;
+            qualityMeta.runIds.push(qualityRunId);
+            const qualityRun = await this.waitForRun(qualityRunId, this.queryTimeoutMs, 'QUERY_TIMEOUT');
+            if (qualityRun.state !== 'completed') throw new Error(qualityRun.error?.message || '质量异常查询未完成');
+            const pageRows = rowsFromResult(qualityRun.result);
+            qualityLoaded += pageRows.length;
+            if (qualityPage === 1) {
+              const root = record(qualityRun.result);
+              qualityMeta.dataAsOf = root ? textOf(root, ['data_as_of', 'dataAsOf']) || null : null;
+              qualityMeta.confidence = root ? textOf(root, ['data_confidence', 'dataConfidence']) || null : null;
+            }
+            for (const row of pageRows) {
+              const orderNo = textOf(row, ['order_no', 'demand_no', 'orderNo']);
+              if (!orderNo) continue;
+              const status = textOf(row, ['status', 'issue_status']).toLowerCase();
+              if (['closed', 'resolved', 'cancelled', 'canceled'].includes(status)) continue;
+              qualityByOrder.set(orderNo, (qualityByOrder.get(orderNo) ?? 0) + 1);
+              qualityMeta.openIssues += 1;
+            }
+            const root = record(qualityRun.result);
+            const total = root ? numberOf(root, ['total']) : null;
+            if (total === null || qualityLoaded >= total || pageRows.length < KITTING_PAGE_SIZE || qualityPage >= MAX_QUERY_PAGES) break;
+            qualityPage += 1;
+          }
+        } catch (error) {
+          qualityMeta.warning = `质量异常读取失败：${(error as Error).message}`;
+        }
+      } else if (hasCandidate && !supportsQueryPath(queryer, queryCapability, QUALITY_ISSUES_PATH)) {
+        qualityMeta.warning = '查询智能体未开放质量异常查询，综合分仅按齐套与交期计算';
+      }
+
       const excluded = new Set((input.excludeOrderNos ?? []).map((value) => value.trim()).filter(Boolean));
-      const [order] = rankOrdersFromResult({ items: scannedRows }).filter((candidate) => !excluded.has(candidate.orderNo));
+      const compositeRanked = rankOrdersByCompositeScore({ items: scannedRows }, qualityByOrder, windowEnd, scoringPolicy.weights)
+        .filter((candidate) => !excluded.has(candidate.orderNo));
+      const [order] = (compositeRanked.length ? compositeRanked : rankOrdersFromResult({ items: scannedRows }))
+        .filter((candidate) => !excluded.has(candidate.orderNo));
       if (!order) {
         throw new ExecutionOrchestrationError('NO_ELIGIBLE_ORDER', `需求日期 ≤ ${windowEnd} 的红色齐套风险中没有可用于分析的订单`, {
           status: 422, requestId, queryRunId,
@@ -318,7 +548,12 @@ export class ExecutionOrchestrator {
       }
 
       await this.requireAgentIdle(reasoner.agentId, requestId, queryRunId);
-      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId, queryMeta), { traceId: requestId, requestId });
+      const reasonDispatch = this.plane.dispatch(reasoner.agentId, reasonCapability, buildHighestRiskReasoningRequest(text, order, requestId, {
+        ...queryMeta,
+        qualityOpen: order.composite?.qualityOpen ?? 0,
+        compositeScore: order.composite?.score,
+        weights: scoringPolicy.weights,
+      }), { traceId: requestId, requestId, caller: input.caller ?? null });
       reasoningRunId = reasonDispatch.runId;
       const reasonRun = await this.waitForRun(reasoningRunId, this.reasoningTimeoutMs, 'REASONING_TIMEOUT');
       if (reasonRun.state !== 'completed') {
@@ -342,8 +577,12 @@ export class ExecutionOrchestrator {
         queryConfidence: queryMeta.confidence,
         scanned: queryMeta.scanned,
         total: queryMeta.total,
+        qualityRunIds: qualityMeta.runIds,
+        qualityOpenIssues: qualityMeta.openIssues,
+        qualityWarning: qualityMeta.warning,
+        compositeScore: order.composite?.score ?? null,
       });
-      return { requestId, order, queryRunId, reasoningRunId, result: reasonRun.result, query: queryMeta };
+      return { requestId, order, queryRunId, reasoningRunId, result: reasonRun.result, query: queryMeta, quality: qualityMeta };
     } catch (error) {
       const mapped = error instanceof ExecutionOrchestrationError
         ? error
@@ -364,9 +603,10 @@ export class ExecutionOrchestrator {
     capability: string;
     input: unknown;
     timeoutMs?: number;
+    caller?: CallerContext | null;
   }): Promise<unknown> {
     await this.requireAgentIdle(input.agentId, null);
-    const dispatch = this.plane.dispatch(input.agentId, input.capability, input.input);
+    const dispatch = this.plane.dispatch(input.agentId, input.capability, input.input, { caller: input.caller ?? null });
     try {
       const run = await this.waitForRun(dispatch.runId, input.timeoutMs ?? this.reasoningTimeoutMs, 'EXECUTION_TIMEOUT');
       if (run.state !== 'completed') {

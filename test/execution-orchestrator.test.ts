@@ -5,6 +5,7 @@ import {
   ExecutionOrchestrator,
   beijingDateString,
   buildHighestRiskReasoningRequest,
+  rankOrdersByCompositeScore,
   rankOrdersFromResult,
 } from '../src/execution-orchestrator.ts';
 import type { ExecutionAgentRecord, ExecutionRunRecord } from '../src/execution-plane.ts';
@@ -41,14 +42,36 @@ const GATEWAY_AGENT = agent({
   ],
 });
 
-function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean; busyForMs?: number; busyForever?: boolean; agentIdleTimeoutMs?: number; pagedOrders?: boolean } = {}) {
+function extendQueryPaths(agent: ExecutionAgentRecord, paths: string[]): ExecutionAgentRecord {
+  if (!paths.length) return agent;
+  return {
+    ...agent,
+    capabilities: agent.capabilities.map((capability) => {
+      const inputSchema = capability.inputSchema as Record<string, any> | undefined;
+      const enumValues = inputSchema?.properties?.path?.enum;
+      if (!Array.isArray(enumValues)) return capability;
+      return {
+        ...capability,
+        inputSchema: {
+          ...inputSchema,
+          properties: {
+            ...inputSchema!.properties,
+            path: { ...inputSchema!.properties.path, enum: [...enumValues, ...paths] },
+          },
+        },
+      };
+    }),
+  };
+}
+
+function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQueryAgent?: boolean; singleGateway?: boolean; emptyOrders?: boolean; busyForMs?: number; busyForever?: boolean; agentIdleTimeoutMs?: number; pagedOrders?: boolean; qualityRows?: Array<Record<string, unknown>>; queryPaths?: string[] } = {}) {
   const runs = new Map<string, ExecutionRunRecord>();
-  const dispatches: Array<{ agentId: string; capability: string; input: unknown }> = [];
+  const dispatches: Array<{ agentId: string; capability: string; input: unknown; options?: { caller?: { userId?: string | null } | null } }> = [];
   let sequence = 0;
   const audits: EvidenceInput[] = [];
   const agents = (options.singleGateway
     ? [GATEWAY_AGENT]
-    : options.noQueryAgent ? [REASON_AGENT] : [QUERY_AGENT, REASON_AGENT]).map((item) => ({ ...item }));
+    : options.noQueryAgent ? [REASON_AGENT] : [QUERY_AGENT, REASON_AGENT]).map((item) => extendQueryPaths({ ...item }, options.queryPaths ?? []));
   if (options.busyForever || options.busyForMs) {
     for (const item of agents) {
       item.currentRunId = 'busy-run';
@@ -65,13 +88,18 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
   }
   const plane = {
     list: () => ({ agents, runs: [] }),
-    dispatch: (agentId: string, capability: string, input: unknown) => {
-      dispatches.push({ agentId, capability, input });
+    dispatch: (agentId: string, capability: string, input: unknown, dispatchOptions?: { caller?: { userId?: string | null } | null }) => {
+      dispatches.push({ agentId, capability, input, options: dispatchOptions });
       const runId = `run-${++sequence}`;
       const run: ExecutionRunRecord = { runId, agentId, capability, input, state: 'dispatched', startedAt: NOW, endedAt: null };
       runs.set(runId, run);
       setTimeout(() => {
-        if (capability.startsWith('query')) {
+        const path = (input as { path?: unknown } | null)?.path;
+        if (capability.startsWith('query') && path === '/external/quality-issues/list') {
+          const qualityRows = options.qualityRows ?? [];
+          run.state = 'completed';
+          run.result = { items: qualityRows, total: qualityRows.length, data_as_of: '2026-10-29T09:00:00', data_confidence: 'high' };
+        } else if (capability.startsWith('query')) {
           if (options.failQuery) {
             run.state = 'failed';
             run.error = { code: 'UPSTREAM_UNAVAILABLE', message: '查询不可达' };
@@ -97,8 +125,8 @@ function planeFixture(options: { failQuery?: boolean; failReason?: boolean; noQu
             run.state = 'completed';
             run.result = options.emptyOrders ? { items: [] } : {
               items: [
-                { demand_no: 'HJ-GREEN', risk_level: 'green', affected_order_amount: 999 },
-                { demand_no: 'HJ-RED-SMALL', risk_level: 'red', affected_order_amount: 5 },
+                { demand_no: 'HJ-GREEN', risk_level: 'green', affected_order_amount: 999, required_date: '2026-10-29' },
+                { demand_no: 'HJ-RED-SMALL', risk_level: 'red', affected_order_amount: 90, required_date: '2026-10-20' },
                 { demand_no: 'HJ-RED-BIG', risk_level: 'red', affected_order_amount: 100, required_date: '2026-10-25' },
               ],
             };
@@ -147,6 +175,56 @@ test('按需求日期筛选并翻页汇总后再选最高风险', async () => {
   assert.equal(result.query?.stale, true);
   assert.equal(result.query?.confidence, 'low');
   assert.equal(result.reasoningRunId, 'run-3');
+});
+
+test('多域综合评分：质量未闭环可以改变排序', () => {
+  const rows = {
+    items: [
+      { demand_no: 'A', risk_level: 'red', affected_order_amount: 100, shortage_item_count: 10, required_date: '2026-10-29' },
+      { demand_no: 'B', risk_level: 'red', affected_order_amount: 90, shortage_item_count: 10, required_date: '2026-10-20' },
+    ],
+  };
+  const withoutQuality = rankOrdersByCompositeScore(rows, new Map(), '2026-10-29');
+  assert.equal(withoutQuality[0]?.orderNo, 'A');
+
+  const withQuality = rankOrdersByCompositeScore(rows, new Map([['B', 5]]), '2026-10-29');
+  assert.equal(withQuality[0]?.orderNo, 'B');
+  assert.equal(withQuality[0]?.composite?.qualityOpen, 5);
+  assert.ok((withQuality[0]?.composite?.score ?? 0) > (withQuality[1]?.composite?.score ?? 0));
+});
+
+test('最高风险编排会补充质量未闭环数并传给推理', async () => {
+  const qualityRows = Array.from({ length: 5 }, (_, index) => ({
+    issue_no: `QI-${index}`,
+    order_no: 'HJ-RED-SMALL',
+    status: 'open',
+  }));
+  const { orchestrator, dispatches } = planeFixture({
+    queryPaths: ['/external/quality-issues/list'],
+    qualityRows,
+  });
+  const result = await orchestrator.highestRiskOrder({ reasoningAgentId: 'reason-agent', text: '查询今天风险最高的订单' });
+
+  assert.equal(result.order.orderNo, 'HJ-RED-SMALL');
+  assert.equal(result.order.composite?.qualityOpen, 5);
+  assert.deepEqual(result.quality?.runIds, ['run-2']);
+  assert.equal(result.quality?.openIssues, 5);
+  assert.equal(result.reasoningRunId, 'run-3');
+  const qualityDispatch = dispatches.find((item) => (item.input as { path?: string } | null)?.path === '/external/quality-issues/list');
+  assert.equal((qualityDispatch?.input as { params?: Record<string, unknown> } | null)?.params?.status, 'open,in_progress');
+  const reasoningInput = dispatches[2]?.input as { prompt?: string } | undefined;
+  assert.match(String(reasoningInput?.prompt), /综合风险分/);
+});
+
+test('编排把调用方上下文透传给齐套、质量与推理派单', async () => {
+  const { orchestrator, dispatches } = planeFixture({ queryPaths: ['/external/quality-issues/list'] });
+  const caller = { systemId: 'aeos-hub', agentId: null, userId: 'm01:user:test', taskId: null, traceId: null };
+  await orchestrator.highestRiskOrder({ reasoningAgentId: 'reason-agent', text: '查询今天风险最高的订单', caller });
+
+  assert.equal(dispatches.length, 3);
+  for (const dispatch of dispatches) {
+    assert.equal(dispatch.options?.caller?.userId, 'm01:user:test');
+  }
 });
 
 test('订单排序：红色优先，同等级金额降序', () => {

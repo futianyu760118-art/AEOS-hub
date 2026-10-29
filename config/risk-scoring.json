@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "weights": {
+    "kittingAmount": 0.4,
+    "shortageItems": 0.2,
+    "qualityOpen": 0.2,
+    "urgency": 0.2
+  },
+  "qualityStatuses": "open,in_progress",
+  "note": "最高风险订单综合评分权重：合计按 1 归一；质量只统计未闭环状态；交期按逾期天数分档。"
+}

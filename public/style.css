@@ -586,6 +586,7 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .daily-question-modal-panel { width: min(860px, calc(100vw - 32px)); }
 .risk-detail-modal { width: min(720px, calc(100vw - 32px)); }
 .risk-detail-body { display: flex; flex-direction: column; gap: 12px; }
+.briefing-body { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12px; line-height: 1.65; color: var(--text-2); }
 .risk-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .risk-detail-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line-subtle); border-radius: 6px; background: #fbfbfc; padding: 8px 9px; }
 .risk-detail-field > span { color: var(--text-3); font-size: 9px; }
@@ -669,6 +670,11 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .runtime-state { display: flex; align-items: center; gap: 8px; padding-top: 13px; color: var(--success); font-size: 11px; }
 .connectivity-state { position: relative; padding-top: 10px; }
 .connectivity-chip { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; padding: 2px 0; }
+.data-freshness-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.data-freshness-chip svg { width: 12px; height: 12px; }
+.data-freshness-chip.stale { border-color: rgba(161, 92, 0, 0.35); background: rgba(161, 92, 0, 0.09); color: var(--warning); font-weight: 600; }
+.data-freshness-chip.hidden { display: none; }
+#dashboard-data-caption.stale { color: var(--warning); font-weight: 600; }
 .connectivity-chip:hover { color: var(--text-1); }
 .connectivity-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 260px; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(18, 18, 24, 0.12); }
 .connectivity-panel.hidden { display: none; }

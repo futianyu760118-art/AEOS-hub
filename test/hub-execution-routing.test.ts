@@ -62,6 +62,39 @@ test('格式化结果展示筛选口径、快照时间与查询置信度', () =>
   assert.match(answer, /run-q1、run-q2/);
 });
 
+test('格式化结果展示综合风险分与质量未闭环', () => {
+  const result: HighestRiskOrderResult = {
+    requestId: 'orch-3',
+    order: {
+      orderNo: 'HJ-3',
+      riskLevel: 'red',
+      riskRank: 3,
+      amount: 90,
+      promisedDate: '2026-10-20',
+      businessObjectRef: 'business://order/HJ-3',
+      raw: {},
+      composite: { score: 72.5, kittingAmount: 90, shortageItems: 10, qualityOpen: 5, urgency: 0.8, overdueDays: 9 },
+    },
+    queryRunId: 'run-q1',
+    reasoningRunId: 'run-r',
+    query: {
+      windowEnd: '2026-10-29',
+      runIds: ['run-q1'],
+      dataAsOf: '2026-10-29T08:00:00+08:00',
+      stale: false,
+      confidence: 'high',
+      total: 247,
+      scanned: 247,
+    },
+    quality: { runIds: ['run-q2'], dataAsOf: '2026-10-29T08:00:00', confidence: 'high', openIssues: 5, warning: null },
+    result: { summary: '风险较高。', conclusions: [], data_confidence: 'high' },
+  };
+  const answer = formatHighestRiskAnswer(result);
+  assert.match(answer, /综合风险分 72\.5/);
+  assert.match(answer, /本单质量未闭环 5 项/);
+  assert.match(answer, /质量未闭环 5 项/);
+});
+
 test('格式化结果包含订单、证据与两条 runId', () => {
   const result: HighestRiskOrderResult = {
     requestId: 'orch-1',
