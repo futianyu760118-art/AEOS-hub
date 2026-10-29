@@ -50,7 +50,10 @@ export function formatHighestRiskAnswer(result: HighestRiskOrderResult): string 
       if (refs.length) lines.push(`   依据：${refs.slice(0, 5).join('、')}`);
     });
   }
-  if (text(payload.data_confidence)) lines.push('', `数据置信度：${text(payload.data_confidence)}`);
+  const confidence = text(payload.data_confidence);
+  if (confidence) {
+    lines.push('', `数据置信度：${confidence}${confidence === 'low' ? '（部分数据可能不是最新，请以中台最新数据为准）' : ''}`);
+  }
   lines.push('', `请求：${result.requestId}；查询 run：${result.queryRunId}；推理 run：${result.reasoningRunId}。`);
   return lines.join('\n').slice(0, 12_000);
 }
