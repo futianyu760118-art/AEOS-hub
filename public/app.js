@@ -4470,6 +4470,44 @@ function evidenceSource(row) {
   return ['hub', 'AEOS Hub'];
 }
 
+const EVIDENCE_KIND_LABELS = {
+  app_event: '业务事件',
+  mcp_tool_call: '工具调用',
+  guard_decision: '审计决策',
+  notification: '通知',
+  authentication_audit: '登录审计',
+  turn_result: '运行结果',
+};
+const EVIDENCE_SUMMARY_LABELS = [
+  ['borrow order created', '借调单创建'],
+  ['borrow order dispatched', '借调单派单'],
+  ['borrow order completed', '借调单完成'],
+  ['borrow order cancelled', '借调单取消'],
+  ['borrow order rejected', '借调单拒绝'],
+  ['write request created', '写请求已创建'],
+  ['write request approved', '写请求已批准'],
+  ['write request rejected', '写请求已拒绝'],
+  ['write request completed', '写请求已完成'],
+  ['write request failed', '写请求失败'],
+  ['conclusion dispatch created', '结论分发已创建'],
+  ['conclusion dispatch completed', '结论分发已完成'],
+  ['conclusion dispatch approved', '结论分发已批准'],
+  ['conclusion dispatch rejected', '结论分发已拒绝'],
+  ['highest risk order orchestration completed', '最高风险订单编排完成'],
+  ['execution agent registration rejected', '执行面注册被拒'],
+  ['execution agent capabilities filtered', '执行面能力按授权过滤'],
+  ['agent control declared', '系统自助声明'],
+  ['conversation deleted', '会话已删除'],
+  ['model config updated', '模型配置已更新'],
+  ['conclusion dispatch policy updated', '分发策略已更新'],
+];
+
+function humanizeEvidenceSummary(summary) {
+  let text = String(summary || '');
+  for (const [en, zh] of EVIDENCE_SUMMARY_LABELS) text = text.split(en).join(zh);
+  return text;
+}
+
 function renderEvidenceRows() {
   const query = (els.evidenceSearch?.value || '').trim().toLowerCase();
   const source = els.evidenceSourceFilter?.value || 'all';
@@ -4497,11 +4535,13 @@ function renderEvidenceRows() {
       const kind = document.createElement('span');
       kind.className = 'k';
       const [sourceId, sourceLabel] = evidenceSource(row);
-      const kindLabel = row.kind === 'notification' ? (row.method || row.item_type || 'notification') : (row.kind || 'event');
-      kind.innerHTML = `<b class="evidence-source-badge evidence-source-${esc(sourceId)}">${esc(sourceLabel)}</b><span>${esc(kindLabel)}</span>`;
+      const kindLabel = row.kind === 'notification' ? (row.method || row.item_type || '通知') : (EVIDENCE_KIND_LABELS[row.kind] || row.kind || '事件');
+      kind.innerHTML = `<b class="evidence-source-badge evidence-source-${esc(sourceId)}">${esc(sourceLabel)}</b><span title="${esc(row.kind || '')}">${esc(kindLabel)}</span>`;
       const summary = document.createElement('span');
       summary.className = 's';
-      summary.textContent = row.summary || (row.payload ? JSON.stringify(row.payload).slice(0, 220) : '');
+      const summaryText = humanizeEvidenceSummary(row.summary || (row.payload ? JSON.stringify(row.payload).slice(0, 220) : ''));
+      summary.textContent = summaryText;
+      if (row.summary) summary.title = row.summary;
       node.append(time, kind, summary);
       els.evList.appendChild(node);
   }

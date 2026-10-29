@@ -300,7 +300,7 @@
 
         <section id="view-evidence" class="view app-view hidden">
           <div class="page-head"><div><span class="page-module">治理与审计</span><h1>证据与审计</h1><p>事实、推理、工具调用、审批与结果的可追溯事件流</p></div><div class="page-actions"><button id="btn-evidence-refresh" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
-          <div class="evidence-metrics"><div><span>累计证据</span><strong id="evidence-total">0</strong><small>JSONL 事件</small></div><div><span>今日新增</span><strong id="evidence-today">0</strong><small>2026-09-03</small></div><div><span>存储状态</span><strong class="success-text">可用</strong><small>本地试点 · 待接 EDP</small></div><div><span>审计链</span><strong>完整</strong><small>Turn / Tool / Guard</small></div></div>
+          <div class="evidence-metrics"><div><span>累计证据</span><strong id="evidence-total">0</strong><small>关键事件</small></div><div><span>今日新增</span><strong id="evidence-today">0</strong><small>2026-09-03</small></div><div><span>存储状态</span><strong class="success-text">可用</strong><small>本地试点 · 待接 EDP</small></div><div><span>审计链</span><strong>完整</strong><small>助手 / 工具 / 审批</small></div></div>
           <section class="surface evidence-surface"><div class="surface-head"><div><h2>最近事件</h2><p>按发生时间倒序显示最近 80 条；来源标记为后续数据中台对接预留。</p></div><span id="evidence-path" class="mono subtle"></span></div><div class="evidence-filters"><input id="evidence-search" type="search" placeholder="筛选摘要、类型或证据 ID" /><select id="evidence-source-filter"><option value="all">全部来源</option><option value="hub">AEOS Hub</option><option value="runtime">Codex Runtime</option><option value="mcp">MCP / 数据中台</option></select><span id="evidence-filter-count"></span></div><div class="evidence-head"><span>时间</span><span>类型 / 来源</span><span>摘要</span></div><div id="evidence-list" class="evidence-list"></div></section>
         </section>
 
@@ -924,6 +924,6 @@
 
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script type="module" src="/app.js?v=p0-business-v33-20261028"></script>
+  <script type="module" src="/app.js?v=p0-business-v34-20261028"></script>
 </body>
 </html>
