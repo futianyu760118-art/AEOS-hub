@@ -41,6 +41,8 @@ foreach ($name in @('M01_KEYCLOAK_HTTPS_PORT', 'M01_HUB_HTTPS_PORT')) {
 $env:NODE_EXTRA_CA_CERTS = $certificateFile
 $env:NODE_ENV = 'production'
 $env:AEOS_ENV = 'production'
+# MCP 子进程（Python）按 UTF-8 输出 stderr，否则 Codex 无法解码，错误会丢失。
+$env:PYTHONIOENCODING = 'utf-8'
 $env:AEOS_AUTH_MODE = 'm01'
 $env:AEOS_COOKIE_SECURE = '1'
 $env:HOST = '0.0.0.0'

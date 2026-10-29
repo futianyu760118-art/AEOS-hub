@@ -1742,7 +1742,8 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             readInventory: () => codexRuntime.listMcpServerStatus(),
             server: 'company-control',
             tools: dashboardTools,
-            attempts: 40,
+            // 每次清单 RPC 自身最多 20 秒；只重试 3 次，避免启动时无限等待。
+            attempts: 3,
           });
           registry = buildCapabilityRegistry(registeredServers, runtimeInventory, warnings[0]);
         } catch (error) {
