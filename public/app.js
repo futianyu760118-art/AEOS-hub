@@ -9,6 +9,7 @@ import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrd
 import { buildCapabilityParams, matchCapabilityTemplate, summarizeCapabilityResult } from './capability-template-intent.js?v=capability-template-intent-v2';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
 import { formatBeijingDate, formatBeijingDateTime, formatBeijingTime, isSameBeijingDay } from './time-format.js?v=beijing-time-v1-20261023';
+import { renderBriefingMarkdown } from './briefing-render.js?v=briefing-render-v1';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -116,7 +117,7 @@ const els = {
   dataFreshnessChip: $('#data-freshness-chip'), dataFreshnessLabel: $('#data-freshness-label'),
   btnDailyBriefing: $('#btn-daily-briefing'), dailyBriefingModal: $('#daily-briefing-modal'), dailyBriefingBody: $('#daily-briefing-body'),
   dailyBriefingDesc: $('#daily-briefing-desc'), dailyBriefingStatus: $('#daily-briefing-status'), dailyBriefingClose: $('#daily-briefing-close'),
-  dailyBriefingCopy: $('#daily-briefing-copy'), dailyBriefingDownload: $('#daily-briefing-download'),
+  dailyBriefingCopy: $('#daily-briefing-copy'), dailyBriefingDownload: $('#daily-briefing-download'), dailyBriefingDispatch: $('#daily-briefing-dispatch'),
   metricCapabilitiesCaption: $('#metric-capabilities-caption'), metricHighRisks: $('#metric-high-risks'),
   metricHighRisksCaption: $('#metric-high-risks-caption'), metricAttention: $('#metric-attention'),
   metricAttentionCaption: $('#metric-attention-caption'), dashboardRiskCaption: $('#dashboard-risk-caption'),
@@ -6932,9 +6933,9 @@ async function openDailyBriefing() {
     const brief = payload.brief || {};
     dailyBriefingMarkdown = String(payload.markdown || '');
     dailyBriefingWindowEnd = String(brief.windowEnd || '');
-    els.dailyBriefingBody.textContent = dailyBriefingMarkdown || '（简报为空）';
+    els.dailyBriefingBody.innerHTML = renderBriefingMarkdown(dailyBriefingMarkdown) || '（简报为空）';
     const stale = brief.stale === true;
-    els.dailyBriefingDesc.textContent = `数据口径：需求日期 ≤ ${brief.windowEnd || '今天'}（含今天到期与已逾期） · 快照 ${brief.dataAsOf || '未回传'}${stale ? '（已过期）' : ''} · 查询置信度 ${brief.confidence || '未知'}`;
+    els.dailyBriefingDesc.textContent = `数据口径：需求日期 = ${brief.windowEnd || '今天'}（仅统计今天到期） · 快照 ${brief.dataAsOf || '未回传'}${stale ? '（已过期）' : ''} · 查询置信度 ${brief.confidence || '未知'}`;
     if (stale) {
       els.dailyBriefingStatus.textContent = '数据快照已过期，请以中台最新数据为准';
       els.dailyBriefingStatus.style.color = 'var(--warning)';
@@ -6942,6 +6943,49 @@ async function openDailyBriefing() {
   } catch (error) {
     dailyBriefingMarkdown = '';
     els.dailyBriefingBody.textContent = `生成失败：${error.message}`;
+  }
+}
+
+// 把当日简报作为一次只读分析任务发给执行面 Agent，结论附在简报下方。
+async function dispatchDailyBriefingToAgent() {
+  const button = els.dailyBriefingDispatch;
+  if (!button || !dailyBriefingMarkdown) {
+    if (!dailyBriefingMarkdown) toast('简报还没生成好', true);
+    return;
+  }
+  button.disabled = true;
+  els.dailyBriefingStatus.textContent = '正在把影响最大的订单逐条发给 Agent，通常 1–2 分钟…';
+  els.dailyBriefingStatus.style.color = '';
+  try {
+    const response = await fetch('/api/briefing/daily/dispatch', {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const completed = Number(payload.counts?.completed || 0) > 0;
+    const dispatched = Number(payload.counts?.dispatched || 0) > 0;
+    const orderCount = Array.isArray(payload.orders) ? payload.orders.length : 0;
+    const text = String(payload.markdown || payload.message || '').trim();
+    els.dailyBriefingBody.querySelector('.briefing-agent-report')?.remove();
+    const section = document.createElement('section');
+    section.className = 'briefing-agent-report';
+    const title = document.createElement('strong');
+    title.textContent = completed ? 'Agent 结论' : dispatched ? '分发未取得结论' : '分发未执行';
+    const body = document.createElement('div');
+    body.textContent = text || '本次分发未产生可展示结论，请到「处理记录」查看。';
+    section.append(title, body);
+    els.dailyBriefingBody.appendChild(section);
+    els.dailyBriefingStatus.textContent = completed
+      ? (orderCount ? `已发送 ${orderCount} 个订单，结论见下方` : '已发送，结论见下方')
+      : dispatched ? '已发送，但未取得结论' : '未执行分发';
+    els.dailyBriefingStatus.style.color = completed ? '' : 'var(--warning)';
+    section.scrollIntoView({ block: 'nearest' });
+  } catch (error) {
+    els.dailyBriefingStatus.textContent = `发送失败：${error.message}`;
+    els.dailyBriefingStatus.style.color = 'var(--danger)';
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -8459,6 +8503,7 @@ els.dailyBriefingDownload?.addEventListener('click', () => {
   if (!dailyBriefingMarkdown) { toast('简报还没生成好', true); return; }
   downloadTextFile(dailyBriefingMarkdown, `AEOS今日风险简报-${dailyBriefingWindowEnd || localDateKey()}.md`);
 });
+els.dailyBriefingDispatch?.addEventListener('click', () => { void dispatchDailyBriefingToAgent(); });
 els.attentionSearch?.addEventListener('input', () => {
   attentionFilter.query = els.attentionSearch.value;
   attentionResultsDismissed = false;

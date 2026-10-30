@@ -909,9 +909,9 @@
 
   <div id="daily-briefing-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="daily-briefing-title">
     <div class="modal-panel">
-      <div class="modal-head"><div><span>经营简报</span><h2 id="daily-briefing-title">今日风险简报</h2><p id="daily-briefing-desc">按“需求日期 ≤ 今天（含今天到期与已逾期）”汇总红色齐套风险</p></div><button id="daily-briefing-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
-      <div class="modal-body"><pre id="daily-briefing-body" class="briefing-body">正在生成…</pre></div>
-      <div class="modal-foot"><span id="daily-briefing-status"></span><button id="daily-briefing-copy" class="btn secondary" type="button">复制</button><button id="daily-briefing-download" class="btn primary" type="button"><i data-lucide="download"></i>下载 Markdown</button></div>
+      <div class="modal-head"><div><span>经营简报</span><h2 id="daily-briefing-title">今日风险简报</h2><p id="daily-briefing-desc">按“需求日期 = 今天（仅统计今天到期）”汇总红色齐套风险</p></div><button id="daily-briefing-close" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div class="modal-body"><div id="daily-briefing-body" class="briefing-body briefing-render">正在生成…</div></div>
+      <div class="modal-foot"><span id="daily-briefing-status"></span><button id="daily-briefing-copy" class="btn secondary" type="button">复制</button><button id="daily-briefing-download" class="btn secondary" type="button"><i data-lucide="download"></i>下载 Markdown</button><button id="daily-briefing-dispatch" class="btn primary" type="button"><i data-lucide="bot-message-square"></i>发送给 Agent</button></div>
     </div>
   </div>
 

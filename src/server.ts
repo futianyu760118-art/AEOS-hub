@@ -81,7 +81,7 @@ import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, e
 import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
 import { beijingDateString, ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
-import { buildDailyBriefing, formatDailyBriefingMarkdown, type DailyBriefing } from './daily-briefing.ts';
+import { buildDailyBriefing, formatBriefingOrderPrompt, formatDailyBriefingMarkdown, selectBriefingDispatchOrders, type DailyBriefing } from './daily-briefing.ts';
 import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport, loadConclusionDispatchPolicy, saveConclusionDispatchPolicy } from './conclusion-dispatcher.ts';
 import { RecentAnalysisCache } from './recent-analysis-cache.ts';
 import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
@@ -1873,7 +1873,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
   }
 }
 
-// ---------- 每日风险简报：按“今天到期 + 已逾期”口径只读汇总齐套红色风险 ----------
+// ---------- 每日风险简报：按“需求日期 = 今天”口径只读汇总齐套红色风险 ----------
 const DAILY_BRIEFING_TTL_MS = 5 * 60_000;
 let dailyBriefingCache: { at: number; windowEnd: string; brief: DailyBriefing; markdown: string } | null = null;
 
@@ -1902,7 +1902,7 @@ async function loadDailyBriefing(force = false): Promise<{ at: number; windowEnd
       args: pageArgs,
       purpose: 'daily-briefing-kitting',
       runtimeInventory,
-    }), { risk_level: 'red', required_date_end: windowEnd }, 5, 200);
+    }), { risk_level: 'red', required_date_start: windowEnd, required_date_end: windowEnd }, 5, 200);
     const payload = payloadOf(response);
     if (payload.error) throw new Error(`中台齐套查询失败：${JSON.stringify(payload.error)}`);
     const rows = Array.isArray(payload.data) ? payload.data : [];
@@ -2891,6 +2891,68 @@ const server = createServer(async (req, res) => {
         brief: entry.brief,
         markdown: entry.markdown,
         cachedAt: new Date(entry.at).toISOString(),
+      });
+    } catch (error) {
+      sendJson(res, 503, { error: (error as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/api/briefing/daily/dispatch') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const roles = requestActorContext?.roles ?? [];
+    if (!requestActorContext || (!roles.includes('manager') && !roles.includes('supervisor'))) {
+      sendJson(res, 403, { error: '只有管理者可以把简报分发给 Agent' });
+      return;
+    }
+    try {
+      const policy = loadConclusionDispatchPolicy();
+      if (!policy.enabled) {
+        sendJson(res, 409, { error: '结论分发未启用：请在系统配置中开启自动分发后再发送' });
+        return;
+      }
+      const entry = await loadDailyBriefing();
+      if (!entry.brief.top.length) {
+        sendJson(res, 409, { error: `今日（${entry.windowEnd}）没有红色齐套风险，无需分发` });
+        return;
+      }
+      const caller = { systemId: 'aeos-hub', agentId: null, userId: requestActorContext.actorId, taskId: null, traceId: null };
+      // 执行面推理能力只分析具体对象，且会先按锚点去中台取证据：
+      // 因此按订单逐条派发，锚点用真实的 business://order/<订单号>。
+      const orderNos = selectBriefingDispatchOrders(entry.brief, 3);
+      if (!orderNos.length) {
+        sendJson(res, 409, { error: `今日（${entry.windowEnd}）没有可派发的订单` });
+        return;
+      }
+      const report = await conclusionDispatcher.dispatch(
+        orderNos.map((orderNo) => ({
+          domain: 'kitting' as const,
+          businessObjectRef: `business://order/${orderNo}`,
+          orderNo,
+          title: `今日风险简报 ${entry.windowEnd} · 订单 ${orderNo}`,
+          prompt: formatBriefingOrderPrompt(entry.brief, orderNo),
+        })),
+        { caller, force: true, traceId: `briefing-${entry.windowEnd}`, policy: { ...policy, maxItemsPerAnalysis: orderNos.length } },
+      );
+      const markdown = formatConclusionDispatchReport(report);
+      sendJson(res, 200, {
+        dispatchId: report.dispatchId,
+        status: report.status,
+        counts: report.counts,
+        orders: orderNos,
+        items: report.items.map((item) => ({
+          domain: item.domain,
+          businessObjectRef: item.businessObjectRef,
+          status: item.status,
+          reason: item.reason ?? null,
+          systemId: item.systemId ?? null,
+          agentId: item.agentId ?? null,
+          runId: item.runId ?? null,
+          summary: item.summary ?? null,
+        })),
+        markdown,
+        message: markdown || (report.status === 'disabled'
+          ? '结论分发未启用'
+          : report.items.map((item) => `${item.reason ?? item.status}${item.error?.message ? `：${item.error.message}` : ''}`).join('；') || '本次分发未产生可展示结论'),
       });
     } catch (error) {
       sendJson(res, 503, { error: (error as Error).message });

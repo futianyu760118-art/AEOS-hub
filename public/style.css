@@ -586,7 +586,23 @@ button.kitting-row:hover, button.quality-row:hover { background: rgba(18, 18, 24
 .daily-question-modal-panel { width: min(860px, calc(100vw - 32px)); }
 .risk-detail-modal { width: min(720px, calc(100vw - 32px)); }
 .risk-detail-body { display: flex; flex-direction: column; gap: 12px; }
-.briefing-body { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12px; line-height: 1.65; color: var(--text-2); }
+.briefing-body { margin: 0; word-break: break-word; font-family: inherit; font-size: 12px; line-height: 1.65; color: var(--text-2); }
+.briefing-render h3 { margin: 0 0 6px; color: var(--text); font-size: 14px; line-height: 1.4; }
+.briefing-render h4 { margin: 14px 0 6px; color: var(--text); font-size: 12px; line-height: 1.4; }
+.briefing-render p { margin: 4px 0; }
+.briefing-render ul { margin: 4px 0; padding-left: 18px; }
+.briefing-render li { margin: 2px 0; }
+.briefing-render hr { margin: 12px 0; border: 0; border-top: 1px solid var(--line-subtle); }
+.briefing-table-wrap { overflow-x: auto; border: 1px solid var(--line-subtle); border-radius: 6px; }
+.briefing-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.briefing-table th, .briefing-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-subtle); text-align: left; vertical-align: top; }
+.briefing-table th { background: #fbfbfc; color: var(--text-3); font-size: 10px; font-weight: 600; white-space: nowrap; }
+.briefing-table tbody tr:last-child td { border-bottom: 0; }
+.briefing-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.briefing-table td.evidence { max-width: 240px; color: var(--text-3); font-family: ui-monospace, Consolas, monospace; font-size: 10px; word-break: break-all; }
+.briefing-agent-report { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line-subtle); border-radius: 6px; background: #fbfbfc; }
+.briefing-agent-report strong { display: block; margin-bottom: 6px; color: var(--text); font-size: 12px; }
+.briefing-agent-report div { white-space: pre-wrap; color: var(--text-2); font-size: 11px; line-height: 1.6; }
 .risk-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .risk-detail-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line-subtle); border-radius: 6px; background: #fbfbfc; padding: 8px 9px; }
 .risk-detail-field > span { color: var(--text-3); font-size: 9px; }

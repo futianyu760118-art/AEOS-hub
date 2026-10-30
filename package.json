@@ -59,7 +59,7 @@
     "test:chat-ui": "node --test test/chat-prompt-chips.test.ts",
     "test:writes": "node --test test/write-request-service.test.ts test/write-request-ui.test.ts test/write-intent.test.ts",
     "test:policy-audit": "node --test test/execution-policy-audit.test.ts",
-    "test:briefing": "node --test test/daily-briefing.test.ts"
+    "test:briefing": "node --test test/daily-briefing.test.ts test/briefing-render.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
