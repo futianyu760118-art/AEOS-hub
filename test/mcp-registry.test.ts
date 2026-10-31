@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { listConfiguredMcpServers, loadMcpRegistry, renderMcpConfigBlock } from '../src/mcp-registry.ts';
+
+test('uses the checked-in registry as the MCP configuration source', () => {
+  const registry = loadMcpRegistry();
+  assert.deepEqual(listConfiguredMcpServers(registry), ['company-control']);
+  const config = renderMcpConfigBlock(registry);
+  assert.match(config, /由 mcp\/registry\.json 生成/);
+  assert.match(config, /\[mcp_servers\.company-control\]/);
+  assert.doesNotMatch(config, /\[mcp_servers\.demo-erp\]/);
+  assert.match(config, /enabled_tools = \["get_system_health"/);
+  assert.match(config, /cwd = ".+mcp-company-control"/);
+  assert.doesNotMatch(config, /mcp-company-control-v/i);
+  assert.match(config, /"orders_list"/);
+  assert.match(config, /"order_details_list"/);
+  assert.match(config, /"bom_tree"/);
+  assert.match(config, /"material_kitting_results_list"/);
+  assert.match(config, /"material_shortages_list"/);
+  assert.match(config, /"material_kitting_demands_list"/);
+  assert.match(config, /"inventory_availability_list"/);
+  assert.match(config, /"material_supplies_list"/);
+  assert.match(config, /"quality_issues_list"/);
+  assert.match(config, /"quality_trace"/);
+  assert.doesNotMatch(config, /\$\{PROJECT_ROOT\}/);
+  assert.doesNotMatch(config, /<python 解释器绝对路径>/);
+  const linuxConfig = renderMcpConfigBlock(registry, 'linux');
+  assert.match(linuxConfig, /\.venv\/bin\/python/);
+  assert.doesNotMatch(linuxConfig, /\.venv\/Scripts\/python\.exe/);
+});

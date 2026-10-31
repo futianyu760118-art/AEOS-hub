@@ -1,0 +1,6 @@
+# Dedicated MCP container environment, matching the working MCP 2.x runtime.
+# The backend FastAPI constraint in the legacy requirements does not apply here.
+mcp==2.2.0
+httpx==0.28.1
+python-dotenv==1.2.3
+starlette==1.6.0

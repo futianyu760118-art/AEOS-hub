@@ -1,0 +1,9 @@
+# 仅在 docker/seed-state.ps1 使用 -IncludeCodexHome 时合并。
+# .codex-home 可能含模型认证信息，默认不导入。
+services:
+  aeos-hub:
+    volumes:
+      - type: bind
+        source: ./.codex-home
+        target: /seed/codex-home
+        read_only: true

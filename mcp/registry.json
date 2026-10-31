@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "demo-erp",
+      "command": "node",
+      "args": ["${PROJECT_ROOT}/mcp/demo-erp.mjs"],
+      "metadataFile": "${PROJECT_ROOT}/mcp/demo-erp.server.json",
+      "enabled": false,
+      "required": false,
+      "startupTimeoutSec": 20,
+      "toolTimeoutSec": 60,
+      "tools": [
+        { "name": "list_order_risks", "readOnly": true },
+        { "name": "check_material_shortages", "readOnly": true },
+        { "name": "get_system_health", "readOnly": true }
+      ]
+    },
+    {
+      "id": "company-control",
+      "command": "${PROJECT_ROOT}/.venv/Scripts/python.exe",
+      "commandByPlatform": {
+        "linux": "${PROJECT_ROOT}/.venv/bin/python"
+      },
+      "args": ["-m", "mcp_server"],
+      "cwd": "${PROJECT_ROOT}/mcp-company-control",
+      "metadataFile": "${PROJECT_ROOT}/mcp-company-control/server.json",
+      "enabled": true,
+      "required": false,
+      "startupTimeoutSec": 20,
+      "toolTimeoutSec": 60,
+      "tools": [
+        { "name": "get_system_health", "readOnly": true },
+        { "name": "orders_list", "readOnly": true },
+        { "name": "order_details_list", "readOnly": true },
+        { "name": "bom_tree", "readOnly": true },
+        { "name": "detail_orders_list", "readOnly": true },
+        { "name": "catalog_metrics_list", "readOnly": true },
+        { "name": "metric_query", "readOnly": true },
+        { "name": "master_material_search", "readOnly": true },
+        { "name": "master_supplier_get", "readOnly": true },
+        { "name": "material_kitting_results_list", "readOnly": true },
+        { "name": "material_shortages_list", "readOnly": true },
+        { "name": "material_kitting_demands_list", "readOnly": true },
+        { "name": "inventory_availability_list", "readOnly": true },
+        { "name": "material_supplies_list", "readOnly": true },
+        { "name": "quality_issues_list", "readOnly": true },
+        { "name": "quality_trace", "readOnly": true },
+        { "name": "production_work_orders_list", "readOnly": true },
+        { "name": "production_operations_list", "readOnly": true },
+        { "name": "production_order_links_list", "readOnly": true },
+        { "name": "production_reports_list", "readOnly": true },
+        { "name": "production_capacity_list", "readOnly": true }
+      ]
+    }
+  ]
+}
