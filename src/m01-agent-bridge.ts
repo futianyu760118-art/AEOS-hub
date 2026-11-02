@@ -8,6 +8,7 @@ export interface M01AgentBridgeConfig {
   secret: string;
   tenantId: string;
   ownerPersonId: string;
+  allowInsecureHttp?: boolean;
   timeoutMs?: number;
 }
 
@@ -35,8 +36,9 @@ export interface M01AgentRegistrationResult {
   idempotent?: boolean;
 }
 
-export function isM01AgentDispatchable(agent: { m01Registration?: { state?: string } }): boolean {
-  return agent.m01Registration?.state === 'active';
+export function isM01AgentDispatchable(agent: { m01Registration?: { state?: string; effectiveScopes?: unknown } }): boolean {
+  return agent.m01Registration?.state === 'active'
+    && uniqueScopes(agent.m01Registration.effectiveScopes).includes('task:execute');
 }
 
 type BridgeFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -67,11 +69,16 @@ export function loadM01AgentBridgeConfig(env: NodeJS.ProcessEnv = process.env): 
   const secret = clean(env.M01_AGENT_REGISTRATION_SECRET || env.M13_WEBHOOK_SECRET);
   const tenantId = clean(env.M01_AGENT_TENANT_ID || 'TENANT_A');
   const ownerPersonId = clean(env.M01_AGENT_OWNER_PERSON_ID || 'P_OWNER');
+  const allowInsecureHttp = env.M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP === 'true';
   if (!url || !secret || !tenantId || !ownerPersonId) {
     return { configured: false, config: null, reason: 'M01 Agent 注册未配置完整' };
   }
   try {
-    new URL(url);
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' && !allowInsecureHttp) {
+      return { configured: false, config: null, reason: 'M01 Agent 注册必须使用 HTTPS；仅本地 DEMO 可显式允许 HTTP' };
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported protocol');
   } catch {
     return { configured: false, config: null, reason: 'M01_AGENT_REGISTRATION_URL 无效' };
   }
@@ -82,13 +89,14 @@ export function loadM01AgentBridgeConfig(env: NodeJS.ProcessEnv = process.env): 
       secret,
       tenantId,
       ownerPersonId,
+      allowInsecureHttp,
       timeoutMs: Math.max(1000, Math.min(Number(env.M01_AGENT_REGISTRATION_TIMEOUT_MS || 8000), 30_000)),
     },
   };
 }
 
 export function stableM01RegistrationEventId(tenantId: string, agentId: string, type: string): string {
-  const digest = createHash('sha256').update(`${tenantId}|${type}|${agentId}`).digest('hex');
+  const digest = createHash('sha256').update(JSON.stringify([tenantId, type, agentId])).digest('hex');
   return `hub-m01-${digest}`;
 }
 
@@ -103,6 +111,14 @@ function resultFor(
   extra: Partial<Pick<M01AgentRegistrationResult, 'idempotent'>> = {},
 ): M01AgentRegistrationResult {
   return { state, eventId, agentId, requestedScopes, effectiveScopes, clampedScopes, reason, ...extra };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function transientStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
 export async function registerAgentWithM01(
@@ -148,19 +164,41 @@ export async function registerAgentWithM01(
       payload = {};
     }
     if (!response.ok) {
-      return resultFor('rejected', agentId, eventId, requestedScopes, [], [], clean(payload.error) || `M01 返回 HTTP ${response.status}`);
+      const reason = clean(payload.error) || `M01 返回 HTTP ${response.status}`;
+      return resultFor(transientStatus(response.status) ? 'pending' : 'rejected', agentId, eventId, requestedScopes, [], [], reason);
     }
-    const m01Agent = payload.agent && typeof payload.agent === 'object' ? payload.agent as Record<string, unknown> : {};
+    if (payload.ok !== true) {
+      return resultFor('rejected', agentId, eventId, requestedScopes, [], [], 'M01 返回无效成功响应');
+    }
+    if (payload.event_id !== undefined && clean(payload.event_id) !== eventId) {
+      return resultFor('rejected', agentId, eventId, requestedScopes, [], [], 'M01 返回的 event_id 不匹配');
+    }
+    const m01Agent = recordValue(payload.agent);
+    if (!m01Agent) {
+      return resultFor(payload.idempotent === true ? 'pending' : 'rejected', agentId, eventId, requestedScopes, [], [], 'M01 响应缺少 Agent 授权详情，可重试', {
+        idempotent: payload.idempotent === true,
+      });
+    }
+    if (clean(m01Agent.agent_id) !== agentId) {
+      return resultFor('rejected', agentId, eventId, requestedScopes, [], [], 'M01 返回的 Agent 标识不匹配', {
+        idempotent: payload.idempotent === true,
+      });
+    }
+    const tenantId = clean(m01Agent.tenant_id);
+    if (tenantId && tenantId !== config.tenantId) {
+      return resultFor('rejected', agentId, eventId, requestedScopes, [], [], 'M01 返回的租户不匹配', {
+        idempotent: payload.idempotent === true,
+      });
+    }
+    const agentStatus = clean(m01Agent.status);
+    if (agentStatus !== 'active') {
+      return resultFor(agentStatus === 'revoked' ? 'revoked' : 'rejected', agentId, eventId, requestedScopes, [], [], `M01 Agent 状态为 ${agentStatus || '未知'}`, {
+        idempotent: payload.idempotent === true,
+      });
+    }
     const responseScopes = uniqueScopes(m01Agent.scopes);
-    const effectiveScopes = responseScopes.length
-      ? responseScopes
-      : payload.idempotent === true
-        ? uniqueScopes(agent.m01Registration?.effectiveScopes).length
-          ? uniqueScopes(agent.m01Registration?.effectiveScopes)
-          : requestedScopes
-        : [];
     const clampedScopes = uniqueScopes(payload.clamped_scopes);
-    return resultFor('active', agentId, eventId, requestedScopes, effectiveScopes, clampedScopes, null, {
+    return resultFor('active', agentId, eventId, requestedScopes, responseScopes, clampedScopes, null, {
       idempotent: payload.idempotent === true,
     });
   } catch (error) {

@@ -128,11 +128,14 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 在 HUB 的部署环境中配置以下变量（密钥只放在未提交的 `.env`）：
 
 ```dotenv
-M01_AGENT_REGISTRATION_URL=http://host.docker.internal:3101/integrations/m13
+M01_AGENT_REGISTRATION_URL=https://m01.internal.example/integrations/m13
 M01_AGENT_REGISTRATION_SECRET=<与 M01 的 M13_WEBHOOK_SECRET 相同>
 M01_AGENT_TENANT_ID=TENANT_A
 M01_AGENT_OWNER_PERSON_ID=P_OWNER
+M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP=false
 ```
+
+本地 M01 DEMO 若只提供 HTTP，必须显式设置 `M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP=true`；生产环境禁止使用 HTTP，必须配置 HTTPS。
 
 启动 HUB 后，进入“AI 港湾 → 智能体目录”，对 `AEOS 中枢 Agent` 点击“接入 M01”。新建智能体会自动执行同样的注册；网络错误或 M01 拒绝时会保留记录但显示“同步中/已拒绝”，可点击“重试 M01”。
 

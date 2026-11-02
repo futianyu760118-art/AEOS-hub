@@ -66,7 +66,7 @@ test('retrying registration keeps the same event id', async (t) => {
   let calls = 0;
   const transport = async () => {
     calls += 1;
-    return new Response(JSON.stringify({ ok: true, idempotent: calls > 1, agent: { agent_id: agent.id, scopes: agent.skills }, clamped_scopes: [] }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, idempotent: calls > 1, agent: { agent_id: agent.id, tenant_id: config.tenantId, status: 'active', scopes: agent.skills }, clamped_scopes: [] }), { status: 200 });
   };
   const first = await registerAgentWithM01(agent, config, transport);
   const second = await registerAgentWithM01(agent, config, transport);

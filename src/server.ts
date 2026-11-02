@@ -148,7 +148,7 @@ function registrationUpdate(result: M01AgentRegistrationResult, now = new Date()
     effectiveScopes: result.effectiveScopes,
     clampedScopes: result.clampedScopes,
     lastAttemptAt: result.state === 'not_configured' ? null : now,
-    lastSuccessAt: result.state === 'active' ? now : undefined,
+    lastSuccessAt: result.state === 'active' ? now : null,
     reason: result.reason,
   };
 }
@@ -186,7 +186,7 @@ const actorOf = new Map<WebSocket, string>(); // ws -> 服务端生成的审计 
 const pendingGuard = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 const pendingApprovals = new Map<string, RuntimeApprovalRequest>();
 const allSockets = new Set<WebSocket>();
-type AgentDispatchContext = { agentId: string; orderNo: string; evidenceRef: string; taskType: 'order' | 'kitting' | 'quality' | 'production' };
+type AgentDispatchContext = { agentId: string; harborAgentId: string; orderNo: string; evidenceRef: string; taskType: 'order' | 'kitting' | 'quality' | 'production' };
 type AgentRunCapture = AgentDispatchContext & { text: string; persisted: boolean };
 const agentRunCaptures = new Map<string, AgentRunCapture>();
 // Agent message deltas are transient; retain only a bounded final transcript
@@ -841,10 +841,18 @@ async function startTurnUnsafe(convId: string, text: string, choice?: { provider
 
 /** Serialize the complete setup/start lifecycle for one conversation. */
 async function startTurn(convId: string, text: string, choice?: { provider?: string; model?: string }, dispatch?: AgentDispatchContext): Promise<void> {
-  const executionAgentId = dispatch?.agentId || 'agent-aeos-hub';
+  const conversation = getConv(convId);
+  const squadMember = conversation?.scope === 'agent' && conversation.agentId
+    ? loadAgentSquad().members.find((item) => item.id === conversation.agentId)
+    : undefined;
+  const executionAgentId = dispatch?.harborAgentId
+    || dispatch?.agentId
+    || squadMember?.harborAgentId
+    || (conversation?.scope === 'agent' ? conversation.agentId : undefined)
+    || 'agent-aeos-hub';
   const executionAgent = loadHarbor().agents.find((item) => item.id === executionAgentId);
-  if (executionAgent && !isM01AgentDispatchable(executionAgent)) {
-    throw new Error(`Agent ${executionAgent.name} 尚未完成 M01 注册，当前不可执行`);
+  if (!executionAgent || !isM01AgentDispatchable(executionAgent)) {
+    throw new Error(`Agent ${executionAgent?.name || executionAgentId} 尚未完成 M01 注册或缺少 task:execute 权限，当前不可执行`);
   }
   if (turnStartLocks.has(convId)) {
     throw new Error('该对话正在启动中，请稍候');
@@ -1841,7 +1849,7 @@ wss.on('connection', (ws, request) => {
             send(ws, { type: 'error', convId, message });
             return;
           }
-          dispatch = { agentId: member.id, orderNo, evidenceRef, taskType };
+          dispatch = { agentId: member.id, harborAgentId: harborAgent.id, orderNo, evidenceRef, taskType };
           // A specialist dispatch is never a central conversation. Persist its
           // ownership defensively even if an older client created it as hub.
           const dispatchedConversation = getConv(convId);

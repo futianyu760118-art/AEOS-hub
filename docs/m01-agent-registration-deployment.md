@@ -14,6 +14,7 @@
 - M01 对外端口：`3101`
 - HUB → M01 注册路径：`/integrations/m13`
 - 租户：`TENANT_A`
+- 当前为本地 M01 DEMO，HTTP 注册仅通过显式 `M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP=true` 开启；生产必须改为 HTTPS。
 - 中枢 Agent：`agent-aeos-hub`
 
 ## 执行命令
@@ -23,6 +24,7 @@
 ```text
 docker compose -p aeos-hub -f docker-compose.yml build aeos-hub aeos-init
 docker compose -p aeos-hub -f docker-compose.yml up -d --no-build
+docker exec aeos-m01-kernel node --input-type=module -e "...调用 /kernel/v1/master/register，使配置的 Owner 处于 active..."
 docker exec AEOS npm run register:m01-hub-agent
 ```
 
@@ -50,7 +52,7 @@ cd ../Kernel-M01/demo
 npm test
 ```
 
-结果：HUB 定向测试、类型检查、HUB 全量测试和 M01 DEMO 测试均通过；M01 DEMO 集成测试为 13/13 通过。
+结果：HUB 定向测试、类型检查、HUB 全量测试和 M01 DEMO 测试均通过；M01 DEMO 集成测试为 14/14 通过。
 
 ## 运行边界
 
