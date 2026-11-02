@@ -2993,6 +2993,17 @@ function harborStatus(kind, value) {
   return maps[kind]?.[value] || [String(value || '未知'), 'neutral'];
 }
 
+function m01RegistrationStatus(value) {
+  const maps = {
+    not_configured: ['未接入 M01', 'neutral'],
+    pending: ['同步中', 'warn'],
+    active: ['M01 已接入', 'ok'],
+    rejected: ['M01 已拒绝', 'danger'],
+    revoked: ['M01 已撤销', 'danger'],
+  };
+  return maps[value] || ['M01 未知', 'neutral'];
+}
+
 function statusPill(kind, value) {
   const [label, tone] = harborStatus(kind, value);
   return `<b class="status-pill ${tone}">${esc(label)}</b>`;
@@ -3044,6 +3055,9 @@ function renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, 
   const hierarchyLabels = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
   const tier = hierarchy.tier || `${agent.hierarchyLevel || 'L2'} · ${hierarchyLabels[agent.hierarchyLevel] || '专项执行'}`;
   const parent = hierarchy.parent || (agent.parentAgentId ? `上级：${(harbor.agents || []).find((item) => item.id === agent.parentAgentId)?.name || '未找到'}` : (linkedMember ? '已关联业务小队' : '待关联业务小队'));
+  const m01 = agent.m01Registration || { state: 'not_configured', reason: '等待接入 M01' };
+  const [m01Label, m01Tone] = m01RegistrationStatus(m01.state);
+  const m01Action = m01.state === 'active' ? '' : `<button class="btn secondary compact harbor-m01-register" type="button" data-harbor-m01-register-id="${esc(agent.id)}">${m01.state === 'not_configured' ? '接入 M01' : '重试 M01'}</button>`;
   return `<div class="harbor-row">
     <div class="harbor-identity"><span class="harbor-avatar"><i data-lucide="bot"></i></span><span class="harbor-primary"><strong>${esc(agent.name)}</strong><small><b class="harbor-tier">${esc(tier)}</b>${esc(parent)} · ${esc(agent.role || agent.description || '未定义角色')}</small></span></div>
     <span><b class="status-pill info">${esc(agent.autonomyLevel)} ${esc(autonomyLabels[agent.autonomyLevel] || '')}</b></span>
@@ -3051,7 +3065,7 @@ function renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, 
     <span>${harborTags(agent.skills, '尚未配置 Skill')}</span>
     <span>${esc(accessLabels[agent.access] || agent.access)}</span>
     <span class="harbor-cell harbor-agent-recent"><strong>${esc(recent.title)}</strong><small title="${esc(recent.detail)}">${esc(recent.detail)}</small></span>
-    <span class="harbor-agent-actions">${statusPill('agent', agent.status)}${linkedMember
+    <span class="harbor-agent-actions">${statusPill('agent', agent.status)}<small class="harbor-m01-state"><b class="status-pill ${m01Tone}">${esc(m01Label)}</b>${m01.reason ? `<span title="${esc(m01.reason)}">${esc(m01.reason)}</span>` : ''}</small>${m01Action}${linkedMember
       ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
       : `<button class="btn secondary compact harbor-add-to-squad" type="button" data-harbor-agent-id="${esc(agent.id)}">加入小队</button>`}<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button></span>
   </div>`;
@@ -3905,7 +3919,11 @@ async function submitHarborForm(event) {
     closeHarborModal();
     await loadHarbor({ silent: true });
     showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects', model: 'models' }[completedType]);
-    toast(labels[completedType]);
+    if (completedType === 'agent') {
+      toast(data.registration?.state === 'active' ? '智能体已创建并接入 M01' : '智能体已创建，等待 M01 接入');
+    } else {
+      toast(labels[completedType]);
+    }
   } catch (error) {
     els.harborFormStatus.textContent = error.message;
     els.harborFormSubmit.disabled = false;
@@ -3975,6 +3993,29 @@ async function deleteHarborAgent(agentId) {
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   await loadHarbor({ silent: true });
   toast(`已删除智能体“${agent.name}”`);
+}
+
+async function registerHarborAgentWithM01(agentId, button) {
+  const agent = (harbor.agents || []).find((item) => item.id === agentId);
+  if (!agent || button?.disabled) return;
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`/api/harbor/agents/${encodeURIComponent(agentId)}/m01/register`, {
+      method: 'POST', headers: { accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (data.item) {
+      const index = (harbor.agents || []).findIndex((item) => item.id === agentId);
+      if (index >= 0) harbor.agents[index] = data.item;
+      renderHarbor();
+    }
+    if (!response.ok) throw new Error(data.registration?.reason || data.error || `HTTP ${response.status}`);
+    toast(`智能体“${agent.name}”已接入 M01`);
+  } catch (error) {
+    toast(`接入 M01 失败：${error.message}`, true);
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+  }
 }
 
 function appendLocalUser(text) {
@@ -4334,6 +4375,11 @@ els.harborAgentList.addEventListener('click', async (event) => {
   const conversationButton = event.target.closest('[data-harbor-open-conversation]');
   if (conversationButton) {
     openHarborAgentConversationSpace(conversationButton.dataset.harborOpenConversation);
+    return;
+  }
+  const m01RegisterButton = event.target.closest('[data-harbor-m01-register-id]');
+  if (m01RegisterButton) {
+    await registerHarborAgentWithM01(m01RegisterButton.dataset.harborM01RegisterId, m01RegisterButton);
     return;
   }
   const deleteButton = event.target.closest('[data-harbor-delete-agent-id]');

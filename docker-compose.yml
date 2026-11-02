@@ -49,6 +49,10 @@ services:
       PORT: 8787
       AEOS_LOGIN_PASSWORD: ${AEOS_LOGIN_PASSWORD:?请先在 .env 设置 AEOS_LOGIN_PASSWORD}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      M01_AGENT_REGISTRATION_URL: ${M01_AGENT_REGISTRATION_URL:-http://host.docker.internal:3101/integrations/m13}
+      M01_AGENT_REGISTRATION_SECRET: ${M01_AGENT_REGISTRATION_SECRET:-}
+      M01_AGENT_TENANT_ID: ${M01_AGENT_TENANT_ID:-TENANT_A}
+      M01_AGENT_OWNER_PERSON_ID: ${M01_AGENT_OWNER_PERSON_ID:-P_OWNER}
     volumes:
       # Runtime state only. Neither model credentials nor data are baked into the image.
       - aeos-data:/app/data

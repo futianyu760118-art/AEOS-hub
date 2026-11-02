@@ -43,6 +43,7 @@ AEOS Hub 是 [AEOS（Autonomous Enterprise Operating System）](../../) 的第�
 - **会话管理**：新建 / 切换 / **归档**（可恢复）/ **删除**（同步清理 codex 线程），列表按 Codex 风格排版，悬停浮现操作
 - **Evidence 证据链**：每个 turn 的完整 item 流（消息、推理、工具调用、审批决策、结果）结构化落库，页面内可查看最近条目
 - **AI 港湾**：Agent / Runtime / Project 三类资源的登记与绑定，Runtime 健康验证走真实探针（`POST /api/harbor/runtimes/:id/verify`），不伪装成已连通
+- **M01 Agent 治理**：AI 港湾 Agent 创建后自动通过签名 M13 事件注册到 M01；只有 M01 返回 `active` 的 Agent 才可执行。已有中枢 Agent 可在 AI 港湾点击“接入 M01”，或运行 `npm run register:m01-hub-agent` 重试。
 - **局域网共享**：`--lan` 一键开放给同事，服务端账号密码验证；关闭浏览器或重启服务后需要重新登录
 - **完全隔离**：与机器上其他 Codex 安装（桌面版等）零接触，详见下文
 
@@ -121,6 +122,27 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 | Evidence 中心 | evidence.jsonl 事件流浏览与刷新 |
 | 系统配置 | 模型提供商 / 模型 / 密钥 / MCP 清单 / 证据速览 |
 | AI 港湾 | Agent、Runtime、Project 登记与绑定；**模型中心**（能力 + 单价登记）；**费用用量**（按智能体 / 模型 / 月份的 token 与费用报表）；Runtime 真实健康验证 |
+
+### M01 Agent 对接
+
+在 HUB 的部署环境中配置以下变量（密钥只放在未提交的 `.env`）：
+
+```dotenv
+M01_AGENT_REGISTRATION_URL=http://host.docker.internal:3101/integrations/m13
+M01_AGENT_REGISTRATION_SECRET=<与 M01 的 M13_WEBHOOK_SECRET 相同>
+M01_AGENT_TENANT_ID=TENANT_A
+M01_AGENT_OWNER_PERSON_ID=P_OWNER
+```
+
+启动 HUB 后，进入“AI 港湾 → 智能体目录”，对 `AEOS 中枢 Agent` 点击“接入 M01”。新建智能体会自动执行同样的注册；网络错误或 M01 拒绝时会保留记录但显示“同步中/已拒绝”，可点击“重试 M01”。
+
+命令行方式只针对中枢 Agent：
+
+```bash
+npm run register:m01-hub-agent
+```
+
+注册 event_id 按租户、Agent ID 和事件类型稳定生成，重复执行不会在 M01 产生重复 Agent。M01 返回的 scope 收敛结果是最终生效范围，HUB 不会恢复被剔除的 scope。
 
 **模型切换说明**：新会话在创建线程时按所选模型生效；已有会话的模型版本保持不变（切换时提示新建会话，保证运行记录可追溯）。codex 0.153 起自定义提供商仅支持 `wire_api = "responses"`（DeepSeek 官方已支持 `/v1/responses`）。
 

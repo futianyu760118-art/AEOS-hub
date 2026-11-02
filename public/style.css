@@ -1044,6 +1044,8 @@ button.cap-row:hover { background: rgba(18, 18, 24, 0.025); }
 .harbor-empty small { margin-top: 4px; font-size: 10px; }
 .harbor-agent-actions { display: flex; align-items: center; justify-content: flex-start; gap: 6px; }
 .harbor-agent-actions small { color: var(--text-3); font-size: 9px; }
+.harbor-m01-state { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 116px; }
+.harbor-m01-state > span { overflow: hidden; max-width: 116px; text-overflow: ellipsis; white-space: nowrap; }
 .harbor-delete-agent { width: 26px; height: 26px; margin-left: auto; color: var(--text-3); }
 .harbor-delete-agent:hover { background: rgba(192,57,43,.09); color: var(--danger); }
 .harbor-delete-agent svg { width: 13px; height: 13px; }

@@ -28,6 +28,8 @@
     "test:auth": "node --test test/web-auth.test.ts",
     "test:m01-bridge": "node --experimental-strip-types --test test/m01-agent-bridge.test.ts",
     "test:m01-registration": "node --experimental-strip-types --test test/m01-agent-registration.test.ts",
+    "test:m01-console": "node --experimental-strip-types --test test/m01-console-contract.test.ts",
+    "register:m01-hub-agent": "node --experimental-strip-types scripts/register-m01-hub-agent.ts",
     "smoke:protocol": "node scripts/smoke-protocol.mjs",
     "check:types": "tsc --noEmit",
     "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",
