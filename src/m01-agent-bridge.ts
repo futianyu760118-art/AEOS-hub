@@ -21,6 +21,7 @@ export interface M01RegistrationAgent {
   id: string;
   parentAgentId: string | null;
   skills: string[];
+  m01Registration?: { effectiveScopes?: string[] };
 }
 
 export interface M01AgentRegistrationResult {
@@ -54,6 +55,11 @@ function uniqueScopes(values: unknown): string[] {
     result.push(scope);
   }
   return result;
+}
+
+function authorizationScopes(values: unknown): string[] {
+  const scopes = uniqueScopes(values).filter((scope) => /^[A-Za-z][A-Za-z0-9._-]*:[A-Za-z][A-Za-z0-9._-]*$/.test(scope));
+  return scopes.length ? scopes : ['task:execute'];
 }
 
 export function loadM01AgentBridgeConfig(env: NodeJS.ProcessEnv = process.env): M01AgentBridgeConfigResult {
@@ -105,7 +111,7 @@ export async function registerAgentWithM01(
   transport: BridgeFetch = fetch,
 ): Promise<M01AgentRegistrationResult> {
   const agentId = clean(agent.id);
-  const requestedScopes = uniqueScopes(agent.skills);
+  const requestedScopes = authorizationScopes(agent.skills);
   if (!config) {
     return resultFor('not_configured', agentId, null, requestedScopes, [], [], 'M01 Agent 注册未配置');
   }
@@ -145,7 +151,14 @@ export async function registerAgentWithM01(
       return resultFor('rejected', agentId, eventId, requestedScopes, [], [], clean(payload.error) || `M01 返回 HTTP ${response.status}`);
     }
     const m01Agent = payload.agent && typeof payload.agent === 'object' ? payload.agent as Record<string, unknown> : {};
-    const effectiveScopes = uniqueScopes(m01Agent.scopes);
+    const responseScopes = uniqueScopes(m01Agent.scopes);
+    const effectiveScopes = responseScopes.length
+      ? responseScopes
+      : payload.idempotent === true
+        ? uniqueScopes(agent.m01Registration?.effectiveScopes).length
+          ? uniqueScopes(agent.m01Registration?.effectiveScopes)
+          : requestedScopes
+        : [];
     const clampedScopes = uniqueScopes(payload.clamped_scopes);
     return resultFor('active', agentId, eventId, requestedScopes, effectiveScopes, clampedScopes, null, {
       idempotent: payload.idempotent === true,

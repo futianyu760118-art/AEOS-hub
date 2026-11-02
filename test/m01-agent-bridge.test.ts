@@ -12,7 +12,7 @@ const agent = {
   name: 'AEOS 中枢 Agent',
   role: '主 Agent',
   parentAgentId: null,
-  skills: ['read-only-analysis'],
+  skills: ['task:execute'],
 };
 
 const config: M01AgentBridgeConfig = {
@@ -32,14 +32,14 @@ test('registers a HUB Agent with the signed M13 event contract', async () => {
     return new Response(JSON.stringify({
       ok: true,
       idempotent: false,
-      agent: { agent_id: agent.id, scopes: ['read-only-analysis'] },
+      agent: { agent_id: agent.id, scopes: ['task:execute'] },
       clamped_scopes: [],
     }), { status: 200, headers: { 'content-type': 'application/json' } });
   });
 
   assert.equal(requestUrl, config.url);
   assert.equal(result.state, 'active');
-  assert.deepEqual(result.effectiveScopes, ['read-only-analysis']);
+  assert.deepEqual(result.effectiveScopes, ['task:execute']);
   assert.deepEqual(result.clampedScopes, []);
   assert.ok(requestInit?.body);
   const rawBody = String(requestInit.body);
@@ -56,7 +56,7 @@ test('registers a HUB Agent with the signed M13 event contract', async () => {
     agent_id: 'agent-aeos-hub',
     owner_person_id: 'P_OWNER',
     parent_agent_id: null,
-    scopes: ['read-only-analysis'],
+    scopes: ['task:execute'],
   });
 });
 
@@ -91,4 +91,24 @@ test('uses a stable event id for the same tenant, Agent and event type', () => {
   assert.equal(first, second);
   assert.match(first, /^hub-m01-[a-f0-9]{64}$/);
   assert.equal(first.slice(-64), createHash('sha256').update('TENANT_A|agent.registered|agent-aeos-hub').digest('hex'));
+});
+
+test('maps Harbor display labels to a safe M01 authorization scope', async () => {
+  let payload: Record<string, unknown> = {};
+  await registerAgentWithM01({ ...agent, skills: ['订单风险扫描', '物料缺口核查'] }, config, async (_url, init) => {
+    payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({ ok: true, agent: { agent_id: agent.id, scopes: ['task:execute'] }, clamped_scopes: [] }), { status: 200 });
+  });
+
+  assert.deepEqual(payload.scopes, ['task:execute']);
+});
+
+test('keeps the previous effective scopes when M01 returns an idempotent response without an Agent body', async () => {
+  const result = await registerAgentWithM01({
+    ...agent,
+    m01Registration: { effectiveScopes: ['task:execute'] },
+  }, config, async () => new Response(JSON.stringify({ ok: true, idempotent: true, event_id: 'same-event' }), { status: 200 }));
+
+  assert.equal(result.idempotent, true);
+  assert.deepEqual(result.effectiveScopes, ['task:execute']);
 });
