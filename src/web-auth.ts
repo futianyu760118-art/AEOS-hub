@@ -9,9 +9,15 @@ function digest(value: string): Buffer {
 }
 
 /** Compare fixed-length hashes so authentication does not leak a password prefix by timing. */
-export function credentialsMatch(account: string, password: string, expectedPassword: string): boolean {
-  return timingSafeEqual(digest(account), digest(LOGIN_USERNAME))
+export function credentialsMatch(account: string, password: string, expectedPassword: string, expectedUsername = LOGIN_USERNAME): boolean {
+  return timingSafeEqual(digest(account), digest(expectedUsername))
     && timingSafeEqual(digest(password), digest(expectedPassword));
+}
+
+export function loginUsernameFromEnvironment(env: NodeJS.ProcessEnv = process.env): string {
+  const username = (env.AEOS_LOGIN_USERNAME ?? LOGIN_USERNAME).trim();
+  if (!username || username.length > 128) throw new Error('AEOS_LOGIN_USERNAME 无效，服务不会以未配置账号启动。');
+  return username;
 }
 
 export function passwordFromEnvironment(env: NodeJS.ProcessEnv = process.env): string {
@@ -23,13 +29,15 @@ export function passwordFromEnvironment(env: NodeJS.ProcessEnv = process.env): s
 export class BrowserSessionAuth {
   private readonly sessions = new Set<string>();
   private readonly password: string;
+  private readonly username: string;
 
-  constructor(password: string) {
+  constructor(password: string, username = LOGIN_USERNAME) {
     this.password = password;
+    this.username = username;
   }
 
   login(account: string, password: string): string | null {
-    if (!credentialsMatch(account, password, this.password)) return null;
+    if (!credentialsMatch(account, password, this.password, this.username)) return null;
     const sessionId = randomUUID();
     this.sessions.add(sessionId);
     return sessionId;

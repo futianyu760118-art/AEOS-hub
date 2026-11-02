@@ -70,7 +70,7 @@ import {
 } from './model-registry.ts';
 import { UsageStore } from './usage-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
-import { BrowserSessionAuth, LOGIN_USERNAME, passwordFromEnvironment } from './web-auth.ts';
+import { BrowserSessionAuth, loginUsernameFromEnvironment, passwordFromEnvironment } from './web-auth.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -93,7 +93,8 @@ if (!existsSync(join(codexHome, 'auth.json'))) {
 const cliArgs = process.argv.slice(2);
 const LAN_MODE = cliArgs.includes('--lan');
 const LISTEN_HOST = process.env.HOST || (LAN_MODE ? '0.0.0.0' : '127.0.0.1');
-const webAuth = new BrowserSessionAuth(passwordFromEnvironment());
+const LOGIN_ACCOUNT = loginUsernameFromEnvironment();
+const webAuth = new BrowserSessionAuth(passwordFromEnvironment(), LOGIN_ACCOUNT);
 const SESSION_COOKIE_RE = /(?:^|;\s*)aeos_session=([0-9a-f-]{36})(?:;|$)/;
 function addCookie(res: ServerResponse, value: string): void {
   const current = res.getHeader('set-cookie');
@@ -1297,7 +1298,7 @@ const server = createServer(async (req, res) => {
       const sessionId = webAuth.login(account, password);
       if (!sessionId) { sendJson(res, 401, { error: '账号或密码错误' }); return; }
       addCookie(res, webAuth.sessionCookie(sessionId));
-      sendJson(res, 200, { ok: true, account: LOGIN_USERNAME });
+      sendJson(res, 200, { ok: true, account: LOGIN_ACCOUNT });
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
@@ -1317,7 +1318,7 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === '/api/auth/session') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    sendJson(res, 200, { authenticated: true, account: LOGIN_USERNAME });
+    sendJson(res, 200, { authenticated: true, account: LOGIN_ACCOUNT });
     return;
   }
   const requestActor = publicAsset ? 'anonymous' : sessionActorFromRequest(req, res);
@@ -2005,7 +2006,7 @@ server.listen(PORT, LISTEN_HOST, () => {
     console.log('   提示: 首次从其他设备访问若不通，请在 Windows 防火墙放行该端口');
     console.log(`         (管理员 PowerShell: netsh advfirewall firewall add rule name="AEOS Hub ${PORT}" dir=in action=allow protocol=TCP localport=${PORT})`);
   }
-  console.log(`   登录保护: 已启用（账号: ${LOGIN_USERNAME}；密码来自 AEOS_LOGIN_PASSWORD）`);
+  console.log(`   登录保护: 已启用（账号来自 AEOS_LOGIN_USERNAME；密码来自 AEOS_LOGIN_PASSWORD）`);
   console.log(`   隔离 CODEX_HOME: ${codexHome}`);
   console.log('   按 Ctrl+C 退出');
   console.log('==============================================');

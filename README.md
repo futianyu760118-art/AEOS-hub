@@ -90,11 +90,12 @@ CODEX_HOME="$PWD/.codex-home" ./node_modules/.bin/codex login
 npm run test:mcp        # MCP 链路
 npm test                # Harbor 存储 + Runtime 健康 + MCP 全量测试
 
-# 4) 设置 Web 登录密码（账号固定为 demo；不要提交或发送该密码）
+# 4) 设置 Web 登录账号和密码（与 M03 保持一致；不要提交或发送密码）
+#    PowerShell 示例：$env:AEOS_LOGIN_USERNAME = 'admin'
 #    PowerShell 示例：$env:AEOS_LOGIN_PASSWORD = '请替换为强密码'
 
 # 5) 启动 Web 控制台（默认仅本机）
-npm run web             # → http://127.0.0.1:8787   账号: demo；密码来自 AEOS_LOGIN_PASSWORD
+npm run web             # → http://127.0.0.1:8787   账号来自 AEOS_LOGIN_USERNAME；密码来自 AEOS_LOGIN_PASSWORD
 
 # 6) 局域网共享（同事仍需输入账号密码）
 npm run web:lan         # 首次不通请在管理员 PowerShell 放行端口：
@@ -115,7 +116,7 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 
 | 区域 | 说明 |
 |---|---|
-| 登录 / 引导 | 服务端验证固定账号 `demo` 与部署密码；登录会话只在当前浏览器会话有效，关闭浏览器或重启服务后需重新登录 |
+| 登录 / 引导 | 服务端验证部署环境中的账号与密码（本次与 M03 统一为 `admin` / M03 密码）；登录会话只在当前浏览器会话有效，关闭浏览器或重启服务后需重新登录 |
 | 管理者首页 | 目标条、经营指标、System Registry、Runtime 状态 |
 | 中枢 Agent | 会话列表（归档/删除/恢复）、流式对话、工具卡片、Guard 授权条、模型下拉 |
 | Attention 中心 | 需人关注事项（示例数据），一键生成决策材料 |
@@ -195,7 +196,7 @@ hub/
 
 - 历史消息回放未实现：重启后会话保留在列表，完整消息流可在 Evidence 中追溯；
 - 同一会话同时只执行一个 Run，可点「停止」中断；
-- 登录为演示账号（demo/demo），未接企业身份源；
+- 登录账号由 `AEOS_LOGIN_USERNAME` / `AEOS_LOGIN_PASSWORD` 配置；本次部署与 M03 统一，未接企业身份源；
 - Windows 下 `.cmd` 启动器会触发 Node 的 `shell option` 弃用告警，不影响功能。
 
 ---

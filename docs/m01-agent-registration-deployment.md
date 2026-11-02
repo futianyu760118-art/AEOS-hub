@@ -12,6 +12,7 @@
 - M01 容器：`aeos-m01-kernel`
 - HUB 对外端口：`8787`
 - M01 对外端口：`3101`
+- HUB 登录账号：与 M03 统一，当前账号为 `admin`；密码从部署环境注入，不写入仓库。
 - HUB → M01 注册路径：`/integrations/m13`
 - 租户：`TENANT_A`
 - 当前为本地 M01 DEMO，HTTP 注册仅通过显式 `M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP=true` 开启；生产必须改为 HTTPS。
@@ -31,11 +32,12 @@ docker exec AEOS npm run register:m01-hub-agent
 ## 观察结果
 
 1. HUB `/healthz` 返回 `200`，状态为 `ok`。
-2. 中枢 Agent 注册脚本返回 `state=active`。
-3. M01 返回的有效权限为 `task:execute`，无越权权限被写入 HUB。
-4. 通过 HUB 登录态调用重试接口返回 `200`，重复注册仍为 `active`，事件保持幂等。
-5. M01 状态查询显示 `agent-aeos-hub=active`、权限为 `task:execute`。
-6. M01 `/kernel/v1/authorize` 对 `agent-aeos-hub / task / execute` 返回 `ALLOW`。
+2. HUB 使用 M03 账号登录返回 `200`；旧 `demo` 账号返回 `401`；退出后会话返回 `401`。
+3. 中枢 Agent 注册脚本返回 `state=active`。
+4. M01 返回的有效权限为 `task:execute`，无越权权限被写入 HUB。
+5. 通过 HUB 登录态调用重试接口返回 `200`，重复注册仍为 `active`，事件保持幂等。
+6. M01 状态查询显示 `agent-aeos-hub=active`、权限为 `task:execute`。
+7. M01 `/kernel/v1/authorize` 对 `agent-aeos-hub / task / execute` 返回 `ALLOW`。
 
 ## 验证命令
 

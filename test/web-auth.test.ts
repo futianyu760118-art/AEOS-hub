@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BrowserSessionAuth, LOGIN_USERNAME, credentialsMatch, passwordFromEnvironment } from '../src/web-auth.ts';
+import { BrowserSessionAuth, LOGIN_USERNAME, credentialsMatch, loginUsernameFromEnvironment, passwordFromEnvironment } from '../src/web-auth.ts';
 
 test('only the demo account and configured password receive a browser session', () => {
   const auth = new BrowserSessionAuth('replace-me');
@@ -26,4 +26,12 @@ test('configured password is required and compared without a plaintext fallback'
   assert.equal(passwordFromEnvironment({ AEOS_LOGIN_PASSWORD: 'secret' }), 'secret');
   assert.equal(credentialsMatch('demo', 'secret', 'secret'), true);
   assert.equal(credentialsMatch('demo', 'demo', 'secret'), false);
+});
+
+test('supports the M03 account through an explicit deployment username', () => {
+  assert.equal(loginUsernameFromEnvironment({ AEOS_LOGIN_USERNAME: 'admin' }), 'admin');
+  const m03PasswordFixture = 'm03-password-fixture';
+  const auth = new BrowserSessionAuth(m03PasswordFixture, 'admin');
+  assert.ok(auth.login('admin', m03PasswordFixture));
+  assert.equal(auth.login('demo', m03PasswordFixture), null);
 });
