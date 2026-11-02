@@ -34,6 +34,10 @@ export interface M01AgentRegistrationResult {
   idempotent?: boolean;
 }
 
+export function isM01AgentDispatchable(agent: { m01Registration?: { state?: string } }): boolean {
+  return agent.m01Registration?.state === 'active';
+}
+
 type BridgeFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 function clean(value: unknown): string {
