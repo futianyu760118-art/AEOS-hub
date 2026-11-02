@@ -144,6 +144,7 @@ function registrationUpdate(result: M01AgentRegistrationResult, now = new Date()
     state: result.state,
     m01AgentId: result.state === 'not_configured' ? null : result.agentId,
     eventId: result.eventId,
+    idempotencyKey: result.idempotencyKey ?? result.eventId,
     tenantId: m01AgentBridge.config?.tenantId ?? null,
     requestedScopes: result.requestedScopes,
     effectiveScopes: result.effectiveScopes,

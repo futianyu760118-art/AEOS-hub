@@ -41,6 +41,7 @@ test('registers a HUB Agent with the signed M13 event contract', async () => {
 
   assert.equal(requestUrl, config.url);
   assert.equal(result.state, 'active');
+  assert.equal(result.idempotencyKey, result.eventId);
   assert.deepEqual(result.effectiveScopes, ['task:execute']);
   assert.deepEqual(result.clampedScopes, []);
   assert.ok(requestInit?.body);
@@ -53,6 +54,7 @@ test('registers a HUB Agent with the signed M13 event contract', async () => {
   );
   assert.deepEqual(JSON.parse(rawBody), {
     event_id: result.eventId,
+    idempotency_key: result.idempotencyKey,
     tenant_id: 'TENANT_A',
     type: 'agent.registered',
     agent_id: 'agent-aeos-hub',

@@ -72,6 +72,7 @@ test('retrying registration keeps the same event id', async (t) => {
   const second = await registerAgentWithM01(agent, config, transport);
 
   assert.equal(first.eventId, second.eventId);
+  assert.equal(first.idempotencyKey, second.idempotencyKey);
   assert.equal(second.idempotent, true);
   assert.equal(calls, 2);
   assert.equal(JSON.parse(readFileSync(store.file, 'utf8')).agents.length, 1);

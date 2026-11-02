@@ -28,6 +28,7 @@ export interface M01RegistrationAgent {
 export interface M01AgentRegistrationResult {
   state: M01AgentRegistrationState;
   eventId: string | null;
+  idempotencyKey?: string | null;
   agentId: string;
   requestedScopes: string[];
   effectiveScopes: string[];
@@ -110,7 +111,7 @@ function resultFor(
   reason: string | null,
   extra: Partial<Pick<M01AgentRegistrationResult, 'idempotent'>> = {},
 ): M01AgentRegistrationResult {
-  return { state, eventId, agentId, requestedScopes, effectiveScopes, clampedScopes, reason, ...extra };
+  return { state, eventId, idempotencyKey: eventId, agentId, requestedScopes, effectiveScopes, clampedScopes, reason, ...extra };
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -135,6 +136,7 @@ export async function registerAgentWithM01(
   const eventId = stableM01RegistrationEventId(config.tenantId, agentId, 'agent.registered');
   const body = JSON.stringify({
     event_id: eventId,
+    idempotency_key: eventId,
     tenant_id: config.tenantId,
     type: 'agent.registered',
     agent_id: agentId,
@@ -172,6 +174,9 @@ export async function registerAgentWithM01(
     }
     if (payload.event_id !== undefined && clean(payload.event_id) !== eventId) {
       return resultFor('rejected', agentId, eventId, requestedScopes, [], [], 'M01 返回的 event_id 不匹配');
+    }
+    if (payload.idempotency_key !== undefined && clean(payload.idempotency_key) !== eventId) {
+      return resultFor('rejected', agentId, eventId, requestedScopes, [], [], 'M01 返回的幂等键不匹配');
     }
     const m01Agent = recordValue(payload.agent);
     if (!m01Agent) {

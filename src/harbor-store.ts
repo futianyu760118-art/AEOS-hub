@@ -69,6 +69,7 @@ export const HarborM01RegistrationSchema = z.object({
   state: HarborM01RegistrationStateSchema,
   m01AgentId: identifierSchema.nullable(),
   eventId: identifierSchema.nullable(),
+  idempotencyKey: identifierSchema.nullable().default(null),
   tenantId: identifierSchema.nullable(),
   requestedScopes: stringListSchema(200),
   effectiveScopes: stringListSchema(200),
@@ -85,6 +86,7 @@ export function defaultHarborM01Registration(): HarborM01Registration {
     state: 'not_configured',
     m01AgentId: null,
     eventId: null,
+    idempotencyKey: null,
     tenantId: null,
     requestedScopes: [],
     effectiveScopes: [],
@@ -286,6 +288,7 @@ export type HarborM01RegistrationInput = Readonly<{
   state: HarborM01RegistrationState;
   m01AgentId?: string | null;
   eventId?: string | null;
+  idempotencyKey?: string | null;
   tenantId?: string | null;
   requestedScopes?: string[];
   effectiveScopes?: string[];
@@ -527,6 +530,7 @@ export class HarborStore {
         state: input.state,
         m01AgentId: input.m01AgentId === undefined ? current.m01AgentId : input.m01AgentId,
         eventId: input.eventId === undefined ? current.eventId : input.eventId,
+        idempotencyKey: input.idempotencyKey === undefined ? current.idempotencyKey : input.idempotencyKey,
         tenantId: input.tenantId === undefined ? current.tenantId : input.tenantId,
         requestedScopes: input.requestedScopes === undefined ? current.requestedScopes : input.requestedScopes,
         effectiveScopes: input.effectiveScopes === undefined ? current.effectiveScopes : input.effectiveScopes,
