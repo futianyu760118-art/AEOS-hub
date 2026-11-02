@@ -63,6 +63,38 @@ const calendarDateSchema = z.string()
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }, '日期无效');
 
+const M01_REGISTRATION_STATES = ['not_configured', 'pending', 'active', 'rejected', 'revoked'] as const;
+export const HarborM01RegistrationStateSchema = z.enum(M01_REGISTRATION_STATES);
+export const HarborM01RegistrationSchema = z.object({
+  state: HarborM01RegistrationStateSchema,
+  m01AgentId: identifierSchema.nullable(),
+  eventId: identifierSchema.nullable(),
+  tenantId: identifierSchema.nullable(),
+  requestedScopes: stringListSchema(200),
+  effectiveScopes: stringListSchema(200),
+  clampedScopes: stringListSchema(200),
+  lastAttemptAt: timestampSchema.nullable(),
+  lastSuccessAt: timestampSchema.nullable(),
+  reason: trimmedString(500).nullable(),
+}).strict();
+export type HarborM01RegistrationState = z.infer<typeof HarborM01RegistrationStateSchema>;
+export type HarborM01Registration = z.infer<typeof HarborM01RegistrationSchema>;
+
+export function defaultHarborM01Registration(): HarborM01Registration {
+  return {
+    state: 'not_configured',
+    m01AgentId: null,
+    eventId: null,
+    tenantId: null,
+    requestedScopes: [],
+    effectiveScopes: [],
+    clampedScopes: [],
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    reason: null,
+  };
+}
+
 export const HarborAgentSchema = z.object({
   id: identifierSchema,
   name: trimmedString(80, 1),
@@ -77,6 +109,7 @@ export const HarborAgentSchema = z.object({
   autonomyLevel: AutonomyLevelSchema,
   access: z.enum(['private', 'workspace', 'selected']),
   skills: stringListSchema(200),
+  m01Registration: HarborM01RegistrationSchema.default(defaultHarborM01Registration()),
   status: HarborAgentStatusSchema,
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
@@ -249,6 +282,18 @@ export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
   role?: unknown;
   runtimeId?: unknown;
 };
+export type HarborM01RegistrationInput = Readonly<{
+  state: HarborM01RegistrationState;
+  m01AgentId?: string | null;
+  eventId?: string | null;
+  tenantId?: string | null;
+  requestedScopes?: string[];
+  effectiveScopes?: string[];
+  clampedScopes?: string[];
+  lastAttemptAt?: string | null;
+  lastSuccessAt?: string | null;
+  reason?: string | null;
+}>;
 const HARBOR_AGENT_CREATE_KEYS = new Set([
   'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
   'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
@@ -462,11 +507,35 @@ export class HarborStore {
         autonomyLevel: enumValue(input, 'autonomyLevel', AUTONOMY_LEVELS, 'A1'),
         access: enumValue(input, 'access', ['private', 'workspace', 'selected'] as const, 'private'),
         skills: stringList(input.skills, 200),
+        m01Registration: defaultHarborM01Registration(),
         status: runtimeId ? 'idle' : 'draft',
         createdAt: timestamp,
         updatedAt: timestamp,
       });
       snapshot.agents.push(agent);
+      return agent;
+    });
+  }
+
+  updateAgentM01Registration(id: string, input: HarborM01RegistrationInput): HarborAgent {
+    return this.mutate((snapshot) => {
+      const agent = snapshot.agents.find((item) => item.id === id);
+      if (!agent) throw new HarborStoreNotFoundError(`Agent 不存在: ${id}`);
+      const current = agent.m01Registration;
+      agent.m01Registration = HarborM01RegistrationSchema.parse({
+        ...current,
+        state: input.state,
+        m01AgentId: input.m01AgentId === undefined ? current.m01AgentId : input.m01AgentId,
+        eventId: input.eventId === undefined ? current.eventId : input.eventId,
+        tenantId: input.tenantId === undefined ? current.tenantId : input.tenantId,
+        requestedScopes: input.requestedScopes === undefined ? current.requestedScopes : input.requestedScopes,
+        effectiveScopes: input.effectiveScopes === undefined ? current.effectiveScopes : input.effectiveScopes,
+        clampedScopes: input.clampedScopes === undefined ? current.clampedScopes : input.clampedScopes,
+        lastAttemptAt: input.lastAttemptAt === undefined ? current.lastAttemptAt : input.lastAttemptAt,
+        lastSuccessAt: input.lastSuccessAt === undefined ? current.lastSuccessAt : input.lastSuccessAt,
+        reason: input.reason === undefined ? current.reason : input.reason,
+      });
+      agent.updatedAt = this.now();
       return agent;
     });
   }
@@ -662,6 +731,7 @@ export class HarborStore {
           autonomyLevel: 'A2',
           access: 'workspace',
           skills: ['订单风险扫描', '物料缺口核查', '经营综合判断'],
+          m01Registration: defaultHarborM01Registration(),
           status: 'idle',
           createdAt,
           updatedAt: createdAt,
@@ -864,6 +934,10 @@ export function createHarborAgent(input: HarborAgentCreateInput): HarborAgent {
 
 export function deleteHarborAgent(input: HarborAgentDeleteInput): HarborAgent {
   return defaultStore.deleteAgent(input);
+}
+
+export function updateHarborAgentM01Registration(id: string, input: HarborM01RegistrationInput): HarborAgent {
+  return defaultStore.updateAgentM01Registration(id, input);
 }
 
 export function createHarborRuntime(input: HarborRuntimeCreateInput): HarborRuntime {

@@ -36,9 +36,17 @@ import {
   createHarborRuntime,
   createHarborProject,
   recordHarborRuntimeVerification,
+  updateHarborAgentM01Registration,
   HarborStoreNotFoundError,
+  type HarborAgent,
   type HarborRuntimeVerificationStatus,
 } from './harbor-store.ts';
+import {
+  isM01AgentDispatchable,
+  loadM01AgentBridgeConfig,
+  registerAgentWithM01,
+  type M01AgentRegistrationResult,
+} from './m01-agent-bridge.ts';
 import {
   addAgentSquadActivity,
   addAgentSquadMemory,
@@ -128,6 +136,28 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // this policy boundary.  Chat-agent calls are constrained by the same registry
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
+const m01AgentBridge = loadM01AgentBridgeConfig();
+
+function registrationUpdate(result: M01AgentRegistrationResult, now = new Date().toISOString()) {
+  return {
+    state: result.state,
+    m01AgentId: result.state === 'not_configured' ? null : result.agentId,
+    eventId: result.eventId,
+    tenantId: m01AgentBridge.config?.tenantId ?? null,
+    requestedScopes: result.requestedScopes,
+    effectiveScopes: result.effectiveScopes,
+    clampedScopes: result.clampedScopes,
+    lastAttemptAt: result.state === 'not_configured' ? null : now,
+    lastSuccessAt: result.state === 'active' ? now : undefined,
+    reason: result.reason,
+  };
+}
+
+async function registerHarborAgentToM01(agent: HarborAgent): Promise<{ item: HarborAgent; registration: M01AgentRegistrationResult }> {
+  const registration = await registerAgentWithM01(agent, m01AgentBridge.config);
+  const item = updateHarborAgentM01Registration(agent.id, registrationUpdate(registration));
+  return { item, registration };
+}
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
@@ -811,6 +841,11 @@ async function startTurnUnsafe(convId: string, text: string, choice?: { provider
 
 /** Serialize the complete setup/start lifecycle for one conversation. */
 async function startTurn(convId: string, text: string, choice?: { provider?: string; model?: string }, dispatch?: AgentDispatchContext): Promise<void> {
+  const executionAgentId = dispatch?.agentId || 'agent-aeos-hub';
+  const executionAgent = loadHarbor().agents.find((item) => item.id === executionAgentId);
+  if (executionAgent && !isM01AgentDispatchable(executionAgent)) {
+    throw new Error(`Agent ${executionAgent.name} 尚未完成 M01 注册，当前不可执行`);
+  }
   if (turnStartLocks.has(convId)) {
     throw new Error('该对话正在启动中，请稍候');
   }
@@ -1293,6 +1328,23 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+
+  const m01AgentRegisterMatch = url.pathname.match(/^\/api\/harbor\/agents\/([^/]+)\/m01\/register$/);
+  if (m01AgentRegisterMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const id = decodeURIComponent(m01AgentRegisterMatch[1] ?? '').trim();
+      const agent = loadHarbor().agents.find((item) => item.id === id);
+      if (!agent) throw new HarborStoreNotFoundError(`Agent 不存在: ${id}`);
+      const result = await registerHarborAgentToM01(agent);
+      const status = result.registration.state === 'active' ? 200 : 503;
+      sendJson(res, status, result);
+    } catch (error) {
+      const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
+      sendJson(res, status, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/models') {
     if (req.method === 'GET') {
       try { sendJson(res, 200, loadModelRegistry()); } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
@@ -1627,8 +1679,14 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const input = await readJsonBody(req);
-      const item = creator(input);
-      sendJson(res, 201, { item });
+      let item = creator(input);
+      let registration: M01AgentRegistrationResult | undefined;
+      if (url.pathname === '/api/harbor/agents') {
+        const synced = await registerHarborAgentToM01(item as HarborAgent);
+        item = synced.item;
+        registration = synced.registration;
+      }
+      sendJson(res, 201, registration ? { item, registration } : { item });
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }

@@ -27,6 +27,7 @@
     "test:security": "node --test test/security-hardening.test.ts",
     "test:auth": "node --test test/web-auth.test.ts",
     "test:m01-bridge": "node --experimental-strip-types --test test/m01-agent-bridge.test.ts",
+    "test:m01-registration": "node --experimental-strip-types --test test/m01-agent-registration.test.ts",
     "smoke:protocol": "node scripts/smoke-protocol.mjs",
     "check:types": "tsc --noEmit",
     "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",
