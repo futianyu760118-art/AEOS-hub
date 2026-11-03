@@ -6,6 +6,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateEvidenceEntry, type EvidenceEntryContract } from './evidence-contract.ts';
+import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const dataDir = join(here, '..', 'data');
@@ -13,7 +14,7 @@ export const evidenceFile = join(dataDir, 'evidence.jsonl');
 
 export type EvidenceEntry = EvidenceEntryContract;
 export type EvidenceActorType = NonNullable<EvidenceEntry['actor_type']>;
-export type EvidenceQuery = { actorId?: string; actorType?: EvidenceActorType };
+export type EvidenceQuery = { actorId?: string; actorType?: EvidenceActorType; tenantId?: string };
 
 /** Callers may omit pilot defaults, but persisted records always satisfy EvidenceEntryContract. */
 export type EvidenceInput = Omit<
@@ -30,7 +31,7 @@ export function ensureDataDir(): void {
 }
 
 function tenantId(): string {
-  return process.env.AEOS_TENANT_ID?.trim() || 'pilot-default';
+  return process.env.AEOS_TENANT_ID?.trim() || DEFAULT_TENANT_ID;
 }
 
 function hubRuntimeObjectRef(partial: EvidenceInput): string {
@@ -105,7 +106,8 @@ export function appendEvidence(partial: EvidenceInput, file = evidenceFile): Evi
 
 /** Reads a bounded tail asynchronously. Archives are retained for audit/backup. */
 function matchesEvidenceQuery(entry: EvidenceEntry, query: EvidenceQuery): boolean {
-  return (!query.actorId || entry.actor_id === query.actorId)
+  return (!query.tenantId || entry.tenant_id === query.tenantId)
+    && (!query.actorId || entry.actor_id === query.actorId)
     && (!query.actorType || entry.actor_type === query.actorType);
 }
 

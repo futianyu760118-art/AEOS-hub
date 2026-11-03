@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "revision": 2,
+  "updatedAt": "2026-10-26T04:49:23.000Z",
+  "allowlist": {
+    "control-platform": [
+      "gateway-control-platform"
+    ],
+    "hengjian-plm": [
+      "runtime-execution-query"
+    ]
+  }
+}

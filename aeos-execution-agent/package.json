@@ -5,13 +5,16 @@
   "type": "module",
   "main": "src/main.js",
   "scripts": {
-    "start": "node src/main.js",
+    "start": "node --env-file=.env src/main.js",
+    "gateway": "node --env-file=.env src/gateway-main.js",
+    "gateway:check": "node --env-file=.env src/gateway-main.js --check",
+    "reasoning:check": "node --env-file=.env src/reasoning-check.js",
     "test": "node --test"
   },
   "dependencies": {
     "ws": "^8.21.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }

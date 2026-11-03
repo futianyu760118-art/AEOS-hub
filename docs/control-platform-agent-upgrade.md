@@ -1,5 +1,7 @@
 # 执行面智能体升级说明（中台侧）
 
+> 2026-10-21 更新：连接认证推荐使用 `EXECUTION_SYSTEM_ID` + `EXECUTION_SYSTEM_TOKEN`（每系统令牌）；legacy `EXECUTION_PLANE_TOKEN` 仅作兼容。详见 `docs/execution-plane-identity.md`。
+
 ## 背景
 
 管理面（AEOS Hub）已升级为「能力自描述」校验：派单前要求能力声明 `readOnly`（只读约束），并按 `inputSchema`/`outputSchema` 校验输入输出。

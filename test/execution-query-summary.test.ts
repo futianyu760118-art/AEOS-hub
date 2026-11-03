@@ -1,6 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { summarizeExecutionResult } from '../public/execution-query-summary.js';
+import { humanizeEvidenceRef, summarizeExecutionResult, summarizeReasoningResult } from '../public/execution-query-summary.js';
+
+test('证据引用翻成业务可读来源', () => {
+  assert.equal(humanizeEvidenceRef('control-platform://kitting/result/SO-1:1'), '中台 · 齐套结果');
+  assert.equal(humanizeEvidenceRef('control-platform://order/SO-1/line/1'), '中台 · 订单');
+  assert.equal(humanizeEvidenceRef('control-platform://quality-issue/QI-1'), '中台 · 质量异常');
+  assert.equal(humanizeEvidenceRef('custom://x'), 'custom://x');
+});
+
+test('推理摘要用业务来源展示依据', () => {
+  const summary = summarizeReasoningResult({
+    summary: '存在缺料风险',
+    conclusions: [{
+      matter: '关键物料未齐套',
+      evidence_refs: ['control-platform://kitting/result/SO-1:1'],
+      confidence: 'high',
+    }],
+    data_as_of: '2026-10-26T14:30:00+08:00',
+    data_confidence: 'high',
+  });
+  assert.match(summary, /依据：中台 · 齐套结果/);
+  assert.doesNotMatch(summary, /control-platform:\/\//);
+});
 
 test('renders key inventory quantities instead of only the material title', () => {
   const summary = summarizeExecutionResult('/external/inventory/availability', {

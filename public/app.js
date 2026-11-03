@@ -2,10 +2,14 @@ import { questionDateKey, selectDailyQuestions } from './daily-questions.js';
 import { buildAgentRegistrationPayload, eligibleParentAgents, registrationRule } from './agent-registration.js';
 import { buildCollaborationTaskPayload, buildTaskAssignmentPayload, canCreateTaskFromCase, filterCollaborationTasks, g1TaskUiMutationGate, projectDisplayState, taskDisplayState, taskUiCapabilities } from './task-center.js';
 import { describeExecutionQuery, describeExecutionReasoning, parseExecutionQuery, parseExecutionReasoning, parseExecutionQueryByIntent } from './execution-query-intent.js?v=execution-query-intent-v5-20261015';
-import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v5-20261015';
+import { summarizeExecutionResult, summarizeReasoningResult } from './execution-query-summary.js?v=execution-query-summary-v6-20261026';
 import { renderAgentCandidatePanel } from './task-agent-eligibility.js';
 import { buildPersonnelCreateRequest, buildPersonnelResetRequest, buildPersonnelRolesRequest, personnelConfigEntryVisible, onboardingConfigEntryVisible, personnelFailureReason, PERSONNEL_ROLE_LABELS, personnelSaveFeedback } from './personnel-admin.js';
+import { attachBusinessObjectRef, groupExecutionAgentsBySystem, isHighestRiskOrderQuery, isReasoningOnly, requiresBusinessObjectRef, selectExecutionCapabilities } from './execution-agent-routing.js?v=highest-risk-v1';
+import { buildCapabilityParams, matchCapabilityTemplate, summarizeCapabilityResult } from './capability-template-intent.js?v=capability-template-intent-v2';
 import { localizeDynamicCopy, localizeStaticDocument, localizeUiText } from './ui-localization.js';
+import { formatBeijingDate, formatBeijingDateTime, formatBeijingTime, isSameBeijingDay } from './time-format.js?v=beijing-time-v1-20261023';
+import { renderBriefingMarkdown } from './briefing-render.js?v=briefing-render-v1';
 
 /* AEOS 中枢系统前端：服务端认证壳 + 管理者工作区 + WebSocket 中枢能力。 */
 'use strict';
@@ -110,6 +114,10 @@ const els = {
   metricConversations: $('#metric-conversations'), toasts: $('#toasts'),
 
   dashboardDataCaption: $('#dashboard-data-caption'), metricCapabilities: $('#metric-capabilities'),
+  dataFreshnessChip: $('#data-freshness-chip'), dataFreshnessLabel: $('#data-freshness-label'),
+  btnDailyBriefing: $('#btn-daily-briefing'), dailyBriefingModal: $('#daily-briefing-modal'), dailyBriefingBody: $('#daily-briefing-body'),
+  dailyBriefingDesc: $('#daily-briefing-desc'), dailyBriefingStatus: $('#daily-briefing-status'), dailyBriefingClose: $('#daily-briefing-close'),
+  dailyBriefingCopy: $('#daily-briefing-copy'), dailyBriefingDownload: $('#daily-briefing-download'), dailyBriefingDispatch: $('#daily-briefing-dispatch'),
   metricCapabilitiesCaption: $('#metric-capabilities-caption'), metricHighRisks: $('#metric-high-risks'),
   metricHighRisksCaption: $('#metric-high-risks-caption'), metricAttention: $('#metric-attention'),
   metricAttentionCaption: $('#metric-attention-caption'), dashboardRiskCaption: $('#dashboard-risk-caption'),
@@ -137,29 +145,25 @@ const els = {
   harborRunCount: $('#harbor-run-count'), harborRunActive: $('#harbor-run-active'),
   harborRuntimeBoundaryStatus: $('#harbor-runtime-boundary-status'), harborUpdated: $('#harbor-updated'),
   harborAgentList: $('#harbor-agent-list'), harborRuntimeList: $('#harbor-runtime-list'), harborProjectList: $('#harbor-project-list'),
-  harborModelList: $('#harbor-model-list'), harborModelCount: $('#harbor-model-count'), harborModelActiveCount: $('#harbor-model-active-count'),
-  harborCostMonth: $('#harbor-cost-month'), harborCostMonthNote: $('#harbor-cost-month-note'),
-  harborUsageMetrics: $('#harbor-usage-metrics'), harborUsageAgentList: $('#harbor-usage-agent-list'),
-  harborUsageModelList: $('#harbor-usage-model-list'), harborUsageRecent: $('#harbor-usage-recent'),
-  harborUsageMonth: $('#harbor-usage-month'), harborUsageAgentFilter: $('#harbor-usage-agent-filter'), harborUsageRefresh: $('#harbor-usage-refresh'),
-  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentSquadFilter: $('#harbor-agent-squad-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'),
+  harborAgentSearch: $('#harbor-agent-search'), harborAgentLevelFilter: $('#harbor-agent-level-filter'), harborAgentStatusFilter: $('#harbor-agent-status-filter'), harborAgentDomainFilter: $('#harbor-agent-domain-filter'), harborAgentFilterClear: $('#harbor-agent-filter-clear'), harborShowHiddenAgents: $('#harbor-show-hidden-agents'), catalogSummary: $('#catalog-summary'),
   btnAddAgent: $('#btn-add-agent'), btnAddRuntime: $('#btn-add-runtime'),
   harborModal: $('#harbor-modal'), harborModalKicker: $('#harbor-modal-kicker'), harborModalTitle: $('#harbor-modal-title'),
   harborModalDesc: $('#harbor-modal-desc'), harborModalClose: $('#harbor-modal-close'), harborForm: $('#harbor-form'),
   harborFormFields: $('#harbor-form-fields'), harborFormStatus: $('#harbor-form-status'),
   harborFormCancel: $('#harbor-form-cancel'), harborFormSubmit: $('#harbor-form-submit'),
-  squadLeadName: $('#squad-lead-name'), squadLeadModel: $('#squad-lead-model'), squadMemberCount: $('#squad-member-count'),
-  squadWorkingCount: $('#squad-working-count'), squadMemoryCount: $('#squad-memory-count'), squadMessageCount: $('#squad-message-count'),
-  squadMemberList: $('#squad-member-list'), squadMemberDetail: $('#squad-member-detail'), squadAddMember: $('#squad-add-member'),
-  squadProjectSelect: $('#squad-project-select'), squadProjectSave: $('#squad-project-save'), squadProjectStatus: $('#squad-project-status'),
-  squadModal: $('#squad-modal'), squadModalClose: $('#squad-modal-close'), squadMemberForm: $('#squad-member-form'),
-  squadFormStatus: $('#squad-form-status'), squadFormCancel: $('#squad-form-cancel'),
 };
 
 let ws = null;
 let reconnectTimer = null;
 let authenticated = false;
 let authSession = null;
+// 业务视图：默认隐藏技术/管理模块，管理者可一键切到完整视图。
+const VIEW_MODE_KEY = 'aeos-hub-view-mode-v1';
+const MANAGEMENT_VIEWS = new Set([
+  'borrow', 'ai-obs', 'ops', 'config', 'registry', 'evidence', 'harbor',
+  'g0-governance', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding',
+]);
+let businessMode = localStorage.getItem(VIEW_MODE_KEY) !== 'full';
 let convs = [];
 let curConvId = null;
 let busy = false;
@@ -175,16 +179,16 @@ let commandIndex = 0;
 let commandMatches = [];
 let welcomeState = { step: 0, name: '管理者', role: '决策责任人', defaultView: 'dashboard', avatar: '' };
 let harbor = { version: 1, agents: [], runtimes: [], projects: [], runs: [] };
-let harborAgentFilter = { query: '', level: 'all', status: 'all', squad: 'all' };
+let harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
+let showHiddenHarborAgents = false;
+let catalogTree = null;
+let catalogView = 'ownership';
+let catalogExpansionInitialized = false;
+let catalogExpandedAgentId = null;
+const expandedCatalogSystems = new Set();
+const expandedCatalogDomains = new Set();
 let harborModalType = null;
-let harborModalEditId = null;
-let modelRegistry = { version: 1, revision: 0, models: [] };
-let usageSummary = null;
-let usageMonth = localMonthKey();
-let squad = { version: 1, lead: null, subSquads: [], squadMemories: [], squadActivities: [], members: [], memories: [], activities: [], messages: [] };
-let selectedSquadMemberId = null;
-let selectedBusinessSquadId = 'business-squad-orders';
-let selectedSquadView = 'business';
+let squad = { version: 1, lead: null, members: [], memories: [], activities: [], messages: [] };
 let chatScope = { type: 'hub', agentId: null, squadId: null, label: '中枢会话' };
 let evidenceRows = [];
 let conversationQuery = '';
@@ -197,17 +201,14 @@ let personnelUsers = [];
 let personnelTargetId = null;
 let accessRoles = [];
 const OPERATION_LABELS = { create: '新增', read: '查看', update: '编辑', delete: '删除' };
-const VIEW_RESOURCE = { dashboard: 'dashboard', chat: 'analysis', attention: 'analysis', tasks: 'tasks', projects: 'tasks', harbor: 'agents', squad: 'agents', evidence: 'evidence', registry: 'system' };
+const VIEW_RESOURCE = { dashboard: 'dashboard', chat: 'analysis', attention: 'analysis', tasks: 'tasks', projects: 'tasks', harbor: 'agents', evidence: 'evidence', registry: 'system' };
 let myGrants = [];
 let accessResources = [];
 let accessRoleTarget = null;
 let accessResourceTarget = null;
 const collapsedAccessResources = new Set();
 let onboardingUsers = [];
-// AI 港湾仅改变浏览层级；子 Agent 的身份、记忆、动作和绑定关系仍各自独立。
-const expandedHarborBusinessSquadIds = new Set();
-// Agent 小队树默认收起子 Agent；展开仅影响展示，不影响选中项或协作数据。
-const expandedSquadBusinessIds = new Set();
+// Agent 小队外壳已退役；AI 港湾与目录树承担归属展示。
 let dailyQuestionConfig = null;
 let operatingCenterState = { cases: [], decisions: [], inbox: [], unreadInboxCount: 0 };
 let taskCenterState = { tasks: [], total: 0 };
@@ -234,6 +235,17 @@ const DASHBOARD_LIVE_REFRESH_MS = 60_000;
 let dashboardLiveRefreshTimer = null;
 let executionRefreshTimer = null;
 const EXECUTION_LIVE_REFRESH_MS = 2_000;
+let borrowRefreshTimer = null;
+const BORROW_LIVE_REFRESH_MS = 5_000;
+let opsRefreshTimer = null;
+const OPS_LIVE_REFRESH_MS = 15_000;
+let aiObsRefreshTimer = null;
+const AI_OBS_REFRESH_MS = 15_000;
+let aiObsTab = 'runs';
+let aiRuns = [];
+let aiAgents = [];
+let aiBorrowByRun = new Map();
+let selectedAiRunId = null;
 let pendingRiskAgentDispatch = null;
 const riskAgentDispatches = new Map();
 // 不同 Agent / 不同会话允许并行；同一会话仍由服务端串行，避免上下文交叉。
@@ -283,23 +295,28 @@ const MAX_IMAGE_BASE64 = 16 * 1024 * 1024;
 
 const commands = [
   { view: 'dashboard', label: '管理者首页', desc: '目标、风险、TOP 决策与治理脉冲', icon: 'layout-dashboard', group: '经营总览' },
-  { view: 'chat', label: '中枢 Agent', desc: '跨域经营分析与 Capability 调用', icon: 'bot', group: '自治运行' },
-  { view: 'attention', label: 'Attention 中心', desc: '需要责任人介入的例外事项', icon: 'list-checks', group: '自治运行' },
+  { view: 'chat', label: '智能助手', desc: '跨域经营分析与能力调用', icon: 'bot', group: '助手与待办' },
+  { view: 'attention', label: '待关注事项', desc: '需要责任人介入的例外事项', icon: 'list-checks', group: '助手与待办' },
   { view: 'tasks', label: '任务', desc: '任务看板、责任角色、时限与业务核验闭环', icon: 'list-todo', group: '任务协同' },
   { view: 'projects', label: '项目', desc: '项目目标、成员、进度与关联任务', icon: 'folder-kanban', group: '任务协同' },
   { view: 'cases', label: '经营事项', desc: '风险建档、人工决策与闭环验证', icon: 'clipboard-list', group: '经营闭环' },
   { view: 'inbox', label: 'Inbox', desc: '待确认事项、扫描结果与决策留痕', icon: 'inbox', group: '经营闭环' },
-  { view: 'harbor', label: 'AI 港湾', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: 'AI 资源协作' },
-  { view: 'squad', label: 'Agent 小队', desc: '主 Agent 编排、子 Agent 记忆与协作消息', icon: 'users-round', group: 'AI 资源协作' },
-  { view: 'evidence', label: 'Evidence 证据中心', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与证据' },
-  { view: 'registry', label: 'Capability Registry', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与证据' },
+  { view: 'harbor', label: 'AI 资源', desc: '智能体、运行节点与人机协作项目', icon: 'waypoints', group: '成本与资源' },
+  { view: 'evidence', label: '证据与审计', desc: '事实、工具、审批与结果事件流', icon: 'file-search', group: '治理与审计' },
+  { view: 'registry', label: '能力目录', desc: '系统与业务能力注册表', icon: 'boxes', group: '治理与审计' },
+  { view: 'borrow', label: '跨系统查询', desc: '跨系统只读能力借调单与结果回传', icon: 'arrow-left-right', group: '分析与记录' },
+  { view: 'trace', label: '处理记录', desc: '一次分析从发起到依据的完整处理记录', icon: 'git-branch', group: '分析与记录' },
+  { view: 'ai-obs', label: 'AI 运行观测', desc: 'Hub 派单任务与各系统自有助手的统一观测', icon: 'scan-eye', group: '分析与记录' },
+  { view: 'ops', label: '运行状态', desc: '服务健康、模型错误、借调失败率与备份状态', icon: 'activity', group: '系统' },
   { view: 'config', label: '系统配置', desc: '模型提供商与隔离运行时', icon: 'settings', group: '系统' },
+  { view: 'writes', label: '写操作', desc: '提交、审批与追踪写操作', icon: 'file-pen-line', group: '系统' },
 ];
 
-// Local experience review: keep the operating-center implementation intact
-// while temporarily removing its routes from the decision-maker interface.
-const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox']);
-const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '执行面仪表盘' };
+// Local experience review: keep module implementations intact while temporarily
+// removing their routes from the decision-maker interface.
+// 跨系统查询与 AI 资源：新架构下中枢分析走直接派单、Hub 不再托管域 Agent；页面/API/数据保留，仅从导航与命令面板隐藏。
+const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects', 'borrow', 'harbor', 'writes']);
+const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本' };
 const SPLIT = '::';
 
 function refreshIcons(root = document) {
@@ -317,6 +334,9 @@ function applyDataStyles(root = document) {
   }
   for (const indent of root.querySelectorAll('[data-depth]')) {
     indent.style.setProperty('--depth', String(Math.max(0, Math.round(Number(indent.dataset.depth) || 0))));
+  }
+  for (const table of root.querySelectorAll('[data-borrow-cols]')) {
+    table.style.setProperty('--borrow-cols', String(Math.max(1, Math.round(Number(table.dataset.borrowCols) || 1))));
   }
 }
 
@@ -337,24 +357,6 @@ function localDateKey(date = new Date()) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
-}
-
-function localMonthKey(date = new Date()) {
-  return localDateKey(date).slice(0, 7);
-}
-
-function formatTokenCount(value) {
-  const n = Number(value) || 0;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString('zh-CN');
-}
-
-function formatCostAmounts(cost) {
-  const entries = Object.entries(cost || {}).filter(([, amount]) => amount > 0);
-  if (!entries.length) return null;
-  const symbols = { CNY: '¥', USD: '$' };
-  return entries.map(([currency, amount]) => `${symbols[currency] || currency}${amount < 0.01 && amount > 0 ? amount.toFixed(4) : amount.toFixed(2)}`).join(' + ');
 }
 
 function toast(message, isError = false) {
@@ -470,7 +472,7 @@ function renderWelcome() {
   } else if (step === 1) {
     const options = [
       ['dashboard', 'layout-dashboard', '管理者首页', '目标、风险与 TOP 决策'],
-      ['chat', 'bot', '中枢 Agent', '直接进入跨域经营对话'],
+      ['chat', 'bot', '智能助手', '直接进入跨域经营对话'],
       ['attention', 'list-checks', 'Attention 中心', '先处理需要人介入的事项'],
     ];
     els.welcomeStep.innerHTML = `
@@ -484,7 +486,7 @@ function renderWelcome() {
   } else {
     els.welcomeStep.innerHTML = `
       <h1>工作区已准备就绪</h1>
-      <p>AEOS 将以只读试点边界连接中枢 Agent、Capability、Evidence 与 Guard</p>
+      <p>AEOS 将以只读试点边界连接智能助手、能力、证据与治理</p>
       <div class="welcome-summary">
         <div><span>显示名称</span><strong>${esc(welcomeState.name || '管理者')}</strong></div>
         <div><span>工作角色</span><strong>${esc(welcomeState.role || '决策责任人')}</strong></div>
@@ -583,6 +585,7 @@ function applyProfile() {
 
 function viewVisibleForRole(view, session) {
   const roles = Array.isArray(session?.roles) ? session.roles : [];
+  if (businessMode && MANAGEMENT_VIEWS.has(view)) return false;
   const managerOnly = ['config', 'personnel-admin', 'role-admin', 'permission-admin', 'personnel-onboarding', 'g0-governance'];
   if (managerOnly.includes(view)) return roles.includes('manager');
   const resource = VIEW_RESOURCE[view];
@@ -590,24 +593,40 @@ function viewVisibleForRole(view, session) {
     return myGrants.some((grant) => grant.resourceCode === resource && Array.isArray(grant.operations) && grant.operations.includes('read'));
   }
   if (roles.includes('manager') || roles.includes('supervisor')) return true;
-  return ['chat', 'attention', 'tasks', 'projects', 'evidence'].includes(view);
+  return ['chat', 'attention', 'tasks', 'projects', 'evidence', 'usage', 'borrow'].includes(view);
 }
 
 function defaultViewForSession(session) {
   const roles = Array.isArray(session?.roles) ? session.roles : [];
-  return (roles.includes('manager') || roles.includes('supervisor')) ? 'dashboard' : 'tasks';
+  const preferred = (roles.includes('manager') || roles.includes('supervisor')) ? 'dashboard' : 'tasks';
+  return LOCALLY_HIDDEN_VIEWS.has(preferred) ? 'chat' : preferred;
 }
 
 function applyNavVisibility() {
+  syncViewModeControl();
   $$('.nav-item').forEach((item) => {
     const view = item.dataset.view;
-    if (view) item.classList.toggle('hidden', !viewVisibleForRole(view, authSession));
+    if (view) item.classList.toggle('hidden', LOCALLY_HIDDEN_VIEWS.has(view) || !viewVisibleForRole(view, authSession));
   });
   $$('.nav-group').forEach((group) => {
     const visible = [...group.querySelectorAll('.nav-item')].some((item) => !item.classList.contains('hidden'));
     group.classList.toggle('hidden', !visible);
   });
   $$('.nav-item:not(.hidden)').forEach((node, index) => node.style.setProperty('--nav-order', String(index)));
+}
+
+function canToggleViewMode(session) {
+  const roles = Array.isArray(session?.roles) ? session.roles : [];
+  return roles.some((role) => ['manager', 'supervisor', 'operator', 'owner'].includes(role));
+}
+
+function syncViewModeControl() {
+  const button = $('#btn-view-mode');
+  if (!button) return;
+  const canToggle = canToggleViewMode(authSession);
+  if (!canToggle) businessMode = true;
+  button.classList.toggle('hidden', !canToggle);
+  button.textContent = businessMode ? '切换到完整视图' : '切换到业务视图';
 }
 
 function showWorkspace(entering = false, forcedView = null) {
@@ -677,6 +696,12 @@ async function logout() {
   setLoginBusy(false);
   window.clearInterval(dashboardLiveRefreshTimer);
   dashboardLiveRefreshTimer = null;
+  window.clearInterval(borrowRefreshTimer);
+  borrowRefreshTimer = null;
+  window.clearInterval(opsRefreshTimer);
+  opsRefreshTimer = null;
+  window.clearInterval(aiObsRefreshTimer);
+  aiObsRefreshTimer = null;
   history.replaceState(null, '', location.pathname);
   window.setTimeout(() => (authMode === 'm01' ? els.m01LoginSubmit : els.loginAccount).focus(), 30);
 
@@ -729,12 +754,22 @@ function showView(view, options = {}) {
   if (view === 'inbox') loadInbox();
   if (view === 'registry' || view === 'chat') loadCapabilityRegistry({ silent: view === 'chat' });
   if (view === 'harbor') loadHarbor();
-  if (view === 'squad') { loadHarbor({ silent: true }); loadSquad(); }
   if (view === 'attention') loadSquad({ silent: true });
   if (view === 'chat' && curConvId) send({ type: 'view', conversationId: curConvId });
   if (view === 'execution') loadExecution();
+  if (view === 'usage') loadUsage();
+  if (view === 'borrow') loadBorrowOrders();
+  if (view === 'trace') loadTraceView();
+  if (view === 'ai-obs') loadAiObs();
+  if (view === 'ops') loadOps();
+  if (view === 'writes') loadWrites();
+  if (view === 'chat') loadConnectivity();
   syncDashboardLiveRefresh();
+  syncConnectivityRefresh();
   syncExecutionRefresh();
+  syncBorrowRefresh();
+  syncAiObsRefresh();
+  syncOpsRefresh();
 }
 
 function syncDashboardLiveRefresh() {
@@ -758,6 +793,10 @@ function syncExecutionRefresh() {
 let executionControlsWired = false;
 let selectedExecutionAgent = null;
 let executionAgents = [];
+let executionRuns = [];
+const collapsedExecutionSystems = new Set();
+// 每个智能体独立一份聊天窗口（线程）：切换时隐藏当前、显示目标，各自历史与进行中的查询都不丢。
+const executionThreads = new Map();
 
 function wireExecutionControls() {
   if (executionControlsWired) return;
@@ -768,7 +807,27 @@ function wireExecutionControls() {
     $('.execution-chat-layout')?.classList.toggle('collapsed');
   });
   $('#execution-chat-input')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') sendExecutionQuery(); });
+  $('#btn-execution-agent-trace')?.addEventListener('click', () => openLatestTraceForAgent(selectedExecutionAgent));
+  $('#btn-execution-agent-usage')?.addEventListener('click', () => {
+    const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+    if (selectedExecutionAgent) openUsageForAgent(selectedExecutionAgent, agent?.name);
+  });
   $('#execution-agent-list')?.addEventListener('click', (event) => {
+    const systemUsage = event.target.closest('[data-execution-system-usage]');
+    if (systemUsage) {
+      const key = systemUsage.dataset.executionSystemUsage;
+      const group = groupExecutionAgentsBySystem(executionAgents).find((item) => item.key === key);
+      openUsageForSystem(key, group?.label);
+      return;
+    }
+    const systemToggle = event.target.closest('[data-execution-system-toggle]');
+    if (systemToggle) {
+      const key = systemToggle.dataset.executionSystemToggle;
+      if (collapsedExecutionSystems.has(key)) collapsedExecutionSystems.delete(key);
+      else collapsedExecutionSystems.add(key);
+      renderExecutionAgentList(executionAgents);
+      return;
+    }
     const item = event.target.closest('[data-execution-agent]');
     if (item) selectExecutionAgent(item.dataset.executionAgent);
   });
@@ -790,16 +849,54 @@ function streamTextInto(element, text) {
   step();
 }
 
+let executionUsageByAgent = new Map();
+let executionUsageBySystem = new Map();
+
 async function loadExecution() {
   wireExecutionControls();
   let data;
+  let usage = null;
   try {
-    const response = await fetch('/api/execution/agents');
-    if (!response.ok) return;
-    data = await response.json();
+    const [agentsResponse, usageResponse] = await Promise.all([
+      fetch('/api/execution/agents'),
+      fetch('/api/usage/summary', { headers: { accept: 'application/json' } }).catch(() => null),
+    ]);
+    if (!agentsResponse.ok) return;
+    data = await agentsResponse.json();
+    if (usageResponse?.ok) usage = await usageResponse.json().catch(() => null);
   } catch { return; }
-  executionAgents = Array.isArray(data?.agents) ? data.agents : [];
+  executionAgents = Array.isArray(data?.agents) ? data.agents.filter((agent) => !agent.deregisteredAt) : [];
+  executionRuns = Array.isArray(data?.runs) ? data.runs : [];
+  const byAgent = Array.isArray(usage?.byAgent) ? usage.byAgent : [];
+  const bySystem = Array.isArray(usage?.bySystem) ? usage.bySystem : [];
+  executionUsageByAgent = new Map(byAgent.map((row) => [row.agentId, row]));
+  executionUsageBySystem = new Map(bySystem.map((row) => [row.systemId, row]));
   renderExecutionAgentList(executionAgents);
+}
+
+function executionUsageText(row) {
+  if (!row || !Number(row.events)) return '';
+  const when = row.lastAt ? ` · ${formatBeijingTime(row.lastAt)}` : '';
+  return `¥${formatUsageCost(row.cost)} · ${formatTokenCount(row.events)} 次${when}`;
+}
+
+function renderExecutionAgentItem(agent) {
+  const online = agent.connectionStatus === 'online';
+  const selected = selectedExecutionAgent === agent.agentId;
+  const location = agent.local === true ? '本机' : '远程';
+  const sourceText = typeof agent.sourceSystemName === 'string' && agent.sourceSystemName.trim()
+    ? agent.sourceSystemName.trim()
+    : typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
+      ? agent.sourceSystem.trim()
+      : '来源待补充';
+  const gatewayBadge = agent.agentKind === 'system-gateway'
+    ? `<span class="execution-agent-identity execution-agent-gateway" title="系统网关${agent.gatewayVersion ? ` · v${esc(agent.gatewayVersion)}` : ''}">网关</span>`
+    : '';
+  const usageText = executionUsageText(executionUsageByAgent.get(agent.agentId));
+  return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
+    <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceText)}">来源：${esc(sourceText)}</span>${gatewayBadge}${agent.simulated === true ? '<span class="execution-agent-identity execution-agent-simulated">模拟</span>' : ''}</span>${usageText ? `<span class="execution-agent-usage" title="调用次数与成本">${esc(usageText)}</span>` : ''}</span>
+    <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
+  </button>`;
 }
 
 function renderExecutionAgentList(agents) {
@@ -810,28 +907,1683 @@ function renderExecutionAgentList(agents) {
     refreshIcons(root);
     return;
   }
-  root.innerHTML = agents.map((agent) => {
-    const online = agent.connectionStatus === 'online';
-    const selected = selectedExecutionAgent === agent.agentId;
-    const location = agent.local === true ? '本机' : '远程';
-    const sourceSystem = typeof agent.sourceSystem === 'string' && agent.sourceSystem.trim()
-      ? agent.sourceSystem.trim()
-      : '来源待补充';
-    return `<button class="execution-agent-item${selected ? ' selected' : ''}" type="button" data-execution-agent="${esc(agent.agentId)}"${online ? '' : ' disabled'}>
-      <span class="execution-agent-title"><span class="execution-agent-name">${esc(agent.name)}</span><span class="execution-agent-identities"><span class="execution-agent-identity execution-agent-location ${agent.local === true ? 'local' : 'remote'}">${location}</span><span class="execution-agent-identity execution-agent-source" title="来源系统：${esc(sourceSystem)}">来源：${esc(sourceSystem)}</span></span></span>
-      <b class="status-pill ${online ? 'ok' : 'info'}">${esc(executionConnectionLabel(agent.connectionStatus))}</b>
+  const groups = groupExecutionAgentsBySystem(agents);
+  root.innerHTML = groups.map((group) => {
+    const collapsed = collapsedExecutionSystems.has(group.key);
+    return `<section class="execution-system-group">
+      <div class="execution-system-head-row">
+        <button class="execution-system-head" type="button" data-execution-system-toggle="${esc(group.key)}" aria-expanded="${!collapsed}">
+          <i data-lucide="${collapsed ? 'chevron-right' : 'chevron-down'}"></i>
+          <span class="execution-system-name">${esc(group.label)}</span>
+          <span class="execution-system-usage">${esc(executionUsageText(executionUsageBySystem.get(group.key)))}</span>
+          <span class="execution-system-count">${group.onlineCount}/${group.total} 在线</span>
+        </button>
+        <button class="execution-system-usage-btn" type="button" data-execution-system-usage="${esc(group.key)}" title="查看该系统成本"><i data-lucide="book-open"></i>成本</button>
+      </div>
+      <div class="execution-system-agents${collapsed ? ' hidden' : ''}">${group.agents.map(renderExecutionAgentItem).join('')}</div>
+    </section>`;
+  }).join('');
+  refreshIcons(root);
+}
+
+let usageSummary = null;
+let usageControlsWired = false;
+let usageFocus = null;
+
+function openLatestTraceForAgent(agentId) {
+  if (!agentId) return;
+  const latest = (executionRuns || [])
+    .filter((run) => run.agentId === agentId)
+    .sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))[0];
+  if (!latest) { toast('该 Agent 还没有执行记录'); return; }
+  openTraceFor(latest.traceId || latest.runId);
+}
+
+function openUsageForAgent(agentId, label) {
+  usageFocus = { kind: 'agent', id: agentId, label: label || usageAgentLabel(agentId) };
+  usageTab = 'system';
+  showView('usage');
+}
+
+function openUsageForSystem(systemId, label) {
+  usageFocus = { kind: 'system', id: systemId, label: label || usageSystemLabel(systemId) };
+  usageTab = 'system';
+  showView('usage');
+}
+
+function wireUsageControls() {
+  if (usageControlsWired) return;
+  usageControlsWired = true;
+  $('#btn-usage-refresh')?.addEventListener('click', () => loadUsage());
+  $('#usage-focus')?.addEventListener('click', (event) => {
+    if (!event.target.closest('[data-usage-focus-clear]')) return;
+    usageFocus = null;
+    renderUsage();
+  });
+  $$('.usage-tabs [data-usage-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      usageTab = button.dataset.usageTab === 'caller' ? 'caller' : 'system';
+      renderUsage();
+    });
+  });
+}
+
+function formatTokenCount(value) {
+  return Number(value ?? 0).toLocaleString('zh-CN');
+}
+
+function formatUsageCost(value) {
+  const amount = Number(value ?? 0);
+  if (amount === 0) return '0.00';
+  if (amount < 0.01) return String(parseFloat(amount.toFixed(6)));
+  return amount.toFixed(2);
+}
+
+/** 把技术错误码翻成业务用户能理解的一句话。 */
+const ERROR_HINTS = {
+  CAPABILITY_FORBIDDEN: '当前智能助手没有这项权限，请联系管理员开通',
+  UPSTREAM_UNAVAILABLE: '中台服务暂时不可用，请稍后重试',
+  UPSTREAM_AUTH_FAILED: '中台认证失败，请联系管理员检查配置',
+  UPSTREAM_TIMEOUT: '中台分析超时，请稍后重试',
+  REASONING_ABORTED: '分析已取消',
+  TASK_CANCELLED: '分析已取消',
+  TASK_IN_PROGRESS: '同一任务正在处理中，请稍候',
+  NOT_FOUND: '没有找到可用数据，这不代表没有风险',
+  INVALID_ARGUMENT: '提交的信息不完整，请补充订单号等业务信息后重试',
+  DISPATCH_TIMEOUT: '处理超时，请稍后重试',
+  RUN_TIMEOUT: '处理超时，请稍后重试',
+  EXECUTION_TIMEOUT: '处理超时，请稍后重试',
+  AGENT_OFFLINE: '智能助手暂时离线，请稍后重试',
+  AGENT_NOT_ALLOWED: '该智能助手未获授权接入',
+  PROVIDER_RECALLED: '处理已取消',
+  FORBIDDEN: '没有权限执行该操作',
+  RATE_LIMITED: '请求过于频繁，请稍后再试',
+  INTERNAL_ERROR: '系统内部错误，请联系管理员',
+};
+
+function humanizeError(code, message) {
+  const hint = ERROR_HINTS[String(code || '').trim()] || '';
+  const detail = typeof message === 'string' ? message.trim() : '';
+  if (hint) return detail && !detail.includes(hint) ? `${hint}（${detail}）` : hint;
+  return detail || '处理失败，请稍后重试';
+}
+
+function usageTableHtml(rows, key, emptyText, headLabel = '') {
+  if (!rows.length) return `<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>${esc(emptyText)}</small></div>`;
+  const head = headLabel || { agentId: 'Agent', systemId: '系统', callerId: '调用方' }[key] || key;
+  const compact = businessMode;
+  const body = rows.map((row) => {
+    const raw = row[key];
+    const label = key === 'callerId'
+      ? usageCallerLabel(raw)
+      : key === 'agentId' || key === 'callerAgentId'
+        ? usageAgentLabel(raw)
+        : key === 'systemId' ? usageSystemLabel(raw) : raw;
+    const tokens = (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0);
+    const queryOnly = (Number(row.events) || 0) > 0
+      && Number(row.queryEvents) === Number(row.events)
+      && tokens === 0
+      && Number(row.cost) === 0;
+    const costCell = queryOnly
+      ? '<span class="num" title="查询接口不产生模型费用">—</span>'
+      : `<span class="num">¥${formatUsageCost(row.cost)}</span>`;
+    if (compact) {
+      return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span>${costCell}<span class="num">${formatTokenCount(row.events)}</span></div>`;
+    }
+    const inputCell = queryOnly
+      ? '<span class="num" title="查询接口不经过模型，不产生模型 Token">无模型 Token</span>'
+      : `<span class="num">${formatTokenCount(row.tokensIn)}</span>`;
+    const outputCell = queryOnly ? '<span class="num">—</span>' : `<span class="num">${formatTokenCount(row.tokensOut)}</span>`;
+    return `<div class="harbor-row"><span title="${esc(raw)}">${esc(label)}</span>${inputCell}${outputCell}${costCell}<span class="num">${formatTokenCount(row.events)}</span></div>`;
+  }).join('');
+  const header = compact
+    ? `<div class="harbor-row harbor-head"><span>${head}</span><span class="num">成本（¥）</span><span class="num">次数</span></div>`
+    : `<div class="harbor-row harbor-head"><span>${head}</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">调用次数</span></div>`;
+  return `<div class="harbor-table usage-table${compact ? ' compact' : ''}">${header}${body}</div>`;
+}
+
+const USAGE_AGENT_LABELS = {
+  'agent-aeos-hub': 'AEOS 智能助手',
+  'control-platform-assistant': '中台助手',
+  'gateway-control-platform': '中台分析通道（网关）',
+  'runtime-control-platform-agent': '中台执行面（历史）',
+  'runtime-control-platform-query': '中台查询（历史）',
+  'runtime-control-platform-reasoning': '中台分析（历史）',
+  'runtime-control-platform-order': '中台订单（历史）',
+  'runtime-execution-query': '恒剑 PLM 执行面智能体',
+  'usage-probe-agent': '用量探针（临时）',
+};
+const EXECUTION_CHANNEL_PREFIXES = ['gateway-', 'runtime-'];
+function isExecutionChannelAgent(agentId) {
+  const id = String(agentId || '');
+  return EXECUTION_CHANNEL_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+function isProbeAgent(agentId) {
+  return /(probe|demo)/i.test(String(agentId || ''));
+}
+function isQueryOnlyUsageRow(row) {
+  const tokens = (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0);
+  return (Number(row.events) || 0) > 0
+    && Number(row.queryEvents) === Number(row.events)
+    && tokens === 0
+    && Number(row.cost) === 0;
+}
+
+const USAGE_SYSTEM_LABELS = {
+  'aeos-hub': 'AEOS Hub',
+  'control-platform': '公司中控平台',
+  'demo-usage-probe': '用量探针（临时）',
+};
+let usageAgentNames = new Map();
+let usageSimulatedAgentIds = new Set();
+let usageAgentSystem = new Map();
+let usageTab = 'system';
+
+function usageAgentLabel(agentId) {
+  const label = USAGE_AGENT_LABELS[agentId] || usageAgentNames.get(agentId) || agentId;
+  return usageSimulatedAgentIds.has(agentId) ? `${label}（模拟）` : label;
+}
+
+function usageSystemLabel(systemId) {
+  return USAGE_SYSTEM_LABELS[systemId] || systemId;
+}
+
+/** 验证/验收脚本使用的调用方 ID；显式标注，避免被误读成生产调用方。 */
+const USAGE_CALLER_LABELS = {
+  'AG-SWEEP': '巡检 Agent（验收测试）',
+  'sweep-user': '巡检用户（验收测试）',
+  'AG-FULL': '全量验收 Agent（验收测试）',
+  'sweep': '全量验收用户（验收测试）',
+  'AG-VERIFY': '核验 Agent（验收测试）',
+  'verify-user': '核验用户（验收测试）',
+  'AG-ACCEPT-1': '验收 Agent 1（验收测试）',
+  'accept-user-1': '验收用户 1（验收测试）',
+  'AG-BASELINE': '基线 Agent（验收测试）',
+  'baseline-user': '基线用户（验收测试）',
+  'AG-DEMO-1': '演示 Agent（测试）',
+  '10086': '演示用户（测试）',
+};
+
+/** 调用方 ID 来自外部系统 caller；M01 用户与验收脚本给可读名称，未知 ID 保留原值。 */
+function usageCallerLabel(callerId) {
+  const raw = String(callerId || '').trim();
+  if (!raw) return '—';
+  if (authSession?.actorId && raw === authSession.actorId) return '我（M01 用户）';
+  if (USAGE_CALLER_LABELS[raw]) return USAGE_CALLER_LABELS[raw];
+  if (raw.startsWith('m01:user:')) return `M01 用户 · ${raw.slice(-8)}`;
+  return raw;
+}
+
+async function loadUsage() {
+  wireUsageControls();
+  let data;
+  try {
+    const [usageResponse, agentsResponse] = await Promise.all([
+      fetch('/api/usage/summary', { headers: { accept: 'application/json' } }),
+      fetch('/api/execution/agents', { headers: { accept: 'application/json' } }),
+    ]);
+    if (!usageResponse.ok) return;
+    data = await usageResponse.json();
+    if (agentsResponse.ok) {
+      const agentsData = await agentsResponse.json();
+      usageAgentNames = new Map((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
+        .map((agent) => [agent.agentId, agent.name]));
+      usageSimulatedAgentIds = new Set((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
+        .filter((agent) => agent.simulated === true)
+        .map((agent) => agent.agentId));
+      usageAgentSystem = new Map((Array.isArray(agentsData?.agents) ? agentsData.agents : [])
+        .map((agent) => [agent.agentId, agent.systemId || agent.sourceSystem || '']));
+    }
+  } catch { return; }
+  usageSummary = data;
+  try {
+    renderUsage();
+  } catch (error) {
+    const root = $('#usage-list');
+    if (root) root.innerHTML = '<div class="harbor-empty"><i data-lucide="book-open"></i><strong>用量明细加载失败</strong><small>请刷新重试；若持续出现请联系管理员</small></div>';
+    console.error('[usage] 渲染失败', error);
+  }
+}
+
+function usageDisplayAgents(rows) {
+  // 业务视图隐藏探针与模拟数据，但保留真实执行通道（中台网关等）的成本。
+  return businessMode
+    ? rows.filter((row) => !isProbeAgent(row.agentId) && !usageSimulatedAgentIds.has(row.agentId))
+    : rows;
+}
+
+function usageHierarchyHtml(bySystem, byAgent) {
+  const compact = businessMode;
+  const agents = usageDisplayAgents(byAgent).slice()
+    .sort((left, right) => Number(right.cost || 0) - Number(left.cost || 0));
+  const groups = new Map();
+  for (const row of agents) {
+    const systemId = usageAgentSystem.get(row.agentId)
+      || (row.agentId === 'agent-aeos-hub' ? 'aeos-hub' : 'unknown');
+    const list = groups.get(systemId) || [];
+    list.push(row);
+    groups.set(systemId, list);
+  }
+  const order = [];
+  for (const row of bySystem) if (!order.includes(row.systemId)) order.push(row.systemId);
+  for (const systemId of groups.keys()) if (!order.includes(systemId)) order.push(systemId);
+  const time = (value) => value ? formatDateTimeText(value) : '—';
+  const rows = [];
+  for (const systemId of order) {
+    const system = bySystem.find((row) => row.systemId === systemId);
+    if (system) {
+      rows.push(compact
+        ? `<div class="harbor-row usage-system-row"><span>${esc(usageSystemLabel(systemId))}</span><span class="num">¥${formatUsageCost(system.cost)}</span><span class="num">${formatTokenCount(system.events)}</span></div>`
+        : `<div class="harbor-row usage-system-row"><span>${esc(usageSystemLabel(systemId))}</span><span class="num">${formatTokenCount(system.tokensIn)}</span><span class="num">${formatTokenCount(system.tokensOut)}</span><span class="num">¥${formatUsageCost(system.cost)}</span><span class="num">${formatTokenCount(system.events)}</span><span class="num">${esc(time(system.lastAt))}</span></div>`);
+    }
+    for (const row of groups.get(systemId) || []) {
+      const queryOnly = isQueryOnlyUsageRow(row);
+      const cost = queryOnly ? '—' : `¥${formatUsageCost(row.cost)}`;
+      rows.push(compact
+        ? `<div class="harbor-row usage-agent-row"><span>${esc(usageAgentLabel(row.agentId))}</span><span class="num">${cost}</span><span class="num">${formatTokenCount(row.events)}</span></div>`
+        : `<div class="harbor-row usage-agent-row"><span>${esc(usageAgentLabel(row.agentId))}</span><span class="num">${queryOnly ? '无模型 Token' : formatTokenCount(row.tokensIn)}</span><span class="num">${queryOnly ? '—' : formatTokenCount(row.tokensOut)}</span><span class="num">${cost}</span><span class="num">${formatTokenCount(row.events)}</span><span class="num">${esc(time(row.lastAt))}</span></div>`);
+    }
+  }
+  if (!rows.length) return '<div class="harbor-empty"><i data-lucide="book-open"></i><strong>暂无用量记录</strong><small>还没有产生分析成本</small></div>';
+  const header = compact
+    ? '<div class="harbor-row harbor-head"><span>系统 / Agent</span><span class="num">成本（¥）</span><span class="num">次数</span></div>'
+    : '<div class="harbor-row harbor-head"><span>系统 / Agent</span><span class="num">输入 Token</span><span class="num">输出 Token</span><span class="num">成本（¥）</span><span class="num">次数</span><span class="num">最近</span></div>';
+  return `<div class="harbor-table usage-table usage-hierarchy${compact ? ' compact' : ''}">${header}${rows.join('')}</div>`;
+}
+
+function renderUsage() {
+  const root = $('#usage-list');
+  if (!root) return;
+  const byAgent = Array.isArray(usageSummary?.byAgent) ? usageSummary.byAgent : [];
+  const bySystem = Array.isArray(usageSummary?.bySystem) ? usageSummary.bySystem : [];
+  const byCallerAgent = Array.isArray(usageSummary?.byCallerAgent) ? usageSummary.byCallerAgent : [];
+  const byCallerUser = Array.isArray(usageSummary?.byCallerUser) ? usageSummary.byCallerUser : [];
+  const displayAgents = usageDisplayAgents(byAgent);
+  const focusAgentId = usageFocus?.kind === 'agent' ? usageFocus.id : null;
+  const focusSystemId = usageFocus?.kind === 'system' ? usageFocus.id : null;
+  const focusedSystemOfAgent = focusAgentId
+    ? (usageAgentSystem.get(focusAgentId) || (focusAgentId === 'agent-aeos-hub' ? 'aeos-hub' : null))
+    : null;
+  const filteredAgents = focusAgentId
+    ? displayAgents.filter((row) => row.agentId === focusAgentId)
+    : focusSystemId
+      ? displayAgents.filter((row) => (usageAgentSystem.get(row.agentId) || (row.agentId === 'agent-aeos-hub' ? 'aeos-hub' : '')) === focusSystemId)
+      : displayAgents;
+  const filteredSystems = focusAgentId
+    ? bySystem.filter((row) => row.systemId === focusedSystemOfAgent)
+    : focusSystemId
+      ? bySystem.filter((row) => row.systemId === focusSystemId)
+      : bySystem;
+  const totalCost = byAgent.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
+  const totalTokens = byAgent.reduce((sum, row) => sum + (Number(row.tokensIn) || 0) + (Number(row.tokensOut) || 0), 0);
+  const totalEvents = byAgent.reduce((sum, row) => sum + (Number(row.events) || 0), 0);
+
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#usage-total-cost', `¥${formatUsageCost(totalCost)}`);
+  setText('#usage-total-events', formatTokenCount(totalEvents));
+  setText('#usage-system-count', formatTokenCount(bySystem.length));
+  setText('#usage-agent-count', formatTokenCount(displayAgents.length));
+  setText('#usage-total-tokens', formatTokenCount(totalTokens));
+  $('#usage-token-metric')?.classList.toggle('hidden', businessMode);
+  const focusHost = $('#usage-focus');
+  if (focusHost) {
+    if (usageFocus) {
+      focusHost.classList.remove('hidden');
+      focusHost.innerHTML = `<span>仅看：<b>${esc(usageFocus.label)}</b></span><button class="btn ghost compact" type="button" data-usage-focus-clear>清除</button>`;
+    } else {
+      focusHost.classList.add('hidden');
+      focusHost.innerHTML = '';
+    }
+  }
+  $$('.usage-tabs [data-usage-tab]').forEach((button) => {
+    const active = button.dataset.usageTab === usageTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+
+  if (usageTab === 'caller') {
+    root.innerHTML = `<p class="form-hint usage-caller-note">标注“验收测试/测试”的调用方来自接入验收脚本，不是生产调用；需要从成本中剔除请告知。</p><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方用户</h2><p>外部系统用户维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerUser, 'callerId', '暂无调用方归属：调用尚未携带 caller', '调用方用户')}</section><section class="surface usage-block"><div class="surface-head"><div><h2>按调用方 Agent</h2><p>外部系统 Agent 维度的成本（来自调用方 caller）</p></div></div>${usageTableHtml(byCallerAgent, 'callerId', '暂无调用方归属：调用尚未携带 caller', '调用方 Agent')}</section>`;
+  } else {
+    root.innerHTML = `<section class="surface usage-block"><div class="surface-head"><div><h2>按系统与 Agent</h2><p>系统汇总在前，Agent 明细在后；调用次数与成本来自执行回传</p></div></div>${usageHierarchyHtml(filteredSystems, filteredAgents)}</section>`;
+  }
+  refreshIcons(root);
+}
+
+
+// ---------- 分析通道连通性（只统计外部系统，不包含本地助手运行时） ----------
+let connectivitySummary = null;
+let connectivityRefreshTimer = null;
+
+const DATA_FRESHNESS_STALE_HOURS = 24;
+const DATA_FRESHNESS_LABELS = { order: '订单', shortage: '缺料', kitting: '齐套', quality: '质量', production: '生产' };
+
+function parseDataStamp(value) {
+  if (!value) return null;
+  // 中台历史接口的 data_as_of 可能是不带时区的北京时间，按本地时间解析。
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** 取各业务域 data_as_of 中最早的一条作为整体数据基准；超过 24 小时或置信度低即视为过期。 */
+function computeDataFreshness(snapshot) {
+  if (!snapshot) return null;
+  const entries = [];
+  for (const [name, domain] of Object.entries(snapshot.domains || {})) {
+    const ms = parseDataStamp(domain?.dataAsOf);
+    if (ms === null) continue;
+    entries.push({ name, label: DATA_FRESHNESS_LABELS[name] || name, ms, stamp: domain.dataAsOf });
+  }
+  if (!entries.length) return null;
+  entries.sort((left, right) => left.ms - right.ms);
+  const oldest = entries[0];
+  const ageHours = (Date.now() - oldest.ms) / 3_600_000;
+  const ageStale = ageHours >= DATA_FRESHNESS_STALE_HOURS;
+  const lowConfidence = snapshot.businessData?.confidence === 'low';
+  return {
+    entries,
+    oldest,
+    ageHours,
+    ageStale,
+    lowConfidence,
+    stale: ageStale || lowConfidence,
+    detail: entries.map((entry) => `${entry.label} ${formatBeijingDate(entry.stamp)}`).join(' · '),
+  };
+}
+
+function renderDataFreshness(snapshot) {
+  const chip = els.dataFreshnessChip;
+  const label = els.dataFreshnessLabel;
+  if (!chip || !label) return;
+  const freshness = computeDataFreshness(snapshot);
+  if (!freshness) {
+    chip.classList.add('hidden');
+    return;
+  }
+  chip.classList.remove('hidden');
+  const oldestDate = formatBeijingDate(freshness.oldest.stamp);
+  const days = Math.floor(freshness.ageHours / 24);
+  chip.title = `中台数据基准：${freshness.detail}`;
+  chip.classList.toggle('stale', freshness.stale);
+  label.textContent = freshness.ageStale
+    ? `${freshness.oldest.label}数据 ${oldestDate}${days >= 1 ? ` · 已过期 ${days} 天` : ' · 可能已过期'}`
+    : freshness.lowConfidence
+      ? `数据置信度低 · ${oldestDate}`
+      : `数据基准 ${oldestDate}`;
+}
+
+async function loadConnectivity() {
+  try {
+    const response = await fetch('/api/connectivity', { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    connectivitySummary = await response.json();
+    renderConnectivity();
+  } catch {
+    // 状态读取失败不阻断页面；保留上一次结果，首次失败时给出明确提示。
+    if (!connectivitySummary) {
+      const label = $('#assistant-connectivity-label');
+      if (label) label.textContent = '分析通道 · 状态未知';
+    }
+  }
+  // 数据基准提示复用看板快照；进入助手页时按需静默加载一次（服务端有缓存，不会额外打中台）。
+  if (!dashboardSnapshot) loadDashboard({ silent: true });
+  else renderDataFreshness(dashboardSnapshot);
+}
+
+function renderConnectivity() {
+  const label = $('#assistant-connectivity-label');
+  const dot = $('#assistant-connectivity-dot');
+  const panel = $('#assistant-connectivity-panel');
+  const summary = connectivitySummary;
+  if (!summary) {
+    if (label) label.textContent = '分析通道 · 检查中';
+    return;
+  }
+  const status = summary.summary?.status || 'empty';
+  if (label) {
+    label.textContent = status === 'empty'
+      ? '分析通道 · 暂无系统'
+      : `分析通道 · ${summary.summary.online}/${summary.summary.total} 在线`;
+  }
+  if (dot) dot.className = `live-dot ${status === 'ok' ? 'ok' : status === 'partial' ? 'warn' : status === 'down' ? 'down' : ''}`;
+  if (!panel) return;
+  if (!Array.isArray(summary.systems) || !summary.systems.length) {
+    panel.innerHTML = '<div class="connectivity-empty">暂无外部系统接入</div>';
+    return;
+  }
+  panel.innerHTML = summary.systems.map((system) => (
+    `<div class="connectivity-row"><span>${esc(system.name)}</span><b class="status-pill ${system.online === system.total ? 'ok' : system.online > 0 ? 'warn' : 'danger'}">${system.online}/${system.total}</b><small>${system.lastSeenAt ? `最近 ${esc(formatBeijingTime(system.lastSeenAt))}` : '无连接'}</small></div>`
+  )).join('') + '<button class="btn ghost compact connectivity-more" type="button" data-open-ops>查看运行状态</button>';
+  refreshIcons(panel);
+}
+
+function toggleConnectivityPanel() {
+  const panel = $('#assistant-connectivity-panel');
+  const chip = $('#assistant-connectivity-chip');
+  if (!panel) return;
+  const hidden = panel.classList.toggle('hidden');
+  chip?.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  if (!hidden) void loadConnectivity();
+}
+
+function syncConnectivityRefresh() {
+  window.clearInterval(connectivityRefreshTimer);
+  connectivityRefreshTimer = null;
+  if (currentView !== 'chat') return;
+  connectivityRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void loadConnectivity();
+  }, 30000);
+}
+
+// ---------- 写操作（提交 / 审批 / 追踪） ----------
+let writeCapabilities = [];
+let writeRequests = [];
+let writeControlsWired = false;
+
+const WRITE_STATUS_LABELS = {
+  pending_approval: '待审批',
+  rejected: '已拒绝',
+  dispatched: '已派单',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+const WRITE_STATUS_TONES = {
+  pending_approval: 'warn',
+  rejected: 'neutral',
+  dispatched: 'info',
+  completed: 'ok',
+  failed: 'danger',
+  cancelled: 'neutral',
+};
+const WRITE_OPERATION_LABELS = {
+  'order.update_note': '订单备注',
+  'order.update_status': '订单状态',
+};
+
+function writeOperationLabel(operation) {
+  return WRITE_OPERATION_LABELS[operation] || operation || '写操作';
+}
+
+function currentWriteCapability() {
+  const select = $('#write-capability-select');
+  const index = Number(select?.value);
+  return Number.isInteger(index) ? writeCapabilities[index] || null : null;
+}
+
+function renderWriteOperations() {
+  const operationSelect = $('#write-operation-select');
+  if (!operationSelect) return;
+  const capability = currentWriteCapability();
+  const operations = Array.isArray(capability?.operations) ? capability.operations : [];
+  operationSelect.innerHTML = operations.length
+    ? operations.map((operation) => `<option value="${esc(operation)}">${esc(writeOperationLabel(operation))}</option>`).join('')
+    : '<option value="">无可用操作</option>';
+}
+
+function renderWriteCapabilityOptions() {
+  const select = $('#write-capability-select');
+  const caption = $('#write-capability-caption');
+  const submit = $('#btn-write-submit');
+  if (!select) return;
+  if (!writeCapabilities.length) {
+    select.innerHTML = '<option value="">暂无写能力</option>';
+    if (caption) caption.textContent = '提供方尚未注册写能力（需要中台在网关注册 write_control_platform）';
+    if (submit) submit.disabled = true;
+    renderWriteOperations();
+    return;
+  }
+  select.innerHTML = writeCapabilities.map((capability, index) => (
+    `<option value="${index}">${esc(capability.systemName)} · ${esc(capability.capability)}</option>`
+  )).join('');
+  if (caption) caption.textContent = `共 ${writeCapabilities.length} 项写能力；批准后才会派单`;
+  if (submit) submit.disabled = false;
+  renderWriteOperations();
+}
+
+function writeRequestChanges(record) {
+  const changes = record?.input?.changes;
+  if (!changes || typeof changes !== 'object') return '';
+  return Object.entries(changes).map(([key, value]) => `${key}=${String(value)}`).join('，');
+}
+
+function writeRequestRow(record, pending) {
+  const target = record?.input?.orderNo || record?.input?.target?.orderNo || '—';
+  const changes = writeRequestChanges(record);
+  const details = [
+    record?.requestedBy?.name || record?.requestedBy?.id || '',
+    formatDateTimeText(record?.createdAt),
+    record?.approval?.by ? `审批人 ${record.approval.by}` : '',
+    record?.rejection?.reason ? `拒绝原因 ${record.rejection.reason}` : '',
+    record?.error?.code ? `错误 ${record.error.code}` : '',
+  ].filter(Boolean).join(' · ');
+  const actions = pending
+    ? `<span class="write-actions"><button class="btn primary compact" type="button" data-write-approve="${esc(record.id)}">批准</button><button class="btn secondary compact" type="button" data-write-reject="${esc(record.id)}">拒绝</button></span>`
+    : '';
+  return `<div class="write-row">
+    <div class="write-main">
+      <strong>${esc(writeOperationLabel(record?.operation))} · ${esc(target)}</strong>
+      <small>${esc(record?.capability || '')} · ${esc(record?.systemId || '')}${changes ? ` · ${esc(changes)}` : ''}</small>
+      <small>原因：${esc(record?.reason || '—')}</small>
+      <small class="write-meta">${esc(details)}</small>
+    </div>
+    <span class="status-pill ${esc(WRITE_STATUS_TONES[record?.status] || 'neutral')}">${esc(WRITE_STATUS_LABELS[record?.status] || record?.status || '未知')}</span>
+    ${actions}
+  </div>`;
+}
+
+function renderWriteLists() {
+  const pending = writeRequests.filter((record) => record.status === 'pending_approval');
+  const history = writeRequests.filter((record) => record.status !== 'pending_approval');
+  const pendingCount = $('#write-pending-count');
+  if (pendingCount) {
+    pendingCount.textContent = String(pending.length);
+    pendingCount.className = `status-pill ${pending.length ? 'warn' : 'info'}`;
+  }
+  const pendingHost = $('#write-pending-list');
+  if (pendingHost) {
+    pendingHost.innerHTML = pending.length
+      ? pending.map((record) => writeRequestRow(record, true)).join('')
+      : '<div class="harbor-empty"><i data-lucide="check-circle"></i><strong>没有待审批的写操作</strong><small>提交写请求后会出现在这里</small></div>';
+  }
+  const historyHost = $('#write-history-list');
+  if (historyHost) {
+    historyHost.innerHTML = history.length
+      ? history.map((record) => writeRequestRow(record, false)).join('')
+      : '<div class="harbor-empty"><i data-lucide="history"></i><strong>暂无历史</strong><small>审批或执行后的写操作会显示在这里</small></div>';
+  }
+  refreshIcons(pendingHost || document);
+  refreshIcons(historyHost || document);
+}
+
+async function loadWrites() {
+  wireWriteControls();
+  try {
+    const [capabilityResponse, listResponse] = await Promise.all([
+      fetch('/api/write-requests/capabilities', { headers: { accept: 'application/json' } }),
+      fetch('/api/write-requests?limit=100', { headers: { accept: 'application/json' } }),
+    ]);
+    writeCapabilities = capabilityResponse.ok ? (await capabilityResponse.json())?.capabilities || [] : [];
+    writeRequests = listResponse.ok ? (await listResponse.json())?.requests || [] : [];
+  } catch {
+    writeCapabilities = [];
+    writeRequests = [];
+  }
+  renderWriteCapabilityOptions();
+  renderWriteLists();
+}
+
+async function submitWriteRequest(event) {
+  event.preventDefault();
+  const capability = currentWriteCapability();
+  if (!capability) { toast('暂无可用的写能力', true); return; }
+  const operation = $('#write-operation-select')?.value || '';
+  const orderNo = $('#write-order-no')?.value.trim() || '';
+  const value = $('#write-change-value')?.value.trim() || '';
+  const reason = $('#write-reason')?.value.trim() || '';
+  if (!operation || !orderNo || !value || !reason) {
+    toast('请填写操作、订单号、变更内容和原因', true);
+    return;
+  }
+  const changes = operation.endsWith('update_note') ? { remark: value } : { status: value };
+  const status = $('#write-form-status');
+  if (status) status.textContent = '提交中...';
+  try {
+    const response = await fetch('/api/write-requests', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        capability: capability.capability,
+        systemId: capability.systemId,
+        input: { operation, orderNo, changes },
+        reason,
+        idempotencyKey: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `write-${Date.now()}`,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    if (status) status.textContent = '已提交，等待审批';
+    $('#write-request-form')?.reset();
+    renderWriteOperations();
+    await loadWrites();
+    toast('写请求已提交，等待审批');
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    toast(`提交失败：${error.message}`, true);
+  }
+}
+
+async function decideWriteRequest(id, action) {
+  let note = '';
+  if (action === 'reject') {
+    note = window.prompt('拒绝原因') || '';
+    if (!note.trim()) return;
+  }
+  try {
+    const response = await fetch(`/api/write-requests/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(action === 'reject' ? { reason: note } : {}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    toast(action === 'approve' ? '已批准并派单' : '已拒绝');
+    await loadWrites();
+  } catch (error) {
+    toast(`操作失败：${error.message}`, true);
+  }
+}
+
+function wireWriteControls() {
+  if (writeControlsWired) return;
+  writeControlsWired = true;
+  $('#btn-writes-refresh')?.addEventListener('click', () => loadWrites());
+  $('#write-capability-select')?.addEventListener('change', () => renderWriteOperations());
+  $('#write-request-form')?.addEventListener('submit', (event) => { void submitWriteRequest(event); });
+  $('#write-pending-list')?.addEventListener('click', (event) => {
+    const approve = event.target.closest('[data-write-approve]');
+    if (approve) { void decideWriteRequest(approve.getAttribute('data-write-approve') || '', 'approve'); return; }
+    const reject = event.target.closest('[data-write-reject]');
+    if (reject) { void decideWriteRequest(reject.getAttribute('data-write-reject') || '', 'reject'); }
+  });
+}
+
+// ---------- 跨系统借调（只读监控） ----------
+const BORROW_STATUS_LABELS = {
+  pending: '待派单', dispatched: '已派单', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消',
+};
+const BORROW_STATUS_TONES = {
+  pending: 'info', dispatched: 'info', running: 'warn', completed: 'ok', failed: 'danger', cancelled: 'neutral',
+};
+let borrowOrders = [];
+let borrowCounts = null;
+let selectedBorrowOrderId = null;
+let borrowDetail = null;
+let borrowControlsWired = false;
+
+function borrowStatusPill(status) {
+  const tone = BORROW_STATUS_TONES[status] || 'neutral';
+  const label = BORROW_STATUS_LABELS[status] || status || '未知';
+  return `<b class="status-pill ${tone}">${esc(label)}</b>`;
+}
+
+function borrowTime(value) {
+  if (!value) return '—';
+  return esc(formatBeijingDateTime(value));
+}
+
+function wireBorrowControls() {
+  if (borrowControlsWired) return;
+  borrowControlsWired = true;
+  $('#btn-borrow-refresh')?.addEventListener('click', () => loadBorrowOrders());
+  $('#borrow-status-filter')?.addEventListener('change', () => loadBorrowOrders());
+  $('#btn-borrow-collapse')?.addEventListener('click', clearBorrowSelection);
+  $('#borrow-list')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-borrow-order]');
+    const orderId = target?.getAttribute('data-borrow-order');
+    if (!orderId) return;
+    // 再次点击同一张单 = 收起详情。
+    if (orderId === selectedBorrowOrderId) clearBorrowSelection();
+    else loadBorrowOrderDetail(orderId);
+  });
+}
+
+function clearBorrowSelection() {
+  selectedBorrowOrderId = null;
+  borrowDetail = null;
+  renderBorrowDetail();
+  renderBorrowList();
+}
+
+async function loadBorrowOrders(options = {}) {
+  wireBorrowControls();
+  const root = $('#borrow-list');
+  if (!options.silent && root && !borrowOrders.length) root.innerHTML = '<div class="dashboard-loading">正在读取借调单…</div>';
+  const status = $('#borrow-status-filter')?.value || 'all';
+  const query = new URLSearchParams({ limit: '100' });
+  if (status !== 'all') query.set('status', status);
+  let data;
+  try {
+    const response = await fetch(`/api/borrow-orders?${query.toString()}`, { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  borrowOrders = Array.isArray(data?.orders) ? data.orders : [];
+  borrowCounts = data?.counts ?? null;
+  renderBorrowMetrics();
+  renderBorrowList();
+  if (selectedBorrowOrderId) await loadBorrowOrderDetail(selectedBorrowOrderId, { silent: true });
+}
+
+function renderBorrowMetrics() {
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#borrow-total', formatTokenCount(borrowCounts?.total ?? 0));
+  setText('#borrow-active', formatTokenCount(borrowCounts?.active ?? 0));
+  setText('#borrow-completed', formatTokenCount(borrowCounts?.completed ?? 0));
+  setText('#borrow-failed', formatTokenCount(borrowCounts?.failed ?? 0));
+}
+
+function renderBorrowList() {
+  const root = $('#borrow-list');
+  if (!root) return;
+  if (!borrowOrders.length) {
+    root.innerHTML = harborEmpty('arrow-left-right', '暂无借调单', '系统通过 token API 发起借调后会显示在这里');
+    refreshIcons(root);
+    return;
+  }
+  const rows = borrowOrders.map((order) => {
+    const selected = order.orderId === selectedBorrowOrderId ? ' selected' : '';
+    return `<button class="harbor-row borrow-row${selected}" type="button" data-borrow-order="${esc(order.orderId)}">
+      <span class="mono">${esc(order.orderId.slice(0, 18))}…</span>
+      <span>${esc(order.fromSystem)} → ${esc(order.providerSystem || order.toSystem || '待解析')}</span>
+      <span>${esc(borrowCapabilityLabel(order.capability))}${order.capabilityVersion ? `<small class="subtle"> · v${esc(order.capabilityVersion)}</small>` : ''}</span>
+      <span>${borrowStatusPill(order.status)}</span>
+      <span class="num">${borrowTime(order.dispatchedAt)}</span>
+      <span class="num">${borrowTime(order.endedAt)}</span>
+    </button>`;
+  }).join('');
+  root.innerHTML = `<div class="harbor-table borrow-table">
+    <div class="harbor-row harbor-head"><span>借调单</span><span>发起 → 提供</span><span>能力</span><span>状态</span><span class="num">派发时间</span><span class="num">结束时间</span></div>
+    ${rows}
+  </div>`;
+  refreshIcons(root);
+}
+
+async function loadBorrowOrderDetail(orderId, options = {}) {
+  let data;
+  try {
+    const response = await fetch(`/api/borrow-orders/${encodeURIComponent(orderId)}`, { headers: { accept: 'application/json' } });
+    if (response.status === 404) {
+      selectedBorrowOrderId = null;
+      borrowDetail = null;
+      renderBorrowDetail();
+      return;
+    }
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  const order = data?.order;
+  if (!order) return;
+  selectedBorrowOrderId = order.orderId;
+  borrowDetail = order;
+  if (!options.silent) renderBorrowList();
+  renderBorrowDetail();
+}
+
+const BORROW_FIELD_LABELS = {
+  id: 'ID', order_no: '订单号', line_no: '行号', customer: '客户', customer_code: '客户编码',
+  product_code: '产品编码', product_name: '产品名称', order_qty: '订单数量', completed_qty: '完成数量',
+  order_amount: '订单金额', status: '状态', erp_status: 'ERP 状态', risk_level: '风险等级',
+  risk_probability: '风险概率', promised_date: '承诺交期', delivery_completed_date: '完成日期',
+  planned_start_date: '计划开始', owner: '责任人', updated_at: '更新时间',
+  path: '查询路径', params: '查询参数', keyword: '关键字', message: '说明', summary: '摘要', conclusions: '结论',
+  items: '数据明细', total: '总条数', page: '页码', page_size: '每页条数', data_as_of: '数据时间',
+  data_confidence: '数据置信度', stale: '数据是否过期', request_id: '中台请求号',
+  material_code: '物料编码', material_name: '物料名称', on_hand_qty: '在库数量', locked_qty: '锁定数量',
+  available_qty: '可用数量', qty_in_transit: '在途数量', supplier_code: '供应商编码', supplier_name: '供应商名称',
+  demand_no: '需求单号', shortage_qty: '缺口数量', work_order_no: '工单号', issue_no: '异常单号',
+  defect_type: '缺陷类型', report_qty: '报工数量', capacity_qty: '产能数量', line_name: '产线',
+};
+
+// 结果表格优先展示的字段顺序：先业务关键信息，再技术字段。
+const BORROW_PREFERRED_COLUMNS = [
+  'order_no', 'customer', 'product_name', 'material_code', 'material_name', 'supplier_name',
+  'order_qty', 'completed_qty', 'order_amount', 'shortage_qty', 'available_qty', 'on_hand_qty',
+  'status', 'risk_level', 'risk_probability', 'promised_date', 'delivery_completed_date',
+  'work_order_no', 'issue_no', 'owner', 'updated_at', 'id',
+];
+
+const BORROW_CAPABILITY_LABELS = {
+  query_control_platform: '中台只读查询',
+  reason_control_platform: '中台推理分析',
+  query_plm: 'PLM 查询',
+  query_local_files: '本地文件查询',
+  reason_plm: 'PLM 推理分析',
+};
+
+const BORROW_RESULT_STATUS_LABELS = {
+  completed: '已完成', in_progress: '进行中', pending_review: '待评审', partially_closed: '部分关闭',
+  cancelled: '已取消', pending: '待处理', closed: '已关闭', failed: '失败',
+};
+
+const BORROW_DATA_CONFIDENCE_LABELS = { high: '高', medium: '中', low: '低' };
+const BORROW_RISK_LEVEL_LABELS = { red: '高', yellow: '中', green: '低', blue: '蓝（未分档）' };
+
+function borrowFieldLabel(key) {
+  return BORROW_FIELD_LABELS[key] || key;
+}
+
+function borrowCapabilityLabel(capability) {
+  return BORROW_CAPABILITY_LABELS[capability] || capability || '—';
+}
+
+function formatDateTimeText(value) {
+  if (!value) return '—';
+  return formatBeijingDateTime(value);
+}
+
+function borrowCell(key, value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (key === 'status') return BORROW_RESULT_STATUS_LABELS[value] || String(value);
+  if (key === 'data_confidence') return BORROW_DATA_CONFIDENCE_LABELS[value] || String(value);
+  if (key === 'risk_level') return BORROW_RISK_LEVEL_LABELS[value] || String(value);
+  if (key === 'stale') return value === true ? '是' : value === false ? '否' : String(value);
+  if (key === 'risk_probability' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`;
+  if (key === 'order_amount' && typeof value === 'number') return value.toLocaleString('zh-CN');
+  if (typeof key === 'string' && (key.endsWith('_date') || key.endsWith('_at'))) return formatDateTimeText(value);
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function renderBorrowInputValue(key, value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return `<span class="borrow-param-list">${Object.entries(value)
+      .map(([paramKey, paramValue]) => `<span>${esc(borrowFieldLabel(paramKey))}：${esc(borrowCell(paramKey, paramValue))}</span>`)
+      .join('')}</span>`;
+  }
+  return esc(borrowCell(key, value));
+}
+
+/** 把 { items: [{...}] } 形态的借调结果渲染成可读表格；其他形态回退到原始 JSON。 */
+function renderBorrowResultTable(value) {
+  const items = Array.isArray(value?.items)
+    ? value.items.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  if (!items.length) return '';
+  const allKeys = [];
+  for (const item of items.slice(0, 50)) {
+    for (const key of Object.keys(item)) if (!allKeys.includes(key)) allKeys.push(key);
+  }
+  const cols = [
+    ...BORROW_PREFERRED_COLUMNS.filter((key) => allKeys.includes(key)),
+    ...allKeys.filter((key) => !BORROW_PREFERRED_COLUMNS.includes(key)),
+  ].slice(0, 8);
+  if (!cols.length) return '';
+  const head = cols.map((key) => `<span>${esc(borrowFieldLabel(key))}</span>`).join('');
+  const rows = items.slice(0, 50).map((item) => `<div class="harbor-row">${cols
+    .map((key) => {
+      const text = borrowCell(key, item[key]);
+      return `<span title="${esc(text)}">${esc(text)}</span>`;
+    })
+    .join('')}</div>`).join('');
+  const more = allKeys.length > cols.length || items.length > 50
+    ? `<p class="form-hint">仅展示前 ${cols.length} 列 / ${Math.min(items.length, 50)} 行；完整内容见下方原始 JSON。</p>`
+    : '';
+  return `<div class="harbor-table borrow-result-table" data-borrow-cols="${cols.length}"><div class="harbor-row harbor-head">${head}</div>${rows}</div>${more}`;
+}
+
+function renderBorrowDetail() {
+  const root = $('#borrow-detail');
+  if (!root) return;
+  const collapse = $('#btn-borrow-collapse');
+  if (collapse) collapse.classList.toggle('hidden', !borrowDetail);
+  if (!borrowDetail) {
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="arrow-left-right"></i><strong>选择一张借调单</strong><small>点击上方列表中的借调单查看输入与结果；再次点击或点「收起」关闭</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const order = borrowDetail;
+  const json = (value) => esc(JSON.stringify(value ?? null, null, 2).slice(0, 8_000));
+  const error = order.error
+    ? `<div class="borrow-detail-block"><h3>未完成原因</h3><p>${esc(humanizeError(order.error.code, order.error.message))}</p></div>`
+    : '';
+  const truncated = order.resultTruncated
+    ? `<p class="form-hint">结果超过 256KB，仅保存摘要（原始 ${formatTokenCount(order.resultBytes)} 字节）。</p>`
+    : '';
+  const inputEntries = order.input && typeof order.input === 'object' && !Array.isArray(order.input)
+    ? Object.entries(order.input)
+    : null;
+  const inputBlock = inputEntries && inputEntries.length
+    ? `<div class="borrow-detail-block"><h3>输入</h3><div class="borrow-detail-grid">${inputEntries
+      .map(([key, value]) => `<div><span>${esc(borrowFieldLabel(key))}</span><strong>${renderBorrowInputValue(key, value)}</strong></div>`)
+      .join('')}</div></div>`
+    : `<div class="borrow-detail-block"><h3>输入</h3><pre class="borrow-json">${json(order.input)}</pre></div>`;
+  const resultObject = order.result && typeof order.result === 'object' && !Array.isArray(order.result) ? order.result : null;
+  const resultMetaKeys = resultObject
+    ? ['total', 'page', 'page_size', 'data_as_of', 'data_confidence', 'stale', 'request_id'].filter((key) => resultObject[key] !== undefined)
+    : [];
+  const resultMeta = resultMetaKeys.length
+    ? `<div class="borrow-detail-grid borrow-result-meta">${resultMetaKeys
+      .map((key) => `<div><span>${esc(borrowFieldLabel(key))}</span><strong>${esc(borrowCell(key, resultObject[key]))}</strong></div>`)
+      .join('')}</div>`
+    : '';
+  const resultTable = renderBorrowResultTable(order.result);
+  const resultBlock = resultTable
+    ? `<div class="borrow-detail-block"><h3>结果</h3>${resultMeta}${resultTable}<details class="borrow-raw"><summary>原始 JSON（技术排查用）</summary><pre class="borrow-json">${json(order.result)}</pre></details></div>`
+    : `<div class="borrow-detail-block"><h3>结果</h3>${resultMeta}<pre class="borrow-json">${json(order.result)}</pre></div>`;
+  const hashShort = (value) => value ? `${value.slice(0, 12)}…` : '未指定';
+  const schemaAnchor = [
+    `输入 ${hashShort(order.inputSchemaHash)}`,
+    `输出 ${hashShort(order.outputSchemaHash)}`,
+  ].join(' · ');
+  root.innerHTML = `<div class="borrow-detail-grid">
+      <div><span>发起方</span><strong>${esc(order.fromSystem)}${order.fromAgentId ? ` · ${esc(order.fromAgentId)}` : ''}</strong></div>
+      ${order.caller ? `<div><span>调用方</span><strong>${esc([order.caller.userId, order.caller.agentId, order.caller.taskId].filter(Boolean).join(' · ') || order.caller.systemId)}</strong></div>` : ''}
+      <div><span>提供方</span><strong>${esc(order.providerSystem || '—')}${order.providerAgentId ? ` · ${esc(order.providerAgentId)}` : ''}</strong></div>
+      <div><span>业务能力</span><strong>${esc(borrowCapabilityLabel(order.capability))}</strong></div>
+      <div><span>状态</span><strong>${borrowStatusPill(order.status)}</strong></div>
+      <div><span>时间</span><strong>创建 ${borrowTime(order.createdAt)} · 结束 ${borrowTime(order.endedAt)}</strong></div>
+    </div>
+    <details class="borrow-tech">
+      <summary>技术信息（编号、版本、哈希）</summary>
+      <div class="borrow-detail-grid">
+        <div><span>记录编号</span><strong class="mono">${esc(order.orderId)}</strong></div>
+        <div><span>请求编号</span><strong class="mono">${esc(order.requestId)}</strong></div>
+        <div><span>执行编号</span><strong class="mono">${esc(order.runId || '—')}</strong></div>
+        <div><span>能力版本</span><strong class="mono">${esc(order.capabilityVersion || '未指定（按能力名匹配）')}</strong></div>
+        <div><span>schema 锚定</span><strong class="mono" title="${esc(`input ${order.inputSchemaHash || '—'} / output ${order.outputSchemaHash || '—'}`)}">${esc(schemaAnchor)}</strong></div>
+        <div><span>来源</span><strong>执行面 · ${esc(order.providerSystem || '—')}</strong></div>
+      </div>
+    </details>
+    ${truncated}
+    ${error}
+    ${inputBlock}
+    ${resultBlock}
+    <div class="borrow-detail-block borrow-detail-actions">
+      ${order.runId ? '<button id="btn-borrow-open-run" class="btn secondary compact" type="button">查看执行详情</button>' : ''}
+      <button id="btn-borrow-open-trace" class="btn secondary compact" type="button">查看处理记录</button>
+    </div>`;
+  refreshIcons(root);
+  $('#btn-borrow-open-run')?.addEventListener('click', () => {
+    if (order.runId) openExecutionRun(order.runId);
+  });
+  $('#btn-borrow-open-trace')?.addEventListener('click', () => openTraceFor(order.orderId));
+}
+
+function syncBorrowRefresh() {
+  window.clearInterval(borrowRefreshTimer);
+  borrowRefreshTimer = null;
+  if (currentView !== 'borrow' || els.app.classList.contains('hidden')) return;
+  borrowRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadBorrowOrders({ silent: true });
+  }, BORROW_LIVE_REFRESH_MS);
+}
+
+// ---------- 运行监控（只读） ----------
+let opsData = null;
+let opsControlsWired = false;
+
+function wireOpsControls() {
+  if (opsControlsWired) return;
+  opsControlsWired = true;
+  $('#btn-ops-refresh')?.addEventListener('click', () => loadOps());
+  $('#ops-health-list')?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-ops-health-show-all]')) {
+      healthShowAll = !healthShowAll;
+      renderOps();
+      return;
+    }
+    const toggle = event.target.closest('[data-ops-health-toggle]');
+    if (!toggle) return;
+    const key = toggle.getAttribute('data-ops-health-toggle') || '';
+    if (healthExpanded.has(key)) healthExpanded.delete(key);
+    else healthExpanded.add(key);
+    renderOps();
+  });
+}
+
+async function loadOps() {
+  wireOpsControls();
+  let data;
+  try {
+    const response = await fetch('/api/ops/status?limit=50', { headers: { accept: 'application/json' } });
+    if (response.status === 403) {
+      renderOpsForbidden();
+      return;
+    }
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  opsData = data;
+  renderOps();
+}
+
+function renderOpsForbidden() {
+  const message = '<div class="harbor-empty"><i data-lucide="shield-alert"></i><strong>无权查看运行状态</strong><small>仅 manager / supervisor 角色可见</small></div>';
+  const root = $('#ops-health-list');
+  if (root) { root.innerHTML = message; refreshIcons(root); }
+}
+
+function opsSeverityPill(severity) {
+  const map = { critical: ['danger', '严重'], warn: ['warn', '警告'], info: ['info', '提示'] };
+  const [tone, label] = map[severity] || ['neutral', severity];
+  return `<b class="status-pill ${tone}">${esc(label)}</b>`;
+}
+
+let healthExpanded = new Set();
+let healthShowAll = false;
+
+function renderOps() {
+  const snapshot = opsData?.snapshot;
+  const metrics = snapshot?.metrics;
+  const checks = Array.isArray(snapshot?.checks) ? snapshot.checks : [];
+  const alerts = Array.isArray(opsData?.alerts) ? opsData.alerts : [];
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+
+  const unhealthyCount = checks.filter((check) => !check.ok).length;
+  setText('#ops-health-summary', unhealthyCount ? `${unhealthyCount} 项异常` : '正常');
+  setText('#ops-agents', `${formatTokenCount(metrics?.agentsOnline ?? 0)}/${formatTokenCount(metrics?.agentsTotal ?? 0)}`);
+
+  const counts = opsData?.alertCounts;
+  const activeCount = counts?.active ?? alerts.filter((alert) => alert.status === 'active').length;
+  const alertCountEl = $('#ops-alert-count');
+  if (alertCountEl) {
+    alertCountEl.textContent = String(activeCount);
+    alertCountEl.className = `status-pill ${counts?.critical ? 'danger' : counts?.warn ? 'warn' : 'ok'}`;
+  }
+
+  const backup = metrics?.backup;
+  const backupLabel = !backup ? '未知'
+    : backup.status === 'ok' ? `成功 ${backup.lastAt ? borrowTime(backup.lastAt) : ''}`
+      : backup.status === 'failed' ? '失败'
+        : backup.status === 'stale' ? '已过期' : '未运行';
+  setText('#ops-backup', backupLabel);
+
+  const checked = $('#ops-checked-at');
+  if (checked) checked.textContent = snapshot?.checkedAt ? `检查于 ${borrowTime(snapshot.checkedAt)}` : '';
+
+  // 按组件聚合：一个组件下可能有多项检查（例如模型有鉴权/限流/服务端/调用四类）。
+  const groups = new Map();
+  const ensureGroup = (component) => {
+    const name = component || '其他';
+    const group = groups.get(name) ?? { component: name, checks: [], alerts: [] };
+    groups.set(name, group);
+    return group;
+  };
+  for (const check of checks) ensureGroup(check.component).checks.push(check);
+  for (const alert of alerts) ensureGroup(alert.component).alerts.push(alert);
+
+  const severityRank = (severity) => severity === 'critical' ? 0 : severity === 'warn' ? 1 : 2;
+  const entries = [...groups.values()].map((group) => {
+    const failing = group.checks.filter((check) => !check.ok);
+    const activeAlerts = group.alerts.filter((alert) => alert.status === 'active');
+    const healthy = !failing.length && !activeAlerts.length;
+    const severities = [...failing.map((check) => check.severity), ...activeAlerts.map((alert) => alert.severity)];
+    const worst = severities.sort((left, right) => severityRank(left) - severityRank(right))[0] || 'info';
+    const primary = activeAlerts[0] || failing[0] || null;
+    const lastAt = group.alerts[0]?.lastSeenAt || snapshot?.checkedAt || null;
+    return {
+      component: group.component,
+      checks: group.checks,
+      alerts: group.alerts,
+      healthy,
+      severity: worst,
+      message: primary?.message || (group.checks.length ? `${group.checks.length} 项检查正常` : '暂无检查结果'),
+      action: primary?.action || null,
+      lastAt,
+      abnormalChecks: failing.length,
+    };
+  }).sort((left, right) => Number(left.healthy) - Number(right.healthy)
+    || severityRank(left.severity) - severityRank(right.severity)
+    || left.component.localeCompare(right.component, 'zh-CN'));
+
+  const host = $('#ops-health-list');
+  if (!host) return;
+  if (!entries.length) {
+    host.innerHTML = harborEmpty('activity', '暂无健康事件', '监控每 60 秒运行一次');
+    refreshIcons(host);
+    return;
+  }
+  const healthyCount = entries.filter((entry) => entry.healthy).length;
+  const visible = entries.filter((entry) => !entry.healthy || healthShowAll || healthExpanded.has(entry.component));
+  const toggleLabel = healthShowAll ? '只看异常' : `显示全部（${healthyCount} 项正常）`;
+
+  const rows = visible.map((entry) => {
+    const activeAlert = entry.alerts.find((alert) => alert.status === 'active');
+    const statusPill = entry.healthy ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(entry.severity);
+    const expanded = healthExpanded.has(entry.component);
+    const subChecks = entry.checks.length
+      ? entry.checks.map((check) => `<div class="ops-health-subcheck">
+          <span>${esc(check.title)}</span>
+          <span>${esc(check.message)}${check.action ? `<small>建议：${esc(check.action)}</small>` : ''}</span>
+          <span>${check.ok ? '<b class="status-pill ok">正常</b>' : opsSeverityPill(check.severity)}</span>
+        </div>`).join('')
+      : '<div class="ops-health-subcheck empty">暂无检查结果</div>';
+    const history = entry.alerts.length
+      ? entry.alerts.map((alert) => `<div class="ops-health-history-row">
+          <span class="num">${borrowTime(alert.lastSeenAt)}</span>
+          <span>${opsSeverityPill(alert.severity)}</span>
+          <span><strong>${esc(alert.title)}</strong><small>${esc(alert.message)}${alert.action ? ` · 建议：${esc(alert.action)}` : ''}</small></span>
+          <span>${alert.status === 'active' ? '<b class="status-pill danger">未恢复</b>' : '<b class="status-pill ok">已恢复</b>'}</span>
+        </div>`).join('')
+      : '<div class="ops-health-history-row empty">暂无告警历史</div>';
+    return `<div class="ops-health-entry">
+      <button class="ops-health-main" type="button" data-ops-health-toggle="${esc(entry.component)}" aria-expanded="${expanded}">
+        <span class="ops-health-title"><strong>${esc(entry.component)}</strong><small>${entry.checks.length} 项检查${entry.abnormalChecks ? ` · ${entry.abnormalChecks} 项异常` : ''}</small></span>
+        <span class="ops-health-detail">${esc(activeAlert?.message || entry.message)}${(activeAlert?.action || entry.action) ? `<small>建议：${esc(activeAlert?.action || entry.action)}</small>` : ''}</span>
+        <span class="num ops-health-time">${entry.lastAt ? esc(borrowTime(entry.lastAt)) : '—'}</span>
+        ${statusPill}
+        <i class="ops-health-chevron" data-lucide="${expanded ? 'chevron-down' : 'chevron-right'}"></i>
+      </button>
+      ${expanded ? `<div class="ops-health-history"><div class="ops-health-subchecks">${subChecks}</div>${history}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  host.innerHTML = `<div class="ops-health-table">${rows}</div>
+    <button class="btn ghost compact ops-health-showall" type="button" data-ops-health-show-all>${esc(toggleLabel)}</button>`;
+  refreshIcons(host);
+}
+
+function syncOpsRefresh() {
+  window.clearInterval(opsRefreshTimer);
+  opsRefreshTimer = null;
+  if (currentView !== 'ops' || els.app.classList.contains('hidden')) return;
+  opsRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') loadOps();
+  }, OPS_LIVE_REFRESH_MS);
+}
+
+// ---------- AI 观测（统一总览：Hub 派单任务 / 各系统助手） ----------
+let aiObsControlsWired = false;
+
+function wireAiObsControls() {
+  if (aiObsControlsWired) return;
+  aiObsControlsWired = true;
+  $('#btn-ai-obs-refresh')?.addEventListener('click', () => {
+    if (aiObsTab === 'runs') loadAiRuns();
+    else loadAssistantEvents();
+  });
+  $$('#view-ai-obs [data-ai-tab]').forEach((button) => {
+    button.addEventListener('click', () => switchAiObsTab(button.dataset.aiTab));
+  });
+  $('#ai-run-status-filter')?.addEventListener('change', () => loadAiRuns());
+  $('#ai-run-list')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-ai-run]');
+    const runId = target?.getAttribute('data-ai-run');
+    if (!runId) return;
+    selectedAiRunId = selectedAiRunId === runId ? null : runId;
+    renderAiRunList();
+    void renderAiRunDetail();
+  });
+}
+
+function switchAiObsTab(tab) {
+  aiObsTab = tab === 'assistants' ? 'assistants' : 'runs';
+  $$('#view-ai-obs [data-ai-tab]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.aiTab === aiObsTab);
+  });
+  $('#ai-obs-runs')?.classList.toggle('hidden', aiObsTab !== 'runs');
+  $('#ai-obs-assistants')?.classList.toggle('hidden', aiObsTab !== 'assistants');
+  if (aiObsTab === 'runs') loadAiRuns();
+  else {
+    assistantUserSelected = false;
+    loadAssistantEvents();
+  }
+}
+
+function loadAiObs() {
+  wireAiObsControls();
+  switchAiObsTab(aiObsTab);
+}
+
+async function loadAiRuns() {
+  let data;
+  try {
+    const response = await fetch('/api/execution/agents', { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch { return; }
+  aiAgents = Array.isArray(data?.agents) ? data.agents : [];
+  aiRuns = (Array.isArray(data?.runs) ? data.runs : [])
+    .slice()
+    .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+  try {
+    const ordersResponse = await fetch('/api/borrow-orders?limit=100', { headers: { accept: 'application/json' } });
+    if (ordersResponse.ok) {
+      const ordersData = await ordersResponse.json();
+      aiBorrowByRun = new Map((Array.isArray(ordersData?.orders) ? ordersData.orders : [])
+        .filter((order) => order.runId)
+        .map((order) => [order.runId, order]));
+    }
+  } catch {
+    // 借调信息只用于标注来源，失败不影响任务列表。
+  }
+  renderAiRunMetrics();
+  renderAiRunList();
+  void renderAiRunDetail();
+}
+
+function aiRunStatusLabel(state) {
+  return { dispatched: '已派单', running: '运行中', completed: '已完成', failed: '失败', recalled: '已召回' }[state] || state || '未知';
+}
+
+function aiRunStatusTone(state) {
+  return state === 'completed' ? 'ok' : state === 'failed' ? 'danger' : state === 'running' ? 'warn' : state === 'recalled' ? 'neutral' : 'info';
+}
+
+function aiRunResultSummary(run) {
+  if (!run || run.result === undefined || run.result === null) return '—';
+  const result = run.result;
+  if (Array.isArray(result?.items)) {
+    return `返回 ${result.items.length} 条${result.total !== undefined ? `，共 ${result.total} 条` : ''}`;
+  }
+  if (typeof result?.summary === 'string') return result.summary.slice(0, 120);
+  if (typeof result === 'string') return result.slice(0, 120);
+  return '已返回结果';
+}
+
+function aiRunDuration(run) {
+  if (!run?.startedAt) return '—';
+  const end = run.endedAt ? new Date(run.endedAt).getTime() : Date.now();
+  const start = new Date(run.startedAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return '—';
+  return `${Math.max(0, Math.round((end - start) / 1000))} s`;
+}
+
+function renderAiRunMetrics() {
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#ai-run-total', formatTokenCount(aiRuns.length));
+  setText('#ai-run-active', formatTokenCount(aiRuns.filter((run) => run.state === 'dispatched' || run.state === 'running').length));
+  setText('#ai-run-completed', formatTokenCount(aiRuns.filter((run) => run.state === 'completed').length));
+  setText('#ai-run-failed', formatTokenCount(aiRuns.filter((run) => run.state === 'failed' || run.state === 'recalled').length));
+}
+
+function renderAiRunList() {
+  const root = $('#ai-run-list');
+  if (!root) return;
+  const status = $('#ai-run-status-filter')?.value || 'all';
+  const runs = aiRuns.filter((run) => status === 'all' || run.state === status);
+  if (!runs.length) {
+    root.innerHTML = harborEmpty('list-tree', '暂无派单任务', 'Hub 派发任务后会显示在这里');
+    refreshIcons(root);
+    return;
+  }
+  const rows = runs.slice(0, 200).map((run) => {
+    const selected = run.runId === selectedAiRunId ? ' selected' : '';
+    const order = aiBorrowByRun.get(run.runId);
+    const from = order ? `借调：${esc(order.fromSystem)}` : 'Hub 直接派单';
+    const agent = aiAgents.find((item) => item.agentId === run.agentId);
+    return `<button class="harbor-row borrow-row${selected}" type="button" data-ai-run="${esc(run.runId)}">
+      <span class="num">${borrowTime(run.startedAt)}</span>
+      <span><strong>${esc(agent?.name || run.agentId)}</strong><br/><small>${from}</small></span>
+      <span>${esc(borrowCapabilityLabel(run.capability))}</span>
+      <span><b class="status-pill ${aiRunStatusTone(run.state)}">${esc(aiRunStatusLabel(run.state))}</b></span>
+      <span class="num">${esc(aiRunDuration(run))}</span>
+      <span>${esc(aiRunResultSummary(run))}</span>
+    </button>`;
+  }).join('');
+  root.innerHTML = `<div class="harbor-table ai-run-table">
+    <div class="harbor-row harbor-head"><span class="num">时间</span><span>Agent / 来源</span><span>能力</span><span>状态</span><span class="num">耗时</span><span>结果</span></div>
+    ${rows}
+  </div>`;
+  refreshIcons(root);
+}
+
+async function renderAiRunDetail() {
+  const root = $('#ai-run-detail');
+  if (!root) return;
+  const label = $('#ai-run-id');
+  if (!selectedAiRunId) {
+    if (label) label.textContent = '';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="list-tree"></i><strong>选择一个任务</strong><small>点击上方任务查看执行步骤</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const run = aiRuns.find((item) => item.runId === selectedAiRunId);
+  if (label) label.textContent = selectedAiRunId;
+  if (!run) {
+    root.innerHTML = '<div class="harbor-empty"><strong>任务不存在</strong></div>';
+    return;
+  }
+  const events = await fetchRunEvents(run.runId);
+  const order = aiBorrowByRun.get(run.runId);
+  // 推理类 run 直接渲染结构化结论（分发出去的齐套/质量分析也走这里）。
+  const reasoningText = run.capability?.startsWith('reason') && run.result ? summarizeReasoningResult(run.result) : '';
+  root.innerHTML = `<div class="borrow-detail-grid">
+      <div><span>任务</span><strong class="mono">${esc(run.runId)}</strong></div>
+      <div><span>Agent</span><strong>${esc(run.agentId)}</strong></div>
+      <div><span>能力</span><strong>${esc(borrowCapabilityLabel(run.capability))}</strong></div>
+      <div><span>状态</span><strong><b class="status-pill ${aiRunStatusTone(run.state)}">${esc(aiRunStatusLabel(run.state))}</b></strong></div>
+      <div><span>来源</span><strong>${order ? `借调：${esc(order.fromSystem)}` : 'Hub 直接派单'}</strong></div>
+      <div><span>耗时</span><strong>${esc(aiRunDuration(run))}</strong></div>
+    </div>
+    <div class="borrow-detail-block"><h3>结果摘要</h3><p class="form-hint">${esc(aiRunResultSummary(run))}</p></div>
+    ${reasoningText ? `<div class="borrow-detail-block"><h3>分析结论</h3><pre class="assistant-reply-text">${esc(reasoningText)}</pre></div>` : ''}
+    <div class="borrow-detail-block"><h3>执行步骤</h3>${executionTimelineHtml(events)}</div>
+    <div class="borrow-detail-block borrow-detail-actions">
+      <button id="btn-ai-run-open-trace" class="btn secondary compact" type="button">查看链路</button>
+    </div>`;
+  refreshIcons(root);
+  $('#btn-ai-run-open-trace')?.addEventListener('click', () => openTraceFor(run.runId));
+}
+
+function syncAiObsRefresh() {
+  window.clearInterval(aiObsRefreshTimer);
+  aiObsRefreshTimer = null;
+  if (currentView !== 'ai-obs' || els.app.classList.contains('hidden')) return;
+  aiObsRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (aiObsTab === 'runs') loadAiRuns();
+    else loadAssistantEvents();
+  }, AI_OBS_REFRESH_MS);
+}
+
+// ---------- 助手观测（中台自有助手主动上报） ----------
+let assistantData = null;
+let assistantControlsWired = false;
+let selectedAssistantTrace = null;
+let assistantFilteredTraces = [];
+let assistantFilters = { system: 'all', status: 'all', time: 'all', search: '' };
+let assistantUserSelected = false;
+let lastAssistantDetailKey = null;
+
+function wireAssistantControls() {
+  if (assistantControlsWired) return;
+  assistantControlsWired = true;
+  $('#assistant-system-filter')?.addEventListener('change', (event) => {
+    assistantFilters.system = event.target.value || 'all';
+    assistantUserSelected = false;
+    renderAssistant();
+  });
+  $('#assistant-status-filter')?.addEventListener('change', (event) => {
+    assistantFilters.status = event.target.value || 'all';
+    assistantUserSelected = false;
+    renderAssistant();
+  });
+  $('#assistant-time-filter')?.addEventListener('change', (event) => {
+    assistantFilters.time = event.target.value || 'all';
+    assistantUserSelected = false;
+    renderAssistant();
+  });
+  $('#assistant-search')?.addEventListener('input', (event) => {
+    assistantFilters.search = String(event.target.value || '').trim().toLowerCase();
+    assistantUserSelected = false;
+    renderAssistant();
+  });
+  $('#assistant-trace-select')?.addEventListener('change', (event) => {
+    const raw = String(event.target.value || '');
+    const [encodedSystem, encodedTrace] = raw.split('|');
+    if (!encodedSystem || !encodedTrace) return;
+    try {
+      selectedAssistantTrace = {
+        systemId: decodeURIComponent(encodedSystem),
+        traceId: decodeURIComponent(encodedTrace),
+      };
+      assistantUserSelected = true;
+      renderAssistantDetail();
+    } catch {
+      // 忽略非法选项值。
+    }
+  });
+  $('#assistant-failures')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-failure-trace]');
+    const traceId = target?.getAttribute('data-failure-trace');
+    const systemId = target?.getAttribute('data-failure-system');
+    if (!traceId || !systemId) return;
+    // 清掉可能隐藏该会话的筛选，再定位到详情。
+    assistantFilters = { system: 'all', status: 'all', time: 'all', search: '' };
+    const systemFilter = $('#assistant-system-filter'); if (systemFilter) systemFilter.value = 'all';
+    const statusFilter = $('#assistant-status-filter'); if (statusFilter) statusFilter.value = 'all';
+    const timeFilter = $('#assistant-time-filter'); if (timeFilter) timeFilter.value = 'all';
+    const search = $('#assistant-search'); if (search) search.value = '';
+    selectedAssistantTrace = { traceId, systemId };
+    assistantUserSelected = true;
+    renderAssistant();
+    $('#assistant-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+async function loadAssistantEvents() {
+  wireAssistantControls();
+  let data;
+  try {
+    // 一次拉取后在本地过滤，保证系统下拉选项和筛选切换即时生效。
+    const response = await fetch('/api/assistant-events?limit=1000', { headers: { accept: 'application/json' } });
+    if (!response.ok) {
+      renderAssistantError(response.status === 401
+        ? '登录状态已失效，请刷新页面重新登录'
+        : `接口返回 HTTP ${response.status}，请点击刷新重试`);
+      return;
+    }
+    data = await response.json();
+  } catch (error) {
+    renderAssistantError(`网络异常：${error?.message || error}`);
+    return;
+  }
+  assistantData = data;
+  try {
+    renderAssistant();
+  } catch (error) {
+    renderAssistantError(`渲染失败：${error?.message || error}`);
+  }
+}
+
+function renderAssistantError(message) {
+  const root = $('#assistant-detail');
+  if (!root) return;
+  root.innerHTML = `<div class="harbor-empty"><i data-lucide="triangle-alert"></i><strong>读取助手记录失败</strong><small>${esc(message)}</small></div>`;
+  refreshIcons(root);
+}
+
+function assistantTraceEvents(trace) {
+  const events = Array.isArray(assistantData?.events) ? assistantData.events : [];
+  return events.filter((event) => event.traceId === trace.traceId && event.systemId === trace.systemId);
+}
+
+function assistantTraceTitle(trace) {
+  const events = assistantTraceEvents(trace);
+  const first = events.find((event) => event.event === 'conversation_started')
+    || events.find((event) => event.event === 'message')
+    || events[0];
+  const summary = first?.summary || trace.lastSummary || '';
+  return summary ? summary.slice(0, 60) : `会话 ${String(trace.traceId).slice(0, 8)}`;
+}
+
+function assistantTraceDuration(trace) {
+  const start = new Date(trace.firstAt).getTime();
+  const end = new Date(trace.lastAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—';
+  const seconds = Math.round((end - start) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+function assistantTraceMatches(trace) {
+  if (assistantFilters.system !== 'all' && trace.systemId !== assistantFilters.system) return false;
+  if (assistantFilters.status === 'error' && !trace.hasError) return false;
+  if (assistantFilters.status === 'ok' && trace.hasError) return false;
+  if (assistantFilters.time !== 'all') {
+    const ranges = { '1h': 3_600_000, '24h': 24 * 3_600_000, '7d': 7 * 24 * 3_600_000 };
+    const range = ranges[assistantFilters.time];
+    if (range && Date.now() - new Date(trace.lastAt).getTime() > range) return false;
+  }
+  if (assistantFilters.search) {
+    const haystack = `${trace.traceId} ${trace.systemId} ${trace.lastSummary || ''}`.toLowerCase();
+    if (!haystack.includes(assistantFilters.search)) return false;
+  }
+  return true;
+}
+
+function renderAssistant() {
+  const events = Array.isArray(assistantData?.events) ? assistantData.events : [];
+  const traces = Array.isArray(assistantData?.traces) ? assistantData.traces : [];
+  const setText = (selector, value) => { const el = $(selector); if (el) el.textContent = value; };
+  setText('#assistant-total', formatTokenCount(events.length));
+  setText('#assistant-traces', formatTokenCount(traces.length));
+
+  const filter = $('#assistant-system-filter');
+  if (filter) {
+    const current = assistantFilters.system;
+    const systems = [...new Set(traces.map((trace) => trace.systemId))].sort();
+    filter.innerHTML = `<option value="all">全部系统</option>${systems
+      .map((system) => `<option value="${esc(system)}">${esc(system)}</option>`)
+      .join('')}`;
+    filter.value = current === 'all' || systems.includes(current) ? current : 'all';
+    if (filter.value !== current) assistantFilters.system = filter.value;
+  }
+
+  assistantFilteredTraces = traces.filter(assistantTraceMatches);
+  const countEl = $('#assistant-filter-count');
+  if (countEl) countEl.textContent = `筛选结果 ${assistantFilteredTraces.length} / ${traces.length}`;
+
+  const latest = assistantFilteredTraces[0];
+  const selectedInFiltered = selectedAssistantTrace
+    && assistantFilteredTraces.some((trace) => trace.traceId === selectedAssistantTrace.traceId && trace.systemId === selectedAssistantTrace.systemId);
+  if (!selectedInFiltered) {
+    selectedAssistantTrace = latest ? { traceId: latest.traceId, systemId: latest.systemId } : null;
+    assistantUserSelected = false;
+  } else if (!assistantUserSelected && latest) {
+    // 用户没有手动选过会话时，始终跟随最新一条。
+    selectedAssistantTrace = { traceId: latest.traceId, systemId: latest.systemId };
+  }
+  const failedEvents = events
+    .filter((event) => (assistantFilters.system === 'all' || event.systemId === assistantFilters.system)
+      && (event.status === 'failed' || event.event === 'error'))
+    .sort((a, b) => String(b.endedAt || b.startedAt || b.receivedAt)
+      .localeCompare(String(a.endedAt || a.startedAt || a.receivedAt)));
+  renderAssistantFailures(failedEvents);
+  renderAssistantSelector();
+  renderAssistantDetail();
+}
+
+function renderAssistantFailures(failedEvents) {
+  const panel = $('#assistant-failures-panel');
+  const root = $('#assistant-failures');
+  const count = $('#assistant-failures-count');
+  if (!panel || !root) return;
+  if (!failedEvents.length) {
+    panel.classList.add('hidden');
+    if (count) count.textContent = '0';
+    root.innerHTML = '';
+    return;
+  }
+  panel.classList.remove('hidden');
+  if (count) count.textContent = `${failedEvents.length} 条`;
+  root.innerHTML = failedEvents.slice(0, 50).map((event) => {
+    const trace = (assistantData?.traces || []).find((item) => item.traceId === event.traceId && item.systemId === event.systemId);
+    const title = trace ? assistantTraceTitle(trace) : `会话 ${String(event.traceId).slice(0, 8)}`;
+    return `<button class="assistant-failure-item" type="button" data-failure-trace="${esc(event.traceId)}" data-failure-system="${esc(event.systemId)}">
+      <span class="num">${borrowTime(event.endedAt || event.startedAt || event.receivedAt)}</span>
+      <span>${esc(event.systemId)}</span>
+      <span><strong>${esc(event.name || executionEventLabel(event.event))}</strong><br/><small>${esc(event.summary || '—')}</small></span>
+      <span>${esc(title)}</span>
     </button>`;
   }).join('');
   refreshIcons(root);
 }
 
+function renderAssistantSelector() {
+  const select = $('#assistant-trace-select');
+  if (!select) return;
+  if (!assistantFilteredTraces.length) {
+    select.innerHTML = '<option value="">暂无匹配会话</option>';
+    return;
+  }
+  select.innerHTML = assistantFilteredTraces.map((trace) => {
+    const value = `${encodeURIComponent(trace.systemId)}|${encodeURIComponent(trace.traceId)}`;
+    const title = assistantTraceTitle(trace);
+    return `<option value="${value}">${esc(title)} · ${esc(trace.systemId)} · ${borrowTime(trace.lastAt)}</option>`;
+  }).join('');
+  if (selectedAssistantTrace) {
+    const selectedValue = `${encodeURIComponent(selectedAssistantTrace.systemId)}|${encodeURIComponent(selectedAssistantTrace.traceId)}`;
+    select.value = selectedValue;
+  }
+}
+
+function renderAssistantDetail() {
+  const root = $('#assistant-detail');
+  if (!root) return;
+  const traceLabel = $('#assistant-trace-id');
+  if (!selectedAssistantTrace) {
+    lastAssistantDetailKey = null;
+    if (traceLabel) traceLabel.textContent = '';
+    root.innerHTML = '<div class="harbor-empty"><i data-lucide="messages-square"></i><strong>选择一个会话</strong><small>使用上方下拉框选择会话</small></div>';
+    refreshIcons(root);
+    return;
+  }
+  const { traceId, systemId } = selectedAssistantTrace;
+  const detailKey = `${systemId}|${traceId}`;
+  const detailChanged = detailKey !== lastAssistantDetailKey;
+  lastAssistantDetailKey = detailKey;
+  if (traceLabel) traceLabel.textContent = `${systemId} · ${traceId}`;
+  const trace = assistantFilteredTraces.find((item) => item.traceId === traceId && item.systemId === systemId)
+    || (assistantData?.traces || []).find((item) => item.traceId === traceId && item.systemId === systemId);
+  const events = assistantTraceEvents({ traceId, systemId });
+  const usageEvents = events.filter((event) => event.usage
+    && ((event.usage.tokensIn || 0) > 0 || (event.usage.tokensOut || 0) > 0));
+  const hasModelCall = events.some((event) => event.event === 'model_call');
+  const tokensIn = usageEvents.reduce((sum, event) => sum + (event.usage.tokensIn || 0), 0);
+  const tokensOut = usageEvents.reduce((sum, event) => sum + (event.usage.tokensOut || 0), 0);
+  const cost = usageEvents.reduce((sum, event) => sum + (event.usage.cost || 0), 0);
+  const usageLine = usageEvents.length
+    ? `输入 ${formatTokenCount(tokensIn)} / 输出 ${formatTokenCount(tokensOut)} / ¥${formatUsageCost(cost)}`
+    : (hasModelCall ? '未上报模型用量（需中台回传 Token）' : '未上报模型用量');
+  const replies = events.filter((event) => event.event === 'assistant_reply' && event.summary);
+  const latestReply = replies[replies.length - 1];
+  const errors = events.filter((event) => event.event === 'error' || event.status === 'failed');
+  const latestError = errors[errors.length - 1];
+  const timeOf = (event) => new Date(event.endedAt || event.startedAt || event.receivedAt || 0).getTime();
+  let highlight = '';
+  if (latestReply && (!latestError || timeOf(latestReply) >= timeOf(latestError))) {
+    const text = String(latestReply.summary);
+    highlight = `<div class="assistant-latest-reply">
+      <div class="assistant-latest-head"><h3>最新回复</h3><span>${borrowTime(latestReply.endedAt || latestReply.receivedAt)}</span></div>
+      <pre class="assistant-reply-text">${esc(text.slice(0, 1200))}</pre>
+      ${text.length > 1200 ? '<p class="form-hint">内容较长，完整内容见下方时间线。</p>' : ''}
+    </div>`;
+  } else if (latestError) {
+    highlight = `<div class="assistant-latest-reply assistant-latest-error">
+      <div class="assistant-latest-head"><h3>最新错误</h3><span>${borrowTime(latestError.endedAt || latestError.receivedAt)}</span></div>
+      <pre class="assistant-reply-text">${esc(latestError.summary || '未提供错误说明')}</pre>
+    </div>`;
+  }
+  root.innerHTML = `<div class="assistant-detail-line">
+      <span>时间范围：${borrowTime(trace?.firstAt)} → ${borrowTime(trace?.lastAt)}</span>
+      <span>模型用量：${esc(usageLine)}</span>
+    </div>
+    ${highlight}
+    <div class="borrow-detail-block"><h3>时间线</h3>${assistantTimelineHtml(events)}</div>`;
+  if (detailChanged) root.scrollTop = 0;
+  refreshIcons(root);
+}
+
+function executionEmptyState() {
+  const div = document.createElement('div');
+  div.className = 'harbor-empty';
+  div.innerHTML = '<i data-lucide="messages-square"></i><strong>开始对话</strong><small>向该智能体提问，例如「查 HJY20260903-261 的缺料」</small>';
+  return div;
+}
+
+function executionThreadFor(agentId) {
+  let root = executionThreads.get(agentId);
+  if (!root) {
+    root = document.createElement('div');
+    root.className = 'execution-messages';
+    root.dataset.executionAgent = agentId;
+    root.appendChild(executionEmptyState());
+    const panel = $('.execution-chat-panel');
+    const composer = $('#execution-chat-input')?.closest('.execution-composer');
+    if (panel && composer) panel.insertBefore(root, composer);
+    else if (panel) panel.appendChild(root);
+    executionThreads.set(agentId, root);
+    refreshIcons(root);
+  }
+  return root;
+}
+
+function showExecutionThread(agentId) {
+  const defaultRoot = $('#execution-messages');
+  if (defaultRoot) defaultRoot.classList.add('hidden');
+  for (const root of executionThreads.values()) root.classList.add('hidden');
+  if (agentId) executionThreadFor(agentId).classList.remove('hidden');
+  else if (defaultRoot) defaultRoot.classList.remove('hidden');
+}
+
 function selectExecutionAgent(agentId) {
   selectedExecutionAgent = agentId;
   loadExecution();
+  showExecutionThread(agentId);
+  const name = executionAgents.find((item) => item.agentId === agentId)?.name || agentId;
+  $('#execution-chat-actions')?.classList.remove('hidden');
   const title = $('#execution-chat-title');
   const subtitle = $('#execution-chat-subtitle');
-  if (title) title.textContent = `与「${agentId}」对话`;
-  if (subtitle) subtitle.textContent = '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
+  if (title) title.textContent = `与「${name}」对话`;
+  const agent = executionAgents.find((item) => item.agentId === agentId);
+  if (subtitle) {
+    subtitle.textContent = isReasoningOnly(selectExecutionCapabilities(agent?.capabilities))
+      ? '推理需要业务锚点：请带上订单号 / 产品编码 / 批次号。'
+      : '请用编号、近 N 天或前 N 条限定范围；系统不会执行全量查询。';
+  }
 }
 
 function selectedAgentIntent() {
@@ -845,17 +2597,29 @@ function selectedAgentHasIntent() {
 
 function selectedAgentCapability(kind) {
   const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
-  const capabilities = Array.isArray(agent?.capabilities) ? agent.capabilities : [];
-  if (kind === 'query') {
-    return capabilities.find((cap) => cap.intent)?.name
-      || capabilities.find((cap) => typeof cap.name === 'string' && cap.name.startsWith('query'))?.name
-      || 'query_control_platform';
+  const selection = selectExecutionCapabilities(agent?.capabilities);
+  return kind === 'query' ? selection.query : selection.reasoning;
+}
+
+function selectedAgentCapabilityRecord(capabilityName) {
+  const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+  return agent?.capabilities?.find((cap) => cap.name === capabilityName) ?? null;
+}
+
+function prepareReasoningRequest(text, reasonCap) {
+  const parsed = parseExecutionReasoning(text);
+  const request = attachBusinessObjectRef(
+    parsed && !parsed.error
+      ? parsed
+      : { prompt: text, task_type: 'operating_case_analysis', context: {}, constraints: { read_only: true, require_evidence: true } },
+    text,
+  );
+  if (requiresBusinessObjectRef(selectedAgentCapabilityRecord(reasonCap)) && !request.context?.businessObjectRef) {
+    return {
+      error: '该推理智能体需要业务锚点：请在问题中带上订单号/产品编码/批次号，例如“分析订单 HJY20260903-261 的交付风险”。若要分析“今日风险最高的订单”，请先用查询智能体查出订单号。',
+    };
   }
-  if (kind === 'reasoning') {
-    return capabilities.find((cap) => typeof cap.name === 'string' && cap.name.startsWith('reason'))?.name
-      || 'reason_control_platform';
-  }
-  return undefined;
+  return { request };
 }
 
 function executionMessageBubble(role, text) {
@@ -872,7 +2636,7 @@ function executionMessageBubble(role, text) {
 }
 
 function appendExecutionMessage(role, text, data) {
-  const root = $('#execution-messages');
+  const root = selectedExecutionAgent ? executionThreadFor(selectedExecutionAgent) : $('#execution-messages');
   if (!root) return null;
   const empty = root.querySelector('.harbor-empty');
   if (empty) empty.remove();
@@ -898,10 +2662,10 @@ async function dispatchExecution(agentId, capability, input, pendingText) {
     });
     const body = await response.json();
     if (!response.ok || body.error) {
-      if (pending) pending.textEl.textContent = body.error || `派单失败（HTTP ${response.status}）`;
+      if (pending) pending.textEl.textContent = humanizeError(body.code, body.error || `派单失败（HTTP ${response.status}）`);
       return;
     }
-    pollExecutionRun(body.runId, pending);
+    pollExecutionRun(body.runId, pending, agentId);
   } catch (error) {
     if (pending) pending.textEl.textContent = `派单失败：${error?.message || error}`;
   }
@@ -917,10 +2681,100 @@ async function tryParseIntentRemote(text, agentId) {
     });
     if (!response.ok) return null;
     const body = await response.json();
+    // 服务端会返回结构化失败原因（401/429/超时等），交给调用方决定提示与回退。
+    if (body && typeof body.error === 'string') return { kind: 'error', error: body.error, code: body.code };
     return body && (body.kind === 'query' || body.kind === 'reasoning') ? body : null;
   } catch {
     return null;
   }
+}
+
+async function tryDispatchCapabilityTemplate(text) {
+  if (!selectedExecutionAgent) return false;
+  let templates = [];
+  try {
+    const response = await fetch(`/api/execution/capability-templates?agentId=${encodeURIComponent(selectedExecutionAgent)}`, {
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) return false;
+    const body = await response.json();
+    templates = Array.isArray(body?.templates) ? body.templates : [];
+  } catch {
+    return false;
+  }
+  if (!templates.length) return false;
+
+  const template = matchCapabilityTemplate(text, templates);
+  if (!template) {
+    // 中台查询 Agent 走原有通用查询解析器（订单/齐套/质量/生产等）。
+    // 只有没有通用解析能力的 Agent（如 PLM）才提示“没有匹配模板”。
+    const agent = executionAgents.find((item) => item.agentId === selectedExecutionAgent);
+    const hasLegacyControlQuery = agent?.capabilities?.some((capability) => capability.name === 'query_control_platform');
+    if (hasLegacyControlQuery) return false;
+    appendExecutionMessage('agent', '没有匹配到该执行面 Agent 的 Hub 能力模板。请带上能力关键词，或先选择其他智能体。', null);
+    return true;
+  }
+  const params = buildCapabilityParams(text, template);
+  if (!params) {
+    appendExecutionMessage('agent', `已匹配能力模板「${template.title || template.capability}」，但没有提取到必填参数。请补充业务编号/关键字。`, null);
+    return true;
+  }
+
+  const pending = appendExecutionMessage('agent', `正在通过 Hub 能力模板查询：${template.title || template.capability}…`, null);
+  try {
+    const response = await fetch('/api/execution/capability-invocations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        capability: template.capability,
+        params,
+        fromAgentId: 'hub-execution-dashboard',
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (pending) pending.textEl.textContent = humanizeError(body.code, body.error || `能力调用失败（HTTP ${response.status}）`);
+      return true;
+    }
+    const orderId = body?.invocation?.borrowOrderId || body?.order?.orderId;
+    if (!orderId) {
+      if (pending) pending.textEl.textContent = '能力调用没有返回 borrowOrderId';
+      return true;
+    }
+    await pollCapabilityInvocation(orderId, pending, template);
+  } catch (error) {
+    if (pending) pending.textEl.textContent = `能力调用失败：${error?.message || error}`;
+  }
+  return true;
+}
+
+async function pollCapabilityInvocation(orderId, pending, template) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/api/borrow-orders/${encodeURIComponent(orderId)}`, { headers: { accept: 'application/json' } });
+      if (!response.ok) {
+        if (pending) pending.textEl.textContent = `读取借调结果失败（HTTP ${response.status}）`;
+        return;
+      }
+      const body = await response.json();
+      const order = body?.order ?? body;
+      if (order?.status === 'completed') {
+        if (pending) pending.textEl.textContent = summarizeCapabilityResult(order.result, template);
+        return;
+      }
+      if (['failed', 'cancelled', 'recalled'].includes(order?.status)) {
+        if (pending) {
+          pending.textEl.textContent = `查询未完成：${humanizeError(order?.error?.code || (order?.status === 'cancelled' ? 'TASK_CANCELLED' : undefined), order?.error?.message || order?.status)}`;
+        }
+        return;
+      }
+    } catch {
+      // 继续轮询
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  if (pending) pending.textEl.textContent = `查询仍未完成（borrowOrderId: ${orderId}），请稍后到「跨系统查询」查看。`;
 }
 
 async function sendExecutionQuery() {
@@ -936,12 +2790,40 @@ async function sendExecutionQuery() {
 
   const queryCap = selectedAgentCapability('query');
   const reasonCap = selectedAgentCapability('reasoning');
+  const selection = { query: queryCap, reasoning: reasonCap };
+  if (!queryCap && !reasonCap) {
+    appendExecutionMessage('agent', '该 Agent 未声明可用的查询或推理能力，请先让执行面重新注册能力。', null);
+    return;
+  }
+  // 推理-only Agent：直接把原问题作为只读推理请求，不去调用不存在的查询能力。
+  if (isReasoningOnly(selection)) {
+    const prepared = prepareReasoningRequest(text, reasonCap);
+    if (prepared.error) {
+      if (isHighestRiskOrderQuery(text)) {
+        await dispatchHighestRiskOrderOrchestration(text);
+        return;
+      }
+      appendExecutionMessage('agent', prepared.error, null);
+      return;
+    }
+    await dispatchExecution(selectedExecutionAgent, reasonCap, prepared.request, `正在推理：${describeExecutionReasoning(prepared.request)}…`);
+    return;
+  }
 
   // Agent 带查询语义（intent）→ 只用 LLM 解析；旧 Agent 无 intent → 回退本地正则（向后兼容）。
   if (selectedAgentHasIntent()) {
     const remote = await tryParseIntentRemote(text, selectedExecutionAgent);
-    if (remote?.kind === 'reasoning') {
-      await dispatchExecution(selectedExecutionAgent, reasonCap, remote.request, `正在推理：${describeExecutionReasoning(remote.request)}…`);
+    if (remote?.kind === 'reasoning' && reasonCap) {
+      const request = attachBusinessObjectRef(remote.request, text);
+      if (requiresBusinessObjectRef(selectedAgentCapabilityRecord(reasonCap)) && !request.context?.businessObjectRef) {
+        if (isHighestRiskOrderQuery(text)) {
+          await dispatchHighestRiskOrderOrchestration(text);
+          return;
+        }
+        appendExecutionMessage('agent', '该推理智能体需要业务锚点：请在问题中带上订单号/产品编码/批次号。', null);
+        return;
+      }
+      await dispatchExecution(selectedExecutionAgent, reasonCap, request, `正在推理：${describeExecutionReasoning(request)}…`);
       return;
     }
     if (remote?.kind === 'query') {
@@ -952,7 +2834,12 @@ async function sendExecutionQuery() {
     // LLM 失败/不可用 → 按 Agent 注册的 intent 做关键词回退（确定性，不依赖模型）。
     const fallback = parseExecutionQueryByIntent(text, selectedAgentIntent());
     if (fallback) {
+      if (remote?.kind === 'error') toast(`模型解析失败：${remote.error}；已使用关键词规则回退`, true);
       await dispatchExecution(selectedExecutionAgent, queryCap, { path: fallback.path, params: fallback.params }, `正在查询：${describeExecutionQuery(fallback)}…`);
+      return;
+    }
+    if (remote?.kind === 'error') {
+      appendExecutionMessage('agent', `意图识别失败：${remote.error}`, null);
       return;
     }
     appendExecutionMessage('agent', '意图识别失败，请换一种说法重试', null);
@@ -960,10 +2847,29 @@ async function sendExecutionQuery() {
   }
 
   const reasoning = parseExecutionReasoning(text);
-  if (reasoning && !reasoning.error) {
-    await dispatchExecution(selectedExecutionAgent, reasonCap, reasoning, `正在推理：${describeExecutionReasoning(reasoning)}…`);
+  if (reasoning && !reasoning.error && reasonCap) {
+    const prepared = prepareReasoningRequest(text, reasonCap);
+    if (prepared.error) {
+      if (isHighestRiskOrderQuery(text)) {
+        await dispatchHighestRiskOrderOrchestration(text);
+        return;
+      }
+      appendExecutionMessage('agent', prepared.error, null);
+      return;
+    }
+    await dispatchExecution(selectedExecutionAgent, reasonCap, prepared.request, `正在推理：${describeExecutionReasoning(prepared.request)}…`);
     return;
   }
+  if (reasoning && !reasoning.error && !reasonCap) {
+    appendExecutionMessage('agent', '当前 Agent 只支持查询，不支持推理；请选择推理智能体或换一种查询说法。', null);
+    return;
+  }
+  if (!queryCap) {
+    appendExecutionMessage('agent', '当前 Agent 未声明查询能力，请使用“分析 / 评估 / 风险 / 建议”等推理表达。', null);
+    return;
+  }
+
+  if (await tryDispatchCapabilityTemplate(text)) return;
 
   const parsed = parseExecutionQuery(text);
   if (parsed.error) {
@@ -973,8 +2879,211 @@ async function sendExecutionQuery() {
   await dispatchExecution(selectedExecutionAgent, queryCap, { path: parsed.path, params: parsed.params }, `正在查询：${describeExecutionQuery(parsed)}…`);
 }
 
-function pollExecutionRun(runId, pending) {
+async function dispatchHighestRiskOrderOrchestration(text) {
+  const pending = appendExecutionMessage('agent', '正在查询当前风险最高的订单，并交给推理智能体分析（可能需要 10–30 秒）…', null);
+  const controls = attachExecutionCancelControls(pending, selectedExecutionAgent);
+  try {
+    const response = await fetch('/api/execution/highest-risk-order', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, reasoningAgentId: selectedExecutionAgent }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      controls.cleanup();
+      const suffix = data.requestId ? `（requestId: ${data.requestId}）` : '';
+      if (pending) {
+        pending.textEl.textContent = controls.wasCancelled()
+          ? '分析已取消'
+          : `${humanizeError(data.code, data.error || `编排失败（HTTP ${response.status}）`)}${suffix}`;
+        appendTraceLink(pending.inner, data.reasoningRunId || data.queryRunId);
+      }
+      return;
+    }
+    controls.cleanup();
+    const order = data.order || {};
+    const summary = data.result !== undefined ? summarizeReasoningResult(data.result) : '推理完成，但没有返回可解析的结论。';
+    const orderLine = `已定位当前风险最高订单：${order.orderNo || '—'}（风险等级：${order.riskLevel || '未知'}）\n\n`;
+    if (pending) {
+      streamTextInto(pending.textEl, orderLine + summary);
+      prependResultMeta(pending.inner, data.result);
+      appendResultActions(pending.inner, orderLine + summary);
+      const details = document.createElement('details');
+      details.className = 'execution-raw';
+      const summaryEl = document.createElement('summary');
+      summaryEl.textContent = `查看编排详情（查询 run ${data.queryRunId || '—'} · 推理 run ${data.reasoningRunId || '—'}）`;
+      const dataEl = document.createElement('pre');
+      dataEl.className = 'execution-data';
+      dataEl.textContent = JSON.stringify({
+        requestId: data.requestId,
+        order,
+        queryRunId: data.queryRunId,
+        reasoningRunId: data.reasoningRunId,
+        result: data.result,
+      }, null, 2).slice(0, 6000);
+      details.appendChild(summaryEl);
+      details.appendChild(dataEl);
+      pending.inner.appendChild(details);
+      if (data.reasoningRunId) attachExecutionSteps(pending.inner, data.reasoningRunId);
+      appendTraceLink(pending.inner, data.reasoningRunId || data.queryRunId);
+    }
+    await loadExecution();
+  } catch (error) {
+    controls.cleanup();
+    if (pending) {
+      pending.textEl.textContent = controls.wasCancelled()
+        ? '分析已取消'
+        : `编排失败：${error?.message || error}`;
+    }
+  }
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for browsers/contexts without clipboard permission.
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function downloadTextFile(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function prependResultMeta(container, result) {
+  if (!container || !result || typeof result !== 'object') return;
+  const dataAsOf = typeof result.data_as_of === 'string' ? result.data_as_of.trim() : '';
+  const confidence = typeof result.data_confidence === 'string' ? result.data_confidence.trim() : '';
+  if (!dataAsOf && !confidence) return;
+  const confidenceLabel = { high: '高', medium: '中', low: '低' }[confidence] || confidence;
+  const tone = confidence === 'high' ? 'ok' : confidence === 'medium' ? 'warn' : 'danger';
+  const text = [
+    dataAsOf ? `数据截至 ${formatDateTimeText(dataAsOf)}` : '',
+    confidence ? `置信度 ${confidenceLabel}` : '',
+  ].filter(Boolean).join(' · ');
+  const meta = document.createElement('div');
+  meta.className = `execution-data-meta ${tone}`;
+  meta.textContent = confidence === 'low' ? `${text}（数据置信度不足，请人工复核）` : text;
+  container.insertBefore(meta, container.firstChild);
+}
+
+function appendResultActions(container, text, options = {}) {
+  if (!container || !text || !text.trim()) return;
+  const copyLabel = options.copyLabel || '复制结论';
+  const exportLabel = options.exportLabel || '导出结论';
+  const filenamePrefix = options.filenamePrefix || '分析结论';
+  const row = document.createElement('div');
+  row.className = 'execution-result-actions';
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'btn ghost compact';
+  copyBtn.textContent = copyLabel;
+  copyBtn.addEventListener('click', async () => {
+    const ok = await copyToClipboard(text);
+    copyBtn.textContent = ok ? '已复制' : '复制失败';
+    window.setTimeout(() => { copyBtn.textContent = copyLabel; }, 1_500);
+  });
+  const exportBtn = document.createElement('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'btn ghost compact';
+  exportBtn.textContent = exportLabel;
+  exportBtn.addEventListener('click', () => {
+    downloadTextFile(text, `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.txt`);
+  });
+  row.append(copyBtn, exportBtn);
+  container.appendChild(row);
+}
+
+function appendTraceLink(container, runId, label = '查看处理记录') {
+  if (!container || !runId) return;
+  const row = document.createElement('div');
+  row.className = 'execution-trace-link';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn ghost compact';
+  button.textContent = label;
+  button.addEventListener('click', () => openTraceFor(runId));
+  row.appendChild(button);
+  container.appendChild(row);
+}
+
+function attachExecutionCancelControls(pending, agentId) {
+  let elapsedTimer = null;
+  let cancelRow = null;
+  let cancelled = false;
+  const startedAt = Date.now();
+  const cleanup = () => {
+    if (elapsedTimer) clearInterval(elapsedTimer);
+    elapsedTimer = null;
+    if (cancelRow) cancelRow.remove();
+    cancelRow = null;
+  };
+  if (!pending || !agentId) return { cleanup, wasCancelled: () => cancelled };
+
+  cancelRow = document.createElement('div');
+  cancelRow.className = 'execution-cancel-row';
+  const elapsedEl = document.createElement('span');
+  elapsedEl.className = 'execution-elapsed';
+  elapsedEl.textContent = '已等待 0s';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn ghost compact';
+  cancelBtn.textContent = '取消分析';
+  cancelBtn.addEventListener('click', async () => {
+    if (cancelBtn.disabled) return;
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = '取消中…';
+    try {
+      const response = await fetch(`/api/execution/agents/${encodeURIComponent(agentId)}/recall`, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = '取消分析';
+        pending.textEl.textContent = humanizeError(body.code || 'EXECUTION_FAILED', body.error || `取消失败（HTTP ${response.status}）`);
+        return;
+      }
+      cancelled = true;
+      pending.textEl.textContent = '正在取消…';
+    } catch (error) {
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = '取消分析';
+      pending.textEl.textContent = `取消失败：${error?.message || error}`;
+    }
+  });
+  cancelRow.append(elapsedEl, cancelBtn);
+  pending.inner.appendChild(cancelRow);
+  elapsedTimer = setInterval(() => {
+    elapsedEl.textContent = `已等待 ${Math.round((Date.now() - startedAt) / 1000)}s`;
+  }, 1000);
+  return { cleanup, wasCancelled: () => cancelled };
+}
+
+function pollExecutionRun(runId, pending, agentId) {
   const deadline = Date.now() + 60_000;
+  const controls = attachExecutionCancelControls(pending, agentId);
+  const cleanupPendingControls = controls.cleanup;
   const tick = async () => {
     let runs = [];
     try {
@@ -983,6 +3092,7 @@ function pollExecutionRun(runId, pending) {
     } catch { /* 忽略轮询错误，下一轮重试 */ }
     const run = runs.find((item) => item.runId === runId);
     if (run && ['completed', 'failed', 'recalled'].includes(run.state)) {
+      cleanupPendingControls();
       if (pending) {
         if (run.state === 'completed') {
           const agent = executionAgents.find((item) => item.agentId === run.agentId);
@@ -992,6 +3102,8 @@ function pollExecutionRun(runId, pending) {
             : summarizeExecutionResult(typeof run.input?.path === 'string' ? run.input.path : '', run.result, run.input?.params || {}, intent);
           pending.textEl.textContent = '';
           streamTextInto(pending.textEl, summary);
+          prependResultMeta(pending.inner, run.result);
+          appendResultActions(pending.inner, summary);
           if (run.result !== undefined && run.result !== null) {
             const details = document.createElement('details');
             details.className = 'execution-raw';
@@ -1004,18 +3116,114 @@ function pollExecutionRun(runId, pending) {
             details.appendChild(dataEl);
             pending.inner.appendChild(details);
           }
+          attachExecutionSteps(pending.inner, runId);
         } else if (run.state === 'failed') {
-          pending.textEl.textContent = `查询失败：${run.error?.message || '未知错误'}`;
+          pending.textEl.textContent = `查询失败：${humanizeError(run.error?.code, run.error?.message || '未知错误')}`;
         } else {
-          pending.textEl.textContent = '查询已被召回';
+          pending.textEl.textContent = '分析已取消';
         }
+        appendTraceLink(pending.inner, runId);
       }
       return;
     }
     if (Date.now() < deadline) setTimeout(tick, 500);
-    else if (pending) pending.textEl.textContent = '查询超时，请稍后重试';
+    else {
+      cleanupPendingControls();
+      if (pending) pending.textEl.textContent = '查询超时，请稍后重试';
+    }
   };
   tick();
+}
+
+// ---------- 执行步骤（中台上报的工序回执） ----------
+const EXECUTION_EVENT_LABELS = {
+  run_received: '收到任务', step_started: '步骤开始', step_completed: '步骤完成',
+  tool_call: '工具调用', tool_result: '工具结果', model_call: '模型调用',
+  error: '错误', note: '备注', run_summary: '任务总结',
+  confirmation_required: '等待写确认', confirmation_resolved: '写确认已处理',
+  conversation_started: '会话开始', message: '用户消息', assistant_reply: '助手回复', conversation_ended: '会话结束',
+};
+const runEventsCache = new Map();
+
+function executionEventLabel(event) {
+  return EXECUTION_EVENT_LABELS[event] || event || '步骤';
+}
+
+function executionTimelineHtml(events) {
+  if (!Array.isArray(events) || !events.length) {
+    return '<div class="harbor-empty"><i data-lucide="list-tree"></i><strong>该智能体未上报执行步骤</strong><small>不影响任务结果；接入上报后可在这里看到内部过程</small></div>';
+  }
+  return `<div class="execution-timeline">${events.map((event) => {
+    const time = event.startedAt || event.receivedAt || null;
+    const tone = event.status === 'failed' ? 'danger' : event.status === 'completed' ? 'ok' : event.status === 'started' ? 'info' : 'neutral';
+    const label = event.status === 'failed' ? '失败' : event.status === 'completed' ? '已完成' : event.status === 'started' ? '进行中' : '说明';
+    const duration = event.durationMs !== null && event.durationMs !== undefined ? `${event.durationMs} ms` : '';
+    const detail = event.detail
+      ? `<details class="execution-step-detail"><summary>详情</summary><pre class="execution-data">${esc(JSON.stringify(event.detail, null, 2).slice(0, 4000))}</pre></details>`
+      : '';
+    const usage = event.usage
+      ? `<small>模型 ${esc(event.usage.modelId || '—')} · 输入 ${formatTokenCount(event.usage.tokensIn)} / 输出 ${formatTokenCount(event.usage.tokensOut)} · ¥${formatUsageCost(event.usage.cost ?? 0)}</small>`
+      : '';
+    const context = [
+      event.tool ? `工具 ${event.tool}` : '',
+      event.taskId ? `任务 ${event.taskId}` : '',
+      event.stepId !== null && event.stepId !== undefined ? `步骤 ${event.stepId}` : '',
+      event.confirmationId ? `确认 ${event.confirmationId}` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="execution-step">
+      <span class="execution-step-time">${borrowTime(time)}</span>
+      <span class="execution-step-main"><strong>${esc(executionEventLabel(event.event))}${event.name ? ` · ${esc(event.name)}` : ''}</strong><small>${esc(event.summary || '')}</small>${context ? `<small>${esc(context)}</small>` : ''}${usage}${detail}</span>
+      <span class="execution-step-meta"><b class="status-pill ${tone}">${label}</b><small>${esc(duration)}</small></span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function assistantTimelineHtml(events) {
+  const list = Array.isArray(events) ? events : [];
+  const hasSteps = list.some((event) => event.event === 'step_started' || event.event === 'step_completed');
+  if (!hasSteps) return executionTimelineHtml(list);
+  const main = list.filter((event) => event.event !== 'tool_call' && event.event !== 'tool_result');
+  const tools = list.filter((event) => event.event === 'tool_call' || event.event === 'tool_result');
+  const toolBlock = tools.length
+    ? `<details class="execution-step-detail assistant-tool-events"><summary>工具调用明细（${tools.length}）</summary>${executionTimelineHtml(tools)}</details>`
+    : '';
+  return `${executionTimelineHtml(main)}${toolBlock}`;
+}
+
+async function fetchRunEvents(runId, options = {}) {
+  if (!runId) return [];
+  if (!options.refresh && runEventsCache.has(runId)) return runEventsCache.get(runId);
+  try {
+    const response = await fetch(`/api/execution/runs/${encodeURIComponent(runId)}/events?limit=200`, { headers: { accept: 'application/json' } });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const events = Array.isArray(data?.events) ? data.events : [];
+    runEventsCache.set(runId, events);
+    return events;
+  } catch {
+    return [];
+  }
+}
+
+function attachExecutionSteps(container, runId) {
+  const details = document.createElement('details');
+  details.className = 'execution-raw execution-steps';
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = '查看执行步骤';
+  details.appendChild(summaryEl);
+  const body = document.createElement('div');
+  body.className = 'execution-steps-body';
+  body.innerHTML = '<div class="dashboard-loading">正在读取执行步骤…</div>';
+  details.appendChild(body);
+  container.appendChild(details);
+  let loaded = false;
+  details.addEventListener('toggle', async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    const events = await fetchRunEvents(runId);
+    body.innerHTML = executionTimelineHtml(events);
+    refreshIcons(body);
+  });
 }
 
 function openPrompt(prompt) {
@@ -1374,10 +3582,8 @@ function rememberChoice(convId) {
 let showArchived = false;
 
 function formatConvTime(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+  if (isSameBeijingDay(iso, new Date())) return formatBeijingTime(iso);
+  return formatBeijingDate(iso, { year: undefined });
 }
 
 function convProviderTag(conv) {
@@ -1493,7 +3699,7 @@ function newConversation() {
 }
 
 function openAgentConversationSpace(member, conversationId = null) {
-  chatScope = { type: 'agent', agentId: member.id, squadId: member.squadId || '', label: `${member.name} · 专属会话` };
+  chatScope = { type: 'agent', agentId: member.id, squadId: null, label: `${member.name} · 专属会话` };
   els.chatViewTitle.textContent = `${member.name} · 专属会话`;
   els.chatViewDesc.textContent = '该子 Agent 的独立会话，仅在所属 Agent / 小队中展示，不进入中枢会话列表。';
   els.conversationScopeLabel.textContent = chatScope.label;
@@ -1515,23 +3721,9 @@ function openHarborAgentConversationSpace(harborAgentId) {
   openAgentConversationSpace(member);
 }
 
-function openSquadConversationSpace(businessSquad) {
-  chatScope = { type: 'squad', agentId: null, squadId: businessSquad.id, label: `${businessSquad.name} · 小队会话` };
-  els.chatViewTitle.textContent = `${businessSquad.name} · 小队会话`;
-  els.chatViewDesc.textContent = '聚合查看下辖 Agent 的已分发会话；请选择具体 Agent 后才能新建或继续派发。';
-  els.conversationScopeLabel.textContent = chatScope.label;
-  els.chatScopeBack.classList.remove('hidden');
-  els.btnNew.disabled = true;
-  curConvId = convs.filter((conv) => conv.scope === 'agent' && conv.squadId === businessSquad.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id || null;
-  showView('chat');
-  renderConvs();
-  syncCurrentConversationBusy();
-  if (curConvId) send({ type: 'view', conversationId: curConvId });
-}
-
 function openHubConversationSpace() {
   chatScope = { type: 'hub', agentId: null, squadId: null, label: '中枢会话' };
-  els.chatViewTitle.textContent = '中枢 Agent';
+  els.chatViewTitle.textContent = '智能助手';
   els.chatViewDesc.textContent = '跨域经营分析、Capability 调用、Evidence 引用与 Guard 审批';
   els.conversationScopeLabel.textContent = '中枢会话';
   els.chatScopeBack.classList.add('hidden');
@@ -1581,12 +3773,35 @@ function appendMsg(kind, text, extraClass) {
   return wrap;
 }
 
+function renderDispatchProgress(message) {
+  const host = els.messages;
+  if (!host) return;
+  let el = document.getElementById('dispatch-progress-line');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'dispatch-progress-line';
+    el.className = 'dispatch-progress-line';
+    host.appendChild(el);
+  }
+  const label = message.domainLabel || message.domain || '分析';
+  if (message.phase === 'item_completed') {
+    const done = message.status === 'completed'
+      ? `已完成${typeof message.conclusions === 'number' ? `（${message.conclusions} 条结论）` : ''}`
+      : '未能完成';
+    el.textContent = `${label}${done}${message.index < message.total ? '；继续下一项…' : ''}`;
+  } else if (message.phase === 'item_started') {
+    el.textContent = `正在分发给${label}（${message.index}/${message.total}）…`;
+  } else {
+    el.textContent = `正在分发给其他系统 Agent（共 ${message.total} 项）…`;
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
 function msgMeta(text) {
   const node = document.createElement('div');
   node.className = 'meta';
   node.textContent = text;
-  return node;
-}
+  return node;}
 
 function resetTurn(scope = {}) {
   // Live reasoning is the only transient DOM node owned by a turn. Completed
@@ -2307,6 +4522,31 @@ function saveConfig() {
 
 function loadConfig() {
   send({ type: 'config:get' });
+  send({ type: 'dispatch_policy:get' });
+}
+
+const DISPATCH_DOMAIN_OPTIONS = [['order', '订单交付'], ['kitting', '物料齐套'], ['quality', '质量异常'], ['production', '生产进度']];
+
+function fillDispatchConfig(policy) {
+  const enabled = $('#dispatch-cfg-enabled');
+  if (enabled) enabled.value = policy?.enabled === true ? '1' : '0';
+  const max = $('#dispatch-cfg-max');
+  if (max) max.value = String(policy?.maxItemsPerAnalysis ?? 0);
+  const host = $('#dispatch-cfg-domains');
+  if (!host) return;
+  const selected = new Set(Array.isArray(policy?.dispatchDomains) ? policy.dispatchDomains : []);
+  host.innerHTML = DISPATCH_DOMAIN_OPTIONS.map(([value, label]) => `<label><input type="checkbox" data-dispatch-domain="${value}" ${selected.has(value) ? 'checked' : ''} /><span>${label}</span></label>`).join('');
+}
+
+function saveDispatchConfig() {
+  const enabled = ($('#dispatch-cfg-enabled')?.value || '0') === '1';
+  const max = Number($('#dispatch-cfg-max')?.value || 0);
+  const domains = Array.from(document.querySelectorAll('[data-dispatch-domain]'))
+    .filter((node) => node.checked)
+    .map((node) => node.getAttribute('data-dispatch-domain'));
+  const status = $('#dispatch-cfg-status');
+  if (status) status.textContent = '保存中...';
+  send({ type: 'dispatch_policy:save', payload: { enabled, dispatchDomains: domains, maxItemsPerAnalysis: max } });
 }
 
 async function loadEvidence() {
@@ -2338,6 +4578,44 @@ function evidenceSource(row) {
   return ['hub', 'AEOS Hub'];
 }
 
+const EVIDENCE_KIND_LABELS = {
+  app_event: '业务事件',
+  mcp_tool_call: '工具调用',
+  guard_decision: '审计决策',
+  notification: '通知',
+  authentication_audit: '登录审计',
+  turn_result: '运行结果',
+};
+const EVIDENCE_SUMMARY_LABELS = [
+  ['borrow order created', '借调单创建'],
+  ['borrow order dispatched', '借调单派单'],
+  ['borrow order completed', '借调单完成'],
+  ['borrow order cancelled', '借调单取消'],
+  ['borrow order rejected', '借调单拒绝'],
+  ['write request created', '写请求已创建'],
+  ['write request approved', '写请求已批准'],
+  ['write request rejected', '写请求已拒绝'],
+  ['write request completed', '写请求已完成'],
+  ['write request failed', '写请求失败'],
+  ['conclusion dispatch created', '结论分发已创建'],
+  ['conclusion dispatch completed', '结论分发已完成'],
+  ['conclusion dispatch approved', '结论分发已批准'],
+  ['conclusion dispatch rejected', '结论分发已拒绝'],
+  ['highest risk order orchestration completed', '最高风险订单编排完成'],
+  ['execution agent registration rejected', '执行面注册被拒'],
+  ['execution agent capabilities filtered', '执行面能力按授权过滤'],
+  ['agent control declared', '系统自助声明'],
+  ['conversation deleted', '会话已删除'],
+  ['model config updated', '模型配置已更新'],
+  ['conclusion dispatch policy updated', '分发策略已更新'],
+];
+
+function humanizeEvidenceSummary(summary) {
+  let text = String(summary || '');
+  for (const [en, zh] of EVIDENCE_SUMMARY_LABELS) text = text.split(en).join(zh);
+  return text;
+}
+
 function renderEvidenceRows() {
   const query = (els.evidenceSearch?.value || '').trim().toLowerCase();
   const source = els.evidenceSourceFilter?.value || 'all';
@@ -2361,15 +4639,17 @@ function renderEvidenceRows() {
       const occurredAt = row.occurred_at ? new Date(row.occurred_at) : null;
       const ageHours = occurredAt && !Number.isNaN(occurredAt.valueOf()) ? (Date.now() - occurredAt.valueOf()) / 3_600_000 : Number.POSITIVE_INFINITY;
       const freshness = ageHours < 1 ? ['刚刚', 'fresh'] : ageHours < 24 ? ['今日', 'today'] : ['历史', 'old'];
-      time.innerHTML = `<span>${esc(occurredAt && !Number.isNaN(occurredAt.valueOf()) ? occurredAt.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '未知时间')}</span><b class="evidence-freshness ${freshness[1]}">${freshness[0]}</b>`;
+      time.innerHTML = `<span>${esc(occurredAt && !Number.isNaN(occurredAt.valueOf()) ? formatBeijingDateTime(occurredAt, { year: undefined }) : '未知时间')}</span><b class="evidence-freshness ${freshness[1]}">${freshness[0]}</b>`;
       const kind = document.createElement('span');
       kind.className = 'k';
       const [sourceId, sourceLabel] = evidenceSource(row);
-      const kindLabel = row.kind === 'notification' ? (row.method || row.item_type || 'notification') : (row.kind || 'event');
-      kind.innerHTML = `<b class="evidence-source-badge evidence-source-${esc(sourceId)}">${esc(sourceLabel)}</b><span>${esc(kindLabel)}</span>`;
+      const kindLabel = row.kind === 'notification' ? (row.method || row.item_type || '通知') : (EVIDENCE_KIND_LABELS[row.kind] || row.kind || '事件');
+      kind.innerHTML = `<b class="evidence-source-badge evidence-source-${esc(sourceId)}">${esc(sourceLabel)}</b><span title="${esc(row.kind || '')}">${esc(kindLabel)}</span>`;
       const summary = document.createElement('span');
       summary.className = 's';
-      summary.textContent = row.summary || (row.payload ? JSON.stringify(row.payload).slice(0, 220) : '');
+      const summaryText = humanizeEvidenceSummary(row.summary || (row.payload ? JSON.stringify(row.payload).slice(0, 220) : ''));
+      summary.textContent = summaryText;
+      if (row.summary) summary.title = row.summary;
       node.append(time, kind, summary);
       els.evList.appendChild(node);
   }
@@ -2607,13 +4887,8 @@ function openDashboardRiskDetail(risk) {
   if (kicker) kicker.textContent = isProduction ? '生产协同详情' : isQuality ? '异常与质量详情' : isKitting ? '物料齐套详情' : '订单风险详情';
   els.dashboardRiskModalTitle.textContent = `${isQuality ? (risk.issueNo || risk.orderNo) : isProduction ? (risk.workOrderNo || risk.orderNo) : risk.orderNo} · ${risk.summary}`;
   els.dashboardRiskModalDesc.textContent = isProduction ? '生产协同中台返回字段与 Evidence 依据；缺失值不会补造。' : isKitting ? '物料齐套中台返回字段与 Evidence 依据；缺失值不会补造。' : isQuality ? '异常与质量中台返回字段与 Evidence 依据；缺失值不会补造。' : '仅展示 company-control 返回字段；缺失值不会补造。';
-  els.dashboardRiskDispatch.innerHTML = isProduction
-    ? '<i data-lucide="bot-message-square"></i><span>交给生产协同 Agent 分析</span>'
-    : isKitting
-    ? '<i data-lucide="bot-message-square"></i><span>交给物料齐套 Agent 分析</span>'
-    : isQuality
-      ? '<i data-lucide="bot-message-square"></i><span>交给异常与质量 Agent 分析</span>'
-      : '<i data-lucide="bot-message-square"></i><span>交给风险交付Agent分析</span>';
+  els.dashboardRiskDispatch.classList.remove('hidden');
+  els.dashboardRiskDispatch.innerHTML = '<i data-lucide="bot-message-square"></i><span>交给智能助手分析</span>';
   const detailFields = isProduction ? `
     ${field('生产工单号', risk.workOrderNo || risk.orderNo, 'mono')}
     ${field('销售订单 / 产品', [risk.salesOrderNo || risk.orderNo, risk.product].filter(Boolean).join(' / ') || '待回传')}
@@ -2714,11 +4989,8 @@ function productionRiskFromRow(row, assessment = {}, index = 0) {
 async function dispatchDashboardRiskToAgent() {
   const risk = selectedDashboardRisk;
   if (!risk) return;
-  const activeDispatches = riskAgentDispatches.size + (pendingRiskAgentDispatch ? 1 : 0);
-  if (activeDispatches >= MAX_PARALLEL_SPECIALIST_DISPATCHES || ws?.readyState !== WebSocket.OPEN) {
-    toast(activeDispatches >= MAX_PARALLEL_SPECIALIST_DISPATCHES
-      ? `当前已有 ${MAX_PARALLEL_SPECIALIST_DISPATCHES} 个专业 Agent 并行研判，请等待任一任务完成后再派发`
-      : '中枢连接未就绪，请稍后重试', true);
+  if (ws?.readyState !== WebSocket.OPEN) {
+    toast('中枢连接未就绪，请稍后重试', true);
     if (!ws || ws.readyState !== WebSocket.OPEN) connect();
     return;
   }
@@ -2726,52 +4998,37 @@ async function dispatchDashboardRiskToAgent() {
   const isKitting = risk.source === 'kitting';
   const isQuality = risk.source === 'quality';
   const isProduction = risk.source === 'production';
-  const profile = isKitting ? kittingAgentProfile(risk) : isQuality ? qualityAgentProfile(risk) : isProduction ? productionAgentProfile(risk) : { pattern: /订单交付风险/, label: '风险交付Agent', task: '订单风险分析' };
-  els.dashboardRiskModalStatus.textContent = `正在定位${profile.label}…`;
+  const label = isProduction ? '生产进度' : isQuality ? '质量异常' : isKitting ? '物料齐套' : '订单交付';
+  els.dashboardRiskModalStatus.textContent = '正在把该事项交给智能助手…';
   try {
-    await Promise.all([loadSquad({ silent: true }), loadHarbor({ silent: true })]);
-    const harborAgent = (harbor.agents || []).find((agent) => profile.pattern.test(`${agent.name || ''} ${agent.role || ''}`));
-    const member = harborAgent && (squad.members || []).find((item) => item.harborAgentId === harborAgent.id);
-    if (!harborAgent || !member) throw new Error(`${profile.label}尚未与 Agent 小队绑定，无法派发`);
-    await postSquad('/api/agent-squad/activities', {
-      agentId: member.id,
-      title: `已接收${profile.task}任务`,
-      detail: `${isKitting ? '需求对象' : isQuality ? '质量异常' : isProduction ? '生产对象' : '订单'} ${isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo} 已由首页派发；Evidence 线索：${risk.evidenceRef || '待运行时核对 evidence_refs'}。`,
-    });
-    pendingRiskAgentDispatch = {
-      harborAgentId: harborAgent.id,
-      memberId: member.id,
-      squadId: member.squadId,
-      orderNo: isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo,
-      evidenceRef: risk.evidenceRef || '',
-      taskType: isKitting ? 'kitting' : isQuality ? 'quality' : isProduction ? 'production' : 'order',
-      attentionCardId: attentionCardId(risk),
-      agentLabel: profile.label,
-      prompt: isKitting ? kittingAgentPrompt(risk, harborAgent) : isQuality ? qualityAgentPrompt(risk, harborAgent) : isProduction ? productionAgentPrompt(risk, harborAgent) : riskAgentPrompt(risk, harborAgent),
-      choice: { provider: harborAgent.provider, model: harborAgent.model },
-    };
-    const attentionStates = savedMap(ATTENTION_STORAGE);
-    const previousAttentionState = attentionStates[pendingRiskAgentDispatch.attentionCardId] || 'new';
-    attentionStates[pendingRiskAgentDispatch.attentionCardId] = 'review';
-    saveMap(ATTENTION_STORAGE, attentionStates);
-    recordAttentionTransition(pendingRiskAgentDispatch.attentionCardId, previousAttentionState, 'review', '已派发专业 Agent 研判');
-    if (dashboardSnapshot) renderAttention(dashboardSnapshot);
+    const subject = isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo;
+    const prompt = risk.prompt || `分析${isQuality ? '质量异常' : '订单'} ${subject} 的影响、建议动作与责任人，并使用关联证据链。`;
     closeDashboardRiskDetail();
-    chatScope = { type: 'agent', agentId: member.id, squadId: member.squadId || '', label: `${harborAgent.name} · 专属会话` };
-    els.chatViewTitle.textContent = `${harborAgent.name} · 专属会话`;
-    els.chatViewDesc.textContent = '由中枢分发的任务会话，只在该 Agent 与所属小队中呈现。';
+    // Hub 只保留智能助手：首页事项统一进入中枢会话，由执行面网关完成只读分析。
+    chatScope = { type: 'hub', agentId: null, squadId: null, label: '中枢会话' };
+    els.chatViewTitle.textContent = '智能助手';
+    els.chatViewDesc.textContent = '跨域经营分析与能力调用';
     els.conversationScopeLabel.textContent = chatScope.label;
-    els.chatScopeBack.classList.remove('hidden');
+    els.chatScopeBack.classList.add('hidden');
     showView('chat');
     curConvId = null;
-    pendingText = pendingRiskAgentDispatch.prompt;
-    pendingChoice = pendingRiskAgentDispatch.choice;
-    if (!newConversation()) throw new Error('无法创建风险分析会话');
-    toast(`已派发 ${isQuality ? (risk.issueNo || risk.orderNo) : risk.orderNo} 给${profile.label}；可继续派发其他 Agent（最多 ${MAX_PARALLEL_SPECIALIST_DISPATCHES} 个并行）`);
+    pendingText = prompt;
+    pendingChoice = null;
+    pendingRiskAgentDispatch = null;
+    if (!newConversation()) throw new Error('无法创建分析会话');
+    const attentionStates = savedMap(ATTENTION_STORAGE);
+    const cardId = attentionCardId(risk);
+    const previousAttentionState = attentionStates[cardId] || 'new';
+    attentionStates[cardId] = 'review';
+    saveMap(ATTENTION_STORAGE, attentionStates);
+    recordAttentionTransition(cardId, previousAttentionState, 'review', '已交给智能助手分析');
+    if (dashboardSnapshot) renderAttention(dashboardSnapshot);
+    toast(`已交给智能助手分析：${label} ${subject}`);
   } catch (error) {
     els.dashboardRiskModalStatus.textContent = error.message;
+    toast(`发起分析失败：${error.message}`, true);
+  } finally {
     els.dashboardRiskDispatch.disabled = false;
-    toast(`派发${profile.label}失败：${error.message}`, true);
   }
 }
 
@@ -2844,9 +5101,7 @@ function renderAttentionSearchResults(snapshot) {
 
   const historyRows = [
     ...(evidenceRows || []).map((row) => ({ type: 'Evidence', title: row.summary || row.kind || '证据事件', detail: `${row.occurred_at || ''} ${row.item_type || ''}`, action: 'evidence' })),
-    ...(squad.squadActivities || []).map((row) => ({ type: '小队动作', title: row.title, detail: `${row.detail || ''} ${row.createdAt || ''}`, action: 'squad' })),
     ...(squad.activities || []).map((row) => ({ type: 'Agent 动作', title: row.title, detail: `${row.detail || ''} ${row.createdAt || ''}`, action: 'squad' })),
-    ...(squad.squadMemories || []).map((row) => ({ type: '小队记忆', title: row.content, detail: row.createdAt || '', action: 'squad' })),
     ...(squad.memories || []).map((row) => ({ type: 'Agent 记忆', title: row.content, detail: row.createdAt || '', action: 'squad' })),
   ].filter((row) => attentionSearchMatch(query, row.type, row.title, row.detail)).slice(0, 30);
   const historyCards = historyRows.map((row) => `<article class="attention-search-result-card"><span class="status-pill info">${esc(row.type)}</span>${attentionExpandableText(row.title)}<small>${esc(row.detail)}</small><button type="button" class="btn ghost compact" data-attention-search-target="${esc(row.action)}">查看来源</button></article>`);
@@ -4459,6 +6714,7 @@ async function markAllInboxRead() {
 
 function renderDashboard(snapshot) {
   dashboardSnapshot = snapshot;
+  renderDataFreshness(snapshot);
   const metrics = snapshot.metrics || {};
   const risks = Array.isArray(snapshot.risks) ? snapshot.risks : [];
   const futureRisks = Array.isArray(snapshot.attentionRisks) ? snapshot.attentionRisks : risks;
@@ -4476,7 +6732,12 @@ function renderDashboard(snapshot) {
     .join(' · ');
   const refreshedAt = snapshot.refreshedAt ? formatHarborTime(snapshot.refreshedAt) : (snapshot.generatedAt ? formatHarborTime(snapshot.generatedAt) : '刚刚');
   const asOf = snapshot.dataAsOf ? formatHarborTime(snapshot.dataAsOf) : '数据基准未回传';
-  els.dashboardDataCaption.textContent = `AEOS V7.2 · 服务主动刷新 · 刷新 ${refreshedAt} · 中控数据基准 ${domainAsOf || '未回传'}${snapshot.businessData?.confidence !== 'high' ? ' · 数据置信度需关注' : ''}`;
+  const freshness = computeDataFreshness(snapshot);
+  const freshnessNote = freshness?.ageStale
+    ? ` · 数据已过期：${freshness.oldest.label} ${formatBeijingDate(freshness.oldest.stamp)}`
+    : '';
+  els.dashboardDataCaption.textContent = `AEOS V7.2 · 服务主动刷新 · 刷新 ${refreshedAt} · 中控数据基准 ${domainAsOf || '未回传'}${freshnessNote}${snapshot.businessData?.confidence !== 'high' ? ' · 数据置信度需关注' : ''}`;
+  els.dashboardDataCaption.classList.toggle('stale', Boolean(freshness?.ageStale));
   els.metricCapabilities.textContent = String(metrics.capabilityCount ?? 0);
   els.metricCapabilitiesCaption.textContent = `项 · ${metrics.mcpServerCount ?? 0} 个 MCP Server`;
   els.metricHighRisks.textContent = riskAssessment.available ? String(metrics.highRiskCount ?? 0) : '—';
@@ -4635,6 +6896,16 @@ function renderDashboard(snapshot) {
   renderAttention(snapshot);
 }
 
+function snapshotHasBusinessData(snapshot) {
+  if (!snapshot) return false;
+  return Boolean(snapshot.businessData?.available)
+    || (snapshot.risks || []).length > 0
+    || (snapshot.kittingRisks || []).length > 0
+    || (snapshot.qualityRisks || []).length > 0
+    || (snapshot.attentionRisks || []).length > 0
+    || Boolean(snapshot.productionAssessment?.available);
+}
+
 async function loadDashboard(options = {}) {
   if (dashboardLoading) return;
   dashboardLoading = true;
@@ -4643,6 +6914,10 @@ async function loadDashboard(options = {}) {
     const snapshot = await response.json();
     if (!response.ok) throw new Error(snapshot.error || `HTTP ${response.status}`);
     renderDashboard(snapshot);
+    // MCP 冷启动时首次快照可能为空：自动重试一次，避免用户只看到空看板。
+    if (!snapshotHasBusinessData(snapshot) && !options.retried) {
+      window.setTimeout(() => { void loadDashboard({ silent: true, force: true, retried: true }); }, 12_000);
+    }
   } catch (error) {
     els.dashboardDataCaption.textContent = `AEOS V7.2 · 经营数据同步失败：${error.message}`;
     els.attentionDataStatus.textContent = '同步失败';
@@ -4651,6 +6926,89 @@ async function loadDashboard(options = {}) {
   } finally {
     dashboardLoading = false;
   }
+}
+
+// ---------- 今日风险简报 ----------
+let dailyBriefingMarkdown = '';
+let dailyBriefingWindowEnd = '';
+
+function closeDailyBriefing() {
+  els.dailyBriefingModal?.classList.add('hidden');
+}
+
+async function openDailyBriefing() {
+  if (!els.dailyBriefingModal) return;
+  els.dailyBriefingModal.classList.remove('hidden');
+  els.dailyBriefingBody.textContent = '正在生成…';
+  els.dailyBriefingStatus.textContent = '';
+  els.dailyBriefingStatus.style.color = '';
+  try {
+    const response = await fetch('/api/briefing/daily', { headers: { accept: 'application/json' } });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const brief = payload.brief || {};
+    dailyBriefingMarkdown = String(payload.markdown || '');
+    dailyBriefingWindowEnd = String(brief.windowEnd || '');
+    els.dailyBriefingBody.innerHTML = renderBriefingMarkdown(dailyBriefingMarkdown) || '（简报为空）';
+    const stale = brief.stale === true;
+    els.dailyBriefingDesc.textContent = `数据口径：需求日期 = ${brief.windowEnd || '今天'}（仅统计今天到期） · 快照 ${brief.dataAsOf || '未回传'}${stale ? '（已过期）' : ''} · 查询置信度 ${brief.confidence || '未知'}`;
+    if (stale) {
+      els.dailyBriefingStatus.textContent = '数据快照已过期，请以中台最新数据为准';
+      els.dailyBriefingStatus.style.color = 'var(--warning)';
+    }
+  } catch (error) {
+    dailyBriefingMarkdown = '';
+    els.dailyBriefingBody.textContent = `生成失败：${error.message}`;
+  }
+}
+
+// 把当日简报作为一次只读分析任务发给执行面 Agent，结论附在简报下方。
+async function dispatchDailyBriefingToAgent() {
+  const button = els.dailyBriefingDispatch;
+  if (!button || !dailyBriefingMarkdown) {
+    if (!dailyBriefingMarkdown) toast('简报还没生成好', true);
+    return;
+  }
+  button.disabled = true;
+  els.dailyBriefingStatus.textContent = '正在把影响最大的订单逐条发给 Agent，通常 1–2 分钟…';
+  els.dailyBriefingStatus.style.color = '';
+  try {
+    const response = await fetch('/api/briefing/daily/dispatch', {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const completed = Number(payload.counts?.completed || 0) > 0;
+    const dispatched = Number(payload.counts?.dispatched || 0) > 0;
+    const orderCount = Array.isArray(payload.orders) ? payload.orders.length : 0;
+    const text = String(payload.markdown || payload.message || '').trim();
+    els.dailyBriefingBody.querySelector('.briefing-agent-report')?.remove();
+    const section = document.createElement('section');
+    section.className = 'briefing-agent-report';
+    const title = document.createElement('strong');
+    title.textContent = completed ? 'Agent 结论' : dispatched ? '分发未取得结论' : '分发未执行';
+    const body = document.createElement('div');
+    body.textContent = text || '本次分发未产生可展示结论，请到「处理记录」查看。';
+    section.append(title, body);
+    els.dailyBriefingBody.appendChild(section);
+    els.dailyBriefingStatus.textContent = completed
+      ? (orderCount ? `已发送 ${orderCount} 个订单，结论见下方` : '已发送，结论见下方')
+      : dispatched ? '已发送，但未取得结论' : '未执行分发';
+    els.dailyBriefingStatus.style.color = completed ? '' : 'var(--warning)';
+    section.scrollIntoView({ block: 'nearest' });
+  } catch (error) {
+    els.dailyBriefingStatus.textContent = `发送失败：${error.message}`;
+    els.dailyBriefingStatus.style.color = 'var(--danger)';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+const REGISTRY_USAGE_SYSTEM = { 'company-control': 'control-platform', 'aeos-hub': 'aeos-hub' };
+
+function registryUsageSystemId(name) {
+  return REGISTRY_USAGE_SYSTEM[String(name || '').toLowerCase()] || null;
 }
 
 function registryStatusIcon(system) {
@@ -4671,25 +7029,20 @@ function renderCapabilityPrompts(snapshot) {
   const servers = new Set(capabilities.map((capability) => capability.server));
   const businessData = snapshot.businessData || {};
   const riskAssessment = snapshot.riskAssessment || {};
+  // 面向使用者的示例问题：短句、可直接点击发送（写操作仍需点击确认）。
   const prompts = [];
   if (servers.has('company-control')) {
-    prompts.push({
-      label: businessData.available && riskAssessment.available ? '中控经营风险核查' : '中控数据可用性核查',
-      prompt: businessData.available && riskAssessment.available
-        ? '使用 company-control 的只读能力核查当前订单、订单明细、BOM、物料、供应商、齐套结果、缺料、库存可用量和未来供给。只基于返回的 evidence_refs 输出结论；数据过期或 UPSTREAM_UNAVAILABLE 不得解读为没有风险或没有缺料。'
-        : '调用 company-control/get_system_health，说明中控平台当前业务数据端点和订单风险字段是否可用、缺少哪些数据；不要调用 demo-erp，不要编造订单、物料或风险结论。',
-    });
-  }
-  if (!servers.has('company-control') && servers.has('demo-erp')) {
+    prompts.push(
+      { label: '当前交付风险最高的订单', prompt: '当前交付风险最高的订单有哪些' },
+      { label: '查订单明细', prompt: '查 HJ202602-0009-0028 的订单明细' },
+      { label: '改交付日期', prompt: '改写订单 HJ202602-0009-0028 的交付日期为 2026-11-15' },
+    );
+  } else if (servers.has('demo-erp')) {
     prompts.push({
       label: '演示订单风险',
       prompt: '调用 demo-erp/list_order_risks 扫描演示订单风险。请明确标注这是演示数据，不可作为真实经营结论。',
     });
   }
-  prompts.push({
-    label: '能力与数据边界',
-    prompt: '简要说明当前可调用的业务系统能力、哪些能力仅为已注册、哪些能够提供真实业务数据，并说明 evidence_refs 与数据置信度要求。',
-  });
   els.capabilityPromptChips.innerHTML = prompts.map((item) => `
     <button class="chip" type="button" data-capability-prompt="${esc(item.prompt)}">${esc(item.label)}<i data-lucide="arrow-up-right"></i></button>`).join('');
   $$('[data-capability-prompt]', els.capabilityPromptChips).forEach((button) => button.addEventListener('click', () => doSend(button.dataset.capabilityPrompt)));
@@ -4713,7 +7066,7 @@ function renderCapabilityRegistry(snapshot) {
     <article>
       <span class="system-icon"><i data-lucide="${registryStatusIcon(system)}"></i></span>
       <div><strong>${esc(system.name)}</strong><small>${esc(system.description)}${system.version ? ` · v${esc(system.version)}` : ''}${esc(businessBoundary)}</small></div>
-      <b class="status-pill ${esc(system.statusTone || 'neutral')}">${esc(system.status || '未知')}</b>
+      <span class="system-actions"><b class="status-pill ${esc(system.statusTone || 'neutral')}">${esc(system.status || '未知')}</b><button class="btn ghost compact registry-system-usage" type="button" data-registry-system-usage="${esc(system.name)}" title="查看该系统成本">成本</button></span>
     </article>`;
   }).join('') : '<div class="registry-loading">暂无已注册系统</div>';
 
@@ -4774,9 +7127,9 @@ async function loadCapabilityRegistry(options = {}) {
     registrySnapshot = snapshot;
     renderCapabilityRegistry(snapshot);
   } catch (error) {
-    $('span', els.registryStatus).textContent = `Capability Registry 加载失败：${error.message}`;
+    $('span', els.registryStatus).textContent = `能力目录加载失败：${error.message}`;
     els.registryStatus.classList.add('warning');
-    if (!options.silent) toast(`Capability Registry 加载失败：${error.message}`, true);
+    if (!options.silent) toast(`能力目录加载失败：${error.message}`, true);
   } finally {
     els.registryRefresh.disabled = false;
   }
@@ -4796,9 +7149,6 @@ function harborStatus(kind, value) {
       planned: ['规划中', 'neutral'], in_progress: ['进行中', 'ok'], paused: ['已暂停', 'warn'],
       completed: ['已完成', 'info'], cancelled: ['已取消', 'neutral'],
     },
-    model: {
-      active: ['可用', 'ok'], inactive: ['已停用', 'neutral'],
-    },
   };
   return maps[kind]?.[value] || [String(value || '未知'), 'neutral'];
 }
@@ -4810,9 +7160,7 @@ function statusPill(kind, value) {
 
 function formatHarborTime(value) {
   if (!value) return '尚未收到';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return formatBeijingDateTime(value, { year: undefined, second: undefined });
 }
 
 function harborVerificationLabel(value) {
@@ -4843,61 +7191,181 @@ function harborAgentActivity(agent) {
   const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
   const agentIds = [linkedMember?.id, squad.lead?.harborAgentId === agent.id ? squad.lead?.id : null].filter(Boolean);
   const activity = (squad.activities || []).filter((item) => agentIds.includes(item.agentId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-  if (!activity) return { title: '暂无已沉淀任务', detail: '等待中枢 Agent 按业务边界派发' };
+  if (!activity) return { title: '暂无已沉淀任务', detail: '等待智能助手按业务边界派发' };
   return { title: activity.title || '任务活动', detail: activity.detail || '未返回任务说明' };
 }
 
-function renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, hierarchy = {}) {
-  const runtime = agent.runtimeId ? runtimeById.get(agent.runtimeId) : null;
-  const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
-  const isRoot = hierarchy.root === true;
-  // The root is an orchestrator, not a squad member.  Do not surface legacy
-  // child-member activity (which can contain retired records) in its row.
-  const recent = isRoot
-    ? { title: '顶层编排节点', detail: '仅负责跨小队路由与治理，不归属任何业务小队' }
-    : harborAgentActivity(agent);
-  const hierarchyLabels = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
-  const tier = hierarchy.tier || `${agent.hierarchyLevel || 'L2'} · ${hierarchyLabels[agent.hierarchyLevel] || '专项执行'}`;
-  const parent = hierarchy.parent || (agent.parentAgentId ? `上级：${(harbor.agents || []).find((item) => item.id === agent.parentAgentId)?.name || '未找到'}` : (linkedMember ? '已关联业务小队' : '待关联业务小队'));
-  return `<div class="harbor-row">
-    <div class="harbor-identity"><span class="harbor-avatar"><i data-lucide="bot"></i></span><span class="harbor-primary"><strong>${esc(agent.name)}</strong><small><b class="harbor-tier">${esc(tier)}</b>${esc(parent)} · ${esc(agent.role || agent.description || '未定义角色')}</small></span></div>
-    <span><b class="status-pill info">${esc(agent.autonomyLevel)} ${esc(autonomyLabels[agent.autonomyLevel] || '')}</b></span>
-    <span class="harbor-cell"><strong>${esc(runtime?.name || '未绑定 Runtime')}</strong><small>${esc(agent.provider)} · ${esc(agent.model)}</small></span>
-    <span>${harborTags(agent.skills, '尚未配置 Skill')}</span>
-    <span>${esc(accessLabels[agent.access] || agent.access)}</span>
-    <span class="harbor-cell harbor-agent-recent"><strong>${esc(recent.title)}</strong><small title="${esc(recent.detail)}">${esc(recent.detail)}</small></span>
-    <span class="harbor-agent-actions">${statusPill('agent', agent.status)}${isRoot
-      ? '<span class="harbor-root-locked">根节点 · 不加入小队</span>'
-      : `${linkedMember
-        ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
-        : `<button class="btn secondary compact harbor-add-to-squad" type="button" data-harbor-agent-id="${esc(agent.id)}">加入小队</button>`}<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`}</span>
+const CATALOG_LEVEL_LABELS = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
+const CATALOG_DOMAIN_LABELS = { order: '订单交付', kitting: '物料齐套', quality: '质量异常', production: '生产进度', 'cross-domain': '跨系统协同' };
+// Hub 侧保留中枢 Agent（跨系统协同），默认隐藏当前没有实际业务入口的 10 个 L1 编队 Agent。
+// 只影响 AI 港湾目录展示，不删除数据、不影响执行面或已有引用。
+const HIDDEN_HUB_AGENT_IDS = new Set([
+  'agent-bcaa0313-4b26-4db2-bb22-2ad88d7d826e',
+  'agent-83347684-ce5f-4480-8cfe-b7c37913c3e4',
+  'agent-9ccf336f-262b-4ddd-ab7b-a348a63db88b',
+  'agent-4724207f-8202-4c73-bda1-fc4dc1c60329',
+  'agent-45cb0025-7d48-4a38-b9f4-079c4f65e37f',
+  'agent-b734fb5b-bcff-4168-a80a-d95c1748cc0c',
+  'agent-b39514bd-f389-4766-a83f-100423b8e84f',
+  'agent-ce5fbb98-972a-4fc6-b749-c03f167d400d',
+  'agent-d5fed80d-dd24-4677-ae0e-49c6c99ec186',
+  'agent-2e8c835f-b6d5-4a93-a9f6-e52b265d30bf',
+]);
+
+function isCatalogAgentHidden(agent) {
+  return HIDDEN_HUB_AGENT_IDS.has(agent?.id);
+}
+
+function visibleHarborAgents() {
+  return (harbor?.agents || []).filter((agent) => !HIDDEN_HUB_AGENT_IDS.has(agent?.id));
+}
+
+function catalogFilterActive() {
+  return Boolean(String(harborAgentFilter.query || '').trim())
+    || harborAgentFilter.level !== 'all'
+    || harborAgentFilter.status !== 'all'
+    || harborAgentFilter.domain !== 'all';
+}
+
+function catalogAgentMatches(agent, system) {
+  if (isCatalogAgentHidden(agent, system)) return false;
+  if (harborAgentFilter.level !== 'all' && agent.hierarchyLevel !== harborAgentFilter.level) return false;
+  if (harborAgentFilter.status !== 'all' && agent.status !== harborAgentFilter.status) return false;
+  if (harborAgentFilter.domain !== 'all' && !(agent.domainIds || []).includes(harborAgentFilter.domain)) return false;
+  const query = String(harborAgentFilter.query || '').trim().toLowerCase();
+  if (!query) return true;
+  const text = [
+    agent.name, agent.role, agent.externalAgentId, system.name,
+    ...(agent.skills || []),
+    ...(agent.domainIds || []).map((id) => CATALOG_DOMAIN_LABELS[id] || id),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes(query);
+}
+
+function agentExpectsModelUsage(agent) {
+  const skills = Array.isArray(agent?.skills) ? agent.skills : [];
+  return skills.length === 0 || skills.some((skill) => !String(skill).startsWith('query'));
+}
+
+function usageIsQueryOnly(usage) {
+  if (!usage || Number(usage.events) <= 0) return false;
+  const tokens = (Number(usage.tokensIn) || 0) + (Number(usage.tokensOut) || 0);
+  return Number(usage.queryEvents) === Number(usage.events)
+    && tokens === 0
+    && Number(usage.cost) === 0;
+}
+
+function catalogUsageHtml(usage, agent) {
+  if (!usage || usage.events === 0) {
+    return '<span class="catalog-usage empty"><strong>—</strong><small>未产生记账</small></span>';
+  }
+  const tokens = usage.tokensIn + usage.tokensOut;
+  const missing = tokens === 0 && usage.cost === 0;
+  if (usageIsQueryOnly(usage)) {
+    return `<span class="catalog-usage empty"><strong>无模型 Token</strong><small>${usage.events} 次查询接口</small></span>`;
+  }
+  if (missing) {
+    if (agent && !agentExpectsModelUsage(agent)) {
+      return `<span class="catalog-usage empty"><strong>无模型 Token</strong><small>${usage.events} 次查询接口</small></span>`;
+    }
+    return `<span class="catalog-usage missing"><strong>Token 未上报</strong><small>${usage.events} 次执行</small></span>`;
+  }
+  return `<span class="catalog-usage"><strong>¥${formatUsageCost(usage.cost)}</strong><small>${formatTokenCount(tokens)} tok · ${usage.events} 次</small></span>`;
+}
+
+function catalogAgentUsageDetail(agent, system) {
+  const usage = agent.usage;
+  const tokens = usage ? usage.tokensIn + usage.tokensOut : 0;
+  const queryOnly = usageIsQueryOnly(usage);
+  const modelExpected = !queryOnly && agentExpectsModelUsage(agent);
+  const missing = Boolean(usage && usage.events > 0 && tokens === 0 && usage.cost === 0 && !queryOnly);
+  const card = (label, value, note, tone = '') => `<div class="catalog-usage-card"><span>${esc(label)}</span><strong class="${tone}">${esc(value)}</strong><small>${esc(note)}</small></div>`;
+  return `<div class="catalog-agent-detail">
+    <div class="catalog-usage-cards">
+      ${card('已记账成本', queryOnly ? '—' : (usage ? `¥${formatUsageCost(usage.cost)}` : '—'), queryOnly ? '查询接口不产生模型费用' : (usage ? `${usage.events} 次记账` : '暂无用量'))}
+      ${card('Token', queryOnly ? '无模型 Token' : (usage && tokens > 0 ? formatTokenCount(tokens) : (modelExpected ? '未上报' : '无模型调用')), queryOnly ? '纯查询接口不产生模型 Token' : (missing ? (modelExpected ? '输入 / 输出均缺失' : '查询接口不产生模型 Token') : '输入 + 输出'), missing ? 'missing' : '')}
+      ${card('执行次数', usage ? String(usage.events) : '0', '来自 run_complete')}
+      ${card('最近调用', usage?.lastAt ? formatHarborTime(usage.lastAt) : '—', agent.status === 'archived' ? '已归档' : '该 Agent')}
+    </div>
+    ${queryOnly
+      ? '<div class="catalog-usage-note"><b>无模型费用</b>：这些执行是纯查询接口，不经过模型；调用次数来自 run_complete，Token 和成本为 0 属正常。</div>'
+      : missing ? (modelExpected
+        ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>'
+        : '<div class="catalog-usage-note"><b>无模型调用</b>：该 Agent 只有查询接口，不产生模型 Token；执行次数来自 run_complete，成本为 ¥0.00 属正常。</div>') : ''}
+    <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看分析成本</button></div>
   </div>`;
 }
 
-function renderHarborRootAgent(agent, runtimeById, autonomyLabels, accessLabels) {
-  if (!agent) return '';
-  return `<section class="harbor-agent-root">
-    <div class="harbor-agent-root-head"><span class="harbor-agent-root-icon"><i data-lucide="crown"></i></span><span><strong>L0 · 中枢 Agent</strong><small>负责跨小队编排、任务路由与治理门禁</small></span><b class="status-pill ok">根节点</b></div>
-    <div class="harbor-agent-root-member">${renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L0 · 中枢 Agent', parent: 'AI 港湾根节点', root: true })}</div>
+function renderCatalogAgentRow(agent, system) {
+  const runtime = agent.runtimeId ? (harbor.runtimes || []).find((item) => item.id === agent.runtimeId) : null;
+  const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
+  const isRoot = agent.type === 'hub';
+  const serviceDomains = (agent.domainIds || []).map((id) => CATALOG_DOMAIN_LABELS[id] || id);
+  const environment = agent.execution
+    ? `${agent.execution.local ? '港湾本机' : '远程执行面'} · ${agent.execution.connectionStatus === 'online' ? '在线' : '离线'}`
+    : runtime?.name || '未绑定 Runtime';
+  const updated = agent.execution ? formatHarborTime(agent.execution.lastSeenAt) : formatHarborTime(agent.updatedAt);
+  return `<div class="catalog-agent-row${catalogExpandedAgentId === agent.id ? ' is-expanded' : ''}" data-catalog-agent-id="${esc(agent.id)}">
+    <span class="catalog-agent-avatar"><i data-lucide="bot"></i></span>
+    <div class="catalog-agent-main">
+      <span class="catalog-agent-title"><strong>${esc(agent.name)}</strong><b class="harbor-tier">${esc(agent.hierarchyLevel)} · ${esc(CATALOG_LEVEL_LABELS[agent.hierarchyLevel] || '专项执行')}</b>${isRoot ? '<b class="status-pill ok">根节点</b>' : ''}${agent.registeredInHarbor === false ? '<b class="status-pill warn">未登记港湾</b>' : ''}</span>
+      <small>${esc(agent.role || '未定义角色')} · ${esc(system.name)} · 服务域 ${esc(serviceDomains.join('、') || '未设置')}</small>
+    </div>
+    <span class="catalog-agent-skills">${harborTags(agent.skills, '尚未配置 Skill')}</span>
+    <span class="catalog-agent-runtime"><strong>${esc(environment)}</strong><small>${esc(agent.modelProfileId || '未指定模型档')} · ${esc(updated)}</small></span>
+    ${catalogUsageHtml(agent.usage, agent)}
+    <span class="catalog-agent-status">${statusPill('agent', agent.status)}</span>
+    <span class="catalog-agent-actions">${linkedMember
+      ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
+      : ''}${agent.registeredInHarbor !== false && !isRoot
+      ? `<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`
+      : ''}</span>
+  </div>${catalogExpandedAgentId === agent.id ? catalogAgentUsageDetail(agent, system) : ''}`;
+}
+
+function renderCatalogDomain(system, domain, forceExpand) {
+  const key = `${system.id}/${domain.id}`;
+  const expanded = forceExpand || expandedCatalogDomains.has(key);
+  return `<section class="catalog-domain ${expanded ? 'is-expanded' : ''}">
+    <button class="catalog-domain-toggle" type="button" data-catalog-domain-toggle="${esc(key)}" aria-expanded="${expanded}">
+      <span class="catalog-node-icon domain"><i data-lucide="folder-tree"></i></span>
+      <span class="catalog-node-copy"><strong>${esc(domain.name)}</strong><small>主属业务域 · 服务域筛选会一并命中</small></span>
+      <span class="catalog-node-count">${domain.agentCount} 个智能体</span>
+      <i class="catalog-node-chevron" data-lucide="chevron-right"></i>
+    </button>
+    <div class="catalog-domain-body">${domain.agents.length
+      ? domain.agents.map((agent) => renderCatalogAgentRow(agent, system)).join('')
+      : '<div class="catalog-empty-node">该业务域暂无智能体</div>'}</div>
   </section>`;
 }
 
-function renderHarborBusinessSquadGroup(businessSquad, agents, runtimeById, autonomyLabels, accessLabels) {
-  const expanded = expandedHarborBusinessSquadIds.has(businessSquad.id);
-  const members = (squad.members || []).filter((member) => member.squadId === businessSquad.id);
-  const linkedCount = members.filter((member) => member.harborAgentId && agents.some((agent) => agent.id === member.harborAgentId)).length;
-  const workingCount = agents.filter((agent) => agent.status === 'working').length;
-  const standbyCount = agents.filter((agent) => ['idle', 'starting'].includes(agent.status)).length;
-  return `<section class="harbor-agent-group ${expanded ? 'is-expanded' : ''}">
-    <button class="harbor-agent-group-toggle" type="button" data-harbor-business-squad-id="${esc(businessSquad.id)}" aria-expanded="${expanded}">
-      <span class="harbor-agent-group-icon"><i data-lucide="layers"></i></span>
-      <span class="harbor-agent-group-copy"><strong>L1 · ${esc(businessSquad.name)}</strong><small>${esc(businessSquad.description || '业务 Agent 协作单元')} · ${linkedCount}/${members.length} 已接入 AI 港湾</small></span>
-      <span class="harbor-agent-group-note">${workingCount ? `${workingCount} 个执行中` : `${standbyCount} 个待命`} · ${linkedCount === members.length ? '链路就绪' : '有待绑定'}</span>
-      <i class="harbor-agent-group-chevron" data-lucide="chevron-right"></i>
+function renderCatalogSystem(system, forceExpand) {
+  const expanded = forceExpand || expandedCatalogSystems.has(system.id);
+  return `<section class="catalog-system ${expanded ? 'is-expanded' : ''}">
+    <button class="catalog-system-toggle" type="button" data-catalog-system-toggle="${esc(system.id)}" aria-expanded="${expanded}">
+      <span class="catalog-node-icon system"><i data-lucide="building-2"></i></span>
+      <span class="catalog-node-copy"><strong>${esc(system.name)}</strong><small>${system.unregistered ? '未登记系统' : esc(system.owner || '未指定负责人')} · ${system.domains.length} 个业务域</small></span>
+      <span class="catalog-node-count">${system.agentCount} 个智能体</span>
+      ${catalogUsageHtml(system.usage)}
+      <i class="catalog-node-chevron" data-lucide="chevron-right"></i>
     </button>
-    <div class="harbor-agent-group-members">${agents.length ? agents.map((agent) => renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L2 · 专项 Agent', parent: businessSquad.name })).join('') : '<div class="harbor-agent-group-empty">暂无已接入的专项 Agent</div>'}</div>
+    <div class="catalog-system-body">${system.domains.length
+      ? system.domains.map((domain) => renderCatalogDomain(system, domain, forceExpand)).join('')
+      : '<div class="catalog-empty-node">该业务域暂无智能体</div>'}</div>
   </section>`;
 }
+
+function renderCatalogHierarchyView(pairs) {
+  return `<div class="catalog-hierarchy">${['L0', 'L1', 'L2', 'L3'].map((level) => {
+    const members = pairs.filter(({ agent }) => agent.hierarchyLevel === level);
+    if (!members.length) return '';
+    return `<section class="catalog-hierarchy-group">
+      <div class="catalog-hierarchy-head"><span class="catalog-node-icon domain"><i data-lucide="layers"></i></span><span class="catalog-node-copy"><strong>${level} · ${esc(CATALOG_LEVEL_LABELS[level])}</strong><small>功能层级视图，不改变系统与业务域归属</small></span><b class="catalog-node-count">${members.length}</b></div>
+      <div class="catalog-hierarchy-members">${members.map(({ agent, system }) => renderCatalogAgentRow(agent, system)).join('')}</div>
+    </section>`;
+  }).join('')}</div>`;
+}
+
 
 function renderHarbor() {
   const agents = Array.isArray(harbor.agents) ? harbor.agents : [];
@@ -4906,13 +7374,14 @@ function renderHarbor() {
   const runs = Array.isArray(harbor.runs) ? harbor.runs : [];
   const runtimeById = new Map(runtimes.map((item) => [item.id, item]));
   const agentById = new Map(agents.map((item) => [item.id, item]));
-  const schedulableAgents = agents.filter((item) => ['idle', 'working'].includes(item.status)).length;
+  const visibleAgents = agents.filter((item) => !HIDDEN_HUB_AGENT_IDS.has(item.id));
+  const schedulableAgents = visibleAgents.filter((item) => ['idle', 'working'].includes(item.status)).length;
   const onlineRuntimes = runtimes.filter((item) => ['online', 'busy'].includes(item.status)).length;
   const readyRuntimes = runtimes.filter((item) => ['ready', 'online', 'busy'].includes(item.status)).length;
   const activeProjects = projects.filter((item) => item.status === 'in_progress').length;
   const activeRuns = runs.filter((item) => ['queued', 'running', 'waiting_approval'].includes(item.status)).length;
 
-  els.harborAgentCount.textContent = String(agents.length);
+  els.harborAgentCount.textContent = String(visibleAgents.length);
   els.harborAgentActive.textContent = `${schedulableAgents} 个可调度`;
   els.harborRuntimeCount.textContent = String(runtimes.length);
   els.harborRuntimeOnline.textContent = `${onlineRuntimes} 个在线 · ${readyRuntimes} 个可用`;
@@ -4921,48 +7390,66 @@ function renderHarbor() {
   els.harborRunCount.textContent = String(runs.length);
   els.harborRunActive.textContent = `${activeRuns} 个待处理/执行中`;
   els.harborRuntimeBoundaryStatus.textContent = `${readyRuntimes} 个待命`;
-  els.harborUpdated.textContent = `最近同步 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  els.harborUpdated.textContent = `最近同步 ${formatBeijingTime(new Date(), { second: '2-digit' })}`;
 
-  const autonomyLabels = { A0: '观察', A1: '建议', A2: '编排', A3: '低风险自治', A4: '经营自治', A5: '例外管理' };
-  const accessLabels = { private: '仅自己', workspace: '工作区', selected: '指定成员' };
-  const businessSquads = Array.isArray(squad.subSquads) ? squad.subSquads : [];
-  const businessSquadById = new Map(businessSquads.map((item) => [item.id, item]));
-  const memberByHarborAgentId = new Map((squad.members || []).filter((item) => item.harborAgentId).map((item) => [item.harborAgentId, item]));
-  const leadHarborAgentId = squad.lead?.harborAgentId || 'agent-aeos-hub';
-  if (els.harborAgentSquadFilter) {
-    const previous = harborAgentFilter.squad || 'all';
-    els.harborAgentSquadFilter.innerHTML = `<option value="all">全部小队</option>${businessSquads.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}`;
-    els.harborAgentSquadFilter.value = businessSquadById.has(previous) ? previous : 'all';
-    harborAgentFilter.squad = els.harborAgentSquadFilter.value;
+  if (els.harborShowHiddenAgents) els.harborShowHiddenAgents.checked = showHiddenHarborAgents;
+  // 默认收起早期创建、无独立入口的业务分析编队；管理需要时可勾选显示。
+  const catalogSystems = (Array.isArray(catalogTree?.systems) ? catalogTree.systems : []).map((system) => ({
+    ...system,
+    domains: (system.domains || []).map((domain) => ({
+      ...domain,
+      agents: (domain.agents || []).filter((agent) => showHiddenHarborAgents || !HIDDEN_HUB_AGENT_IDS.has(agent.id)),
+    })),
+  }));
+  const activeFilter = catalogFilterActive();
+  const allPairs = [];
+  for (const system of catalogSystems) {
+    for (const domain of system.domains) {
+      for (const agent of domain.agents) allPairs.push({ agent, system, domain });
+    }
   }
-  const query = String(harborAgentFilter.query || '').trim().toLowerCase();
-  const visibleAgents = agents.filter((agent) => {
-    const member = memberByHarborAgentId.get(agent.id);
-    const parentName = agent.parentAgentId ? agents.find((item) => item.id === agent.parentAgentId)?.name || '' : '';
-    if (harborAgentFilter.level !== 'all' && (agent.hierarchyLevel || 'L2') !== harborAgentFilter.level) return false;
-    if (harborAgentFilter.status !== 'all' && (agent.status || 'draft') !== harborAgentFilter.status) return false;
-    if (harborAgentFilter.squad !== 'all' && (member?.squadId || '') !== harborAgentFilter.squad) return false;
-    if (!query) return true;
-    return `${agent.name || ''} ${agent.role || ''} ${agent.description || ''} ${parentName}`.toLowerCase().includes(query);
-  });
-  const rootAgent = visibleAgents.find((agent) => agent.id === leadHarborAgentId) || null;
-  const groupedAgents = new Map(businessSquads.map((item) => [item.id, []]));
-  const standaloneAgents = [];
-  for (const agent of visibleAgents) {
-    if (agent.id === rootAgent?.id) continue;
-    const member = memberByHarborAgentId.get(agent.id);
-    if (member?.squadId && businessSquadById.has(member.squadId)) groupedAgents.get(member.squadId).push(agent);
-    else standaloneAgents.push(agent);
+  const matchedPairs = allPairs.filter(({ agent, system }) => catalogAgentMatches(agent, system));
+  if (els.harborAgentDomainFilter) els.harborAgentDomainFilter.value = harborAgentFilter.domain;
+  const totalCost = catalogSystems.reduce((sum, system) => sum + (system.usage?.cost ?? 0), 0);
+  const hasUsage = catalogSystems.some((system) => system.usage && system.usage.events > 0);
+  const filteredSystems = catalogSystems.map((system) => {
+    const domains = system.domains.map((domain) => {
+      const members = domain.agents.filter((agent) => catalogAgentMatches(agent, system));
+      return { ...domain, agents: members, agentCount: members.length };
+    }).filter((domain) => domain.agents.length > 0 || (!activeFilter && system.id !== 'aeos-hub'));
+    return { ...system, domains, agentCount: domains.reduce((sum, domain) => sum + domain.agentCount, 0) };
+  }).filter((system) => system.agentCount > 0 || (!activeFilter && system.id !== 'aeos-hub'));
+
+  if (els.catalogSummary) {
+    const visibleSystems = filteredSystems.filter((system) => system.agentCount > 0);
+    const visibleDomains = visibleSystems.reduce((sum, system) => sum + system.domains.filter((domain) => domain.agentCount > 0).length, 0);
+    const visibleAgents = visibleSystems.reduce((sum, system) => sum + system.agentCount, 0);
+    const counts = catalogTree
+      ? { systems: visibleSystems.length, domains: visibleDomains, agents: visibleAgents, unregisteredInHarbor: catalogTree.counts?.unregisteredInHarbor ?? 0 }
+      : null;
+    els.catalogSummary.innerHTML = counts
+      ? `<span><i data-lucide="network"></i>${counts.systems} 个系统 · ${counts.domains} 个业务域 · ${counts.agents} 个智能体${hasUsage ? ` · 累计 ¥${formatUsageCost(totalCost)}` : ''}</span>${counts.unregisteredInHarbor ? `<span class="catalog-warning"><i data-lucide="unlink"></i>${counts.unregisteredInHarbor} 个执行面智能体未登记港湾</span>` : ''}${activeFilter ? `<span class="catalog-hit"><i data-lucide="filter"></i>筛选命中 ${matchedPairs.length} 个</span>` : ''}`
+      : '';
   }
-  const agentRows = standaloneAgents.map((agent) => renderHarborAgentRow(agent, runtimeById, autonomyLabels, accessLabels, { tier: 'L1 · 待归属 Agent', parent: '尚未加入业务小队' }));
-  const groupedRows = businessSquads
-    .map((businessSquad) => renderHarborBusinessSquadGroup(businessSquad, groupedAgents.get(businessSquad.id), runtimeById, autonomyLabels, accessLabels));
-  const unassigned = agentRows.length ? `<section class="harbor-agent-unassigned"><div class="harbor-agent-unassigned-head"><i data-lucide="git-branch"></i><span><strong>L1 · 待归属业务小队</strong><small>这些 Agent 尚未建立小队派发关系</small></span><b class="status-pill warn">${agentRows.length} 个待归属</b></div>${agentRows.join('')}</section>` : '';
-  els.harborAgentList.innerHTML = visibleAgents.length ? [renderHarborRootAgent(rootAgent, runtimeById, autonomyLabels, accessLabels), ...groupedRows, unassigned].join('') : harborEmpty('search-x', agents.length ? '没有匹配的 Agent' : '暂无智能体', agents.length ? '请调整层级、状态、小队或关键字筛选' : '新增智能体后可绑定 Runtime 与 Capability');
+
+  if (!catalogTree) {
+    els.harborAgentList.innerHTML = harborEmpty('cloud-off', '目录数据暂不可用', '请刷新页面后重试');
+  } else if (!catalogSystems.length) {
+    els.harborAgentList.innerHTML = harborEmpty('building-2', '暂无系统', '请先在系统登记中配置归属系统');
+  } else if (activeFilter && matchedPairs.length === 0) {
+    els.harborAgentList.innerHTML = harborEmpty('search-x', '没有匹配的智能体', '请调整层级、状态、业务域或关键字筛选');
+  } else if (catalogView === 'hierarchy') {
+    els.harborAgentList.innerHTML = renderCatalogHierarchyView(matchedPairs);
+  } else {
+    els.harborAgentList.innerHTML = filteredSystems
+      .map((system) => renderCatalogSystem(system, activeFilter))
+      .join('');
+  }
 
   const runtimeKinds = {
     'codex-app-server': 'Codex App Server', 'openai-responses': 'OpenAI Responses',
     'mcp-agent': 'MCP Agent', 'custom-cli': 'Custom CLI',
+    'remote-execution-agent': '远程执行面', 'system-assistant': '系统托管助手',
   };
   els.harborRuntimeList.innerHTML = runtimes.length ? runtimes.map((runtime) => `<div class="harbor-row">
     <div class="harbor-identity"><span class="harbor-avatar runtime"><i data-lucide="server"></i></span><span class="harbor-primary"><strong>${esc(runtime.name)}</strong><small>${esc(runtime.owner || '未指定 Owner')}</small></span></div>
@@ -4978,7 +7465,8 @@ function renderHarbor() {
   };
   els.harborProjectList.innerHTML = projects.length ? projects.map((project) => {
     const lead = project.leadType === 'agent' ? agentById.get(project.leadId)?.name || '未知智能体' : project.leadId || 'workspace-owner';
-    const teamNames = (project.agentIds || []).map((id) => agentById.get(id)?.name).filter(Boolean);
+    const visibleAgentIds = new Set(visibleHarborAgents().map((agent) => agent.id));
+    const teamNames = (project.agentIds || []).filter((id) => visibleAgentIds.has(id)).map((id) => agentById.get(id)?.name).filter(Boolean);
     const progress = Math.max(0, Math.min(100, Number(project.progress) || 0));
     const [priorityLabel, priorityTone] = priorityMeta[project.priority] || priorityMeta.none;
     return `<div class="harbor-row">
@@ -4996,22 +7484,29 @@ function renderHarbor() {
 
 async function loadHarbor(options = {}) {
   try {
-    const [response, squadResponse, modelsResponse] = await Promise.all([
+    const [response, squadResponse, catalogResponse] = await Promise.all([
       fetch('/api/harbor', { headers: { accept: 'application/json' } }),
       fetch('/api/agent-squad', { headers: { accept: 'application/json' } }),
-      fetch('/api/models', { headers: { accept: 'application/json' } }),
+      fetch('/api/catalog/tree', { headers: { accept: 'application/json' } }),
     ]);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     harbor = data;
     if (squadResponse.ok) squad = await squadResponse.json();
-    if (modelsResponse.ok) modelRegistry = await modelsResponse.json();
+    if (catalogResponse.ok) {
+      const catalogData = await catalogResponse.json();
+      catalogTree = catalogData.tree || null;
+      if (!catalogExpansionInitialized && catalogTree) {
+        for (const system of catalogTree.systems || []) {
+          if (system.agentCount > 0) expandedCatalogSystems.add(system.id);
+          for (const domain of system.domains || []) expandedCatalogDomains.add(`${system.id}/${domain.id}`);
+        }
+        catalogExpansionInitialized = true;
+      }
+    } else {
+      catalogTree = null;
+    }
     renderHarbor();
-    renderModels();
-    renderModelDatalists();
-    refreshUsageAgentFilter();
-    void loadUsage({ silent: true });
-    if (!$('#view-squad').classList.contains('hidden')) renderSquad();
   } catch (error) {
     if (!options.silent) toast(`加载 AI 港湾失败：${error.message}`, true);
     [els.harborAgentList, els.harborRuntimeList, els.harborProjectList].forEach((node) => {
@@ -5021,522 +7516,27 @@ async function loadHarbor(options = {}) {
   }
 }
 
-// ---------- 模型中心 ----------
-
-function modelPricingLabel(model) {
-  if (!model.pricing) return '<span class="subtle">未配置（只计用量）</span>';
-  const symbol = model.pricing.currency === 'USD' ? '$' : '¥';
-  return `<div class="harbor-cell"><code>输入 ${symbol}${model.pricing.inputPerMTok} / 缓存 ${symbol}${model.pricing.cachedInputPerMTok} / 输出 ${symbol}${model.pricing.outputPerMTok}</code><small>每百万 token · ${model.pricing.currency}</small></div>`;
-}
-
-function renderModels() {
-  const models = Array.isArray(modelRegistry.models) ? modelRegistry.models : [];
-  if (els.harborModelCount) els.harborModelCount.textContent = String(models.length);
-  if (els.harborModelActiveCount) els.harborModelActiveCount.textContent = `${models.filter((item) => item.status === 'active').length} 个可用`;
-  if (!els.harborModelList) return;
-  els.harborModelList.innerHTML = models.length ? models.map((model) => `<div class="harbor-row">
-    <div class="harbor-identity"><span class="harbor-avatar runtime"><i data-lucide="cpu"></i></span><span class="harbor-primary"><strong>${esc(model.name)}</strong><small><code>${esc(model.provider)} / ${esc(model.model)}</code></small></span></div>
-    <span>${harborTags(model.capabilities, '未标注能力')}</span>
-    <span class="harbor-cell"><strong>${model.contextWindow ? esc(formatTokenCount(model.contextWindow)) : '—'}</strong><small>上下文 token</small></span>
-    <span>${modelPricingLabel(model)}</span>
-    <span>${statusPill('model', model.status)}</span>
-    <span class="harbor-model-actions">
-      <button class="btn secondary compact" type="button" data-model-edit-id="${esc(model.id)}"><i data-lucide="pencil"></i>编辑</button>
-      <button class="icon-btn" type="button" title="删除 ${esc(model.name)}" aria-label="删除 ${esc(model.name)}" data-model-delete-id="${esc(model.id)}"><i data-lucide="trash-2"></i></button>
-    </span>
-  </div>`).join('') : harborEmpty('cpu', '暂无登记模型', '登记模型能力与单价后，智能体选型和费用估算将使用这里的口径');
-  refreshIcons(els.harborModelList);
-}
-
-function renderModelDatalists() {
-  const models = Array.isArray(modelRegistry.models) ? modelRegistry.models : [];
-  const modelOptions = $('#model-registry-options');
-  const providerOptions = $('#model-provider-options');
-  if (modelOptions) {
-    modelOptions.innerHTML = models.map((model) => `<option value="${esc(model.model)}">${esc(model.provider)} · ${esc(model.name)}</option>`).join('');
-  }
-  if (providerOptions) {
-    const providers = [...new Set(models.map((model) => model.provider))];
-    providerOptions.innerHTML = providers.map((provider) => `<option value="${esc(provider)}"></option>`).join('');
-  }
-}
-
-async function loadModels(options = {}) {
-  try {
-    const response = await fetch('/api/models', { headers: { accept: 'application/json' } });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    modelRegistry = data;
-    renderModels();
-    renderModelDatalists();
-  } catch (error) {
-    if (!options.silent) toast(`加载模型中心失败：${error.message}`, true);
-  }
-}
-
-async function deleteModelEntry(modelId) {
-  const model = (modelRegistry.models || []).find((item) => item.id === modelId);
-  if (!model) return;
-  if (!window.confirm(`删除模型“${model.name}”吗？\n\n删除后新的用量不再计费；历史费用记录保持不变。`)) return;
-  const response = await fetch(`/api/models/${encodeURIComponent(modelId)}`, { method: 'DELETE', headers: { accept: 'application/json' } });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  await loadModels({ silent: true });
-  toast(`已删除模型“${model.name}”`);
-}
-
-// ---------- 费用用量 ----------
-
-function usageMonthRange(month) {
-  const [year, mon] = String(month || localMonthKey()).split('-').map(Number);
-  const from = `${String(year).padStart(4, '0')}-${String(mon).padStart(2, '0')}-01`;
-  const lastDay = new Date(year, mon, 0).getDate();
-  const today = localDateKey();
-  const to = `${from.slice(0, 8)}${String(lastDay).padStart(2, '0')}` > today || month === localMonthKey() ? today : `${from.slice(0, 8)}${String(lastDay).padStart(2, '0')}`;
-  return { from, to };
-}
-
-function refreshUsageAgentFilter() {
-  if (!els.harborUsageAgentFilter) return;
-  const agents = [...(harbor.agents || [])];
-  const previous = els.harborUsageAgentFilter.value;
-  const known = new Set(agents.map((agent) => agent.id));
-  const extra = [...new Set((usageSummary?.byAgent || []).map((row) => row.agentId).filter((id) => !known.has(id)))];
-  els.harborUsageAgentFilter.innerHTML = `<option value="">全部智能体</option>${agents.map((agent) => `<option value="${esc(agent.id)}">${esc(agent.name)}</option>`).join('')}${extra.map((id) => {
-    const row = (usageSummary?.byAgent || []).find((item) => item.agentId === id);
-    return `<option value="${esc(id)}">${esc(row?.agentName || id)}（未登记）</option>`;
-  }).join('')}`;
-  els.harborUsageAgentFilter.value = [...els.harborUsageAgentFilter.options].some((option) => option.value === previous) ? previous : '';
-}
-
-async function loadUsage(options = {}) {
-  try {
-    const { from, to } = usageMonthRange(usageMonth);
-    const agentId = els.harborUsageAgentFilter?.value || '';
-    const params = new URLSearchParams({ from, to });
-    if (agentId) params.set('agentId', agentId);
-    const response = await fetch(`/api/usage/summary?${params.toString()}`, { headers: { accept: 'application/json' } });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    usageSummary = data;
-    renderUsage();
-    refreshUsageAgentFilter();
-    void loadMonthCostCard();
-  } catch (error) {
-    if (!options.silent) toast(`加载费用用量失败：${error.message}`, true);
-  }
-}
-
-async function loadMonthCostCard() {
-  if (!els.harborCostMonth) return;
-  try {
-    const month = localMonthKey();
-    const { from, to } = usageMonthRange(month);
-    const response = await fetch(`/api/usage/summary?${new URLSearchParams({ from, to })}`, { headers: { accept: 'application/json' } });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    const cost = formatCostAmounts(data.totals?.cost);
-    els.harborCostMonth.textContent = cost || '¥0.00';
-    els.harborCostMonthNote.textContent = data.totals?.records
-      ? `${data.totals.records} 次记账 · ${formatTokenCount(data.totals.totalTokens)} tokens`
-      : '暂无记账';
-  } catch {
-    els.harborCostMonth.textContent = '--';
-    els.harborCostMonthNote.textContent = '费用数据暂不可用';
-  }
-}
-
-function usageCostCell(bucket) {
-  const cost = formatCostAmounts(bucket.cost);
-  if (cost) return `<strong>${esc(cost)}</strong>${bucket.unpricedRecords ? `<small>${bucket.unpricedRecords} 次未计费</small>` : ''}`;
-  return `<span class="subtle">${bucket.records ? '未配置单价' : '—'}</span>`;
-}
-
-function renderUsage() {
-  if (!els.harborUsageMetrics) return;
-  const summary = usageSummary;
-  if (!summary) {
-    els.harborUsageMetrics.innerHTML = '';
-    els.harborUsageAgentList.innerHTML = harborEmpty('coins', '暂无费用数据', '发起对话后，Runtime 上报的 token 用量会自动记账');
-    els.harborUsageModelList.innerHTML = '';
-    els.harborUsageRecent.innerHTML = '';
-    refreshIcons($('#harbor-panel-usage'));
-    return;
-  }
-  const cost = formatCostAmounts(summary.totals.cost);
-  els.harborUsageMetrics.innerHTML = `
-    <div><span>估算费用</span><strong>${esc(cost || '¥0.00')}</strong><small>依据模型中心参考单价</small></div>
-    <div><span>记账次数</span><strong>${summary.totals.records}</strong><small>token 用量增量</small></div>
-    <div><span>Tokens 总量</span><strong>${esc(formatTokenCount(summary.totals.totalTokens))}</strong><small>入 ${esc(formatTokenCount(summary.totals.inputTokens))} · 出 ${esc(formatTokenCount(summary.totals.outputTokens))}</small></div>
-    <div><span>未计费次数</span><strong>${summary.totals.unpricedRecords}</strong><small>模型未配置单价</small></div>`;
-
-  els.harborUsageAgentList.innerHTML = summary.byAgent.length ? summary.byAgent.map((row) => `<div class="harbor-row">
-    <div class="harbor-identity"><span class="harbor-avatar"><i data-lucide="bot"></i></span><span class="harbor-primary"><strong>${esc(row.agentName)}</strong><small>${esc(row.agentId)}</small></span></div>
-    <span>${row.records}</span>
-    <span class="harbor-cell"><strong>${esc(formatTokenCount(row.totalTokens))}</strong><small>入 ${esc(formatTokenCount(row.inputTokens))} · 出 ${esc(formatTokenCount(row.outputTokens))}</small></span>
-    <span>${usageCostCell(row)}</span>
-  </div>`).join('') : harborEmpty('coin-off', '该区间暂无智能体用量', '发起对话或调整月份后查看');
-
-  els.harborUsageModelList.innerHTML = summary.byModel.length ? summary.byModel.map((row) => `<div class="harbor-row">
-    <div class="harbor-primary"><strong>${esc(row.model)}</strong><small>${esc(row.provider)}</small></div>
-    <span>${row.records}</span>
-    <span class="harbor-cell"><strong>${esc(formatTokenCount(row.totalTokens))}</strong><small>入 ${esc(formatTokenCount(row.inputTokens))} · 出 ${esc(formatTokenCount(row.outputTokens))}</small></span>
-    <span>${usageCostCell(row)}</span>
-  </div>`).join('') : '<div class="harbor-row"><span class="subtle">暂无模型用量</span></div>';
-
-  els.harborUsageRecent.innerHTML = summary.recent.length ? summary.recent.map((row) => `<div class="harbor-row">
-    <span class="harbor-cell"><strong>${esc(formatHarborTime(row.occurredAt))}</strong><small>${row.runId ? esc(row.runId.slice(0, 12)) : '—'}</small></span>
-    <span class="harbor-cell"><strong>${esc(row.agentName)}</strong><small>${row.scope === 'agent' ? '专业会话' : '中枢会话'}</small></span>
-    <span class="harbor-cell"><strong>${esc(row.model)}</strong><small>${esc(row.provider)}</small></span>
-    <span>${esc(formatTokenCount(row.totalTokens))}</span>
-    <span>${row.priced && row.cost !== null ? esc(`${row.currency === 'USD' ? '$' : '¥'}${row.cost < 0.01 ? row.cost.toFixed(4) : row.cost.toFixed(2)}`) : '<span class="subtle">未计费</span>'}</span>
-  </div>`).join('') : '<div class="harbor-row"><span class="subtle">暂无运行记录</span></div>';
-
-  refreshIcons($('#harbor-panel-usage'));
-}
-
-function squadAgentById(agentId) {
-  if (squad.lead?.id === agentId) return squad.lead;
-  return (squad.members || []).find((member) => member.id === agentId) || null;
-}
-
-function squadAgentName(agentId) {
-  return squadAgentById(agentId)?.name || '未知 Agent';
-}
-
-function squadTime(value) {
-  return formatHarborTime(value);
-}
-
-function harborAgentForSquad(agentId) {
-  return (harbor.agents || []).find((agent) => agent.id === agentId) || null;
-}
-
-function squadRuntimeLabel(harborAgentId) {
-  const agent = harborAgentForSquad(harborAgentId);
-  if (!agent) return '未绑定 AI 港湾 Agent';
-  const runtime = (harbor.runtimes || []).find((item) => item.id === agent.runtimeId);
-  return runtime ? `${agent.name} · ${runtime.name}` : `${agent.name} · 未绑定 Runtime`;
-}
-
-function squadAvailableHarborAgents(memberId = '') {
-  const linked = new Set((squad.members || []).filter((member) => member.id !== memberId).map((member) => member.harborAgentId).filter(Boolean));
-  const leadId = squad.lead?.harborAgentId;
-  return (harbor.agents || []).filter((agent) => agent.id !== leadId && agent.id !== squad.lead?.id && !linked.has(agent.id));
-}
-
-function squadBusinessById(squadId) {
-  return (squad.subSquads || []).find((item) => item.id === squadId) || null;
-}
-
-/** Build a grouped recipient picker while retaining one regular form value. */
-function squadRecipientTree(recipients, businessSquads) {
-  const selected = recipients[0];
-  if (!selected) return '';
-  const groups = businessSquads
-    .map((businessSquad) => ({
-      id: businessSquad.id,
-      name: businessSquad.name,
-      recipients: recipients.filter((member) => member.squadId === businessSquad.id),
-    }))
-    .filter((group) => group.recipients.length);
-  const groupedIds = new Set(groups.flatMap((group) => group.recipients.map((member) => member.id)));
-  const ungrouped = recipients.filter((member) => !groupedIds.has(member.id));
-  if (ungrouped.length) groups.push({ id: 'direct', name: '直属 Agent', recipients: ungrouped });
-  const branch = (group) => `<section class="squad-recipient-branch" data-recipient-branch="${esc(group.id)}"><button class="squad-recipient-group" type="button" data-recipient-group="${esc(group.id)}" aria-expanded="true"><i data-lucide="chevron-down"></i><span>${esc(group.name)}</span><b>${group.recipients.length}</b></button><div class="squad-recipient-children">${group.recipients.map((recipient) => `<button class="squad-recipient-option${recipient.id === selected.id ? ' selected' : ''}" type="button" role="treeitem" data-recipient-id="${esc(recipient.id)}" data-recipient-name="${esc(recipient.name)}"><i data-lucide="bot"></i><span><strong>${esc(recipient.name)}</strong><small>${esc(recipient.role)}</small></span><i class="squad-recipient-check" data-lucide="check"></i></button>`).join('')}</div></section>`;
-  return `<div class="squad-recipient-tree" data-squad-recipient-tree><input type="hidden" name="toAgentId" value="${esc(selected.id)}" /><button class="squad-recipient-trigger" type="button" data-recipient-trigger aria-expanded="false" aria-haspopup="tree"><span><small>发送给</small><strong data-recipient-label>${esc(selected.name)}</strong></span><i data-lucide="chevron-down"></i></button><div class="squad-recipient-menu hidden" data-recipient-menu role="tree" aria-label="选择接收协作消息的 Agent"><div class="squad-recipient-root"><i data-lucide="network"></i><span>业务 Agent 小队</span></div>${groups.map(branch).join('')}</div></div>`;
-}
-
-function bindSquadRecipientTree(root) {
-  const tree = $('[data-squad-recipient-tree]', root);
-  if (!tree) return;
-  const trigger = $('[data-recipient-trigger]', tree);
-  const menu = $('[data-recipient-menu]', tree);
-  const input = $('input[name="toAgentId"]', tree);
-  const label = $('[data-recipient-label]', tree);
-  trigger.addEventListener('click', () => {
-    const open = menu.classList.toggle('hidden') === false;
-    trigger.setAttribute('aria-expanded', String(open));
-  });
-  $$('[data-recipient-group]', tree).forEach((button) => button.addEventListener('click', () => {
-    const branch = button.closest('[data-recipient-branch]');
-    const expanded = button.getAttribute('aria-expanded') !== 'true';
-    button.setAttribute('aria-expanded', String(expanded));
-    branch.classList.toggle('is-collapsed', !expanded);
-    refreshIcons(button);
-  }));
-  $$('[data-recipient-id]', tree).forEach((option) => option.addEventListener('click', () => {
-    input.value = option.dataset.recipientId;
-    label.textContent = option.dataset.recipientName;
-    $$('[data-recipient-id]', tree).forEach((item) => item.classList.toggle('selected', item === option));
-    menu.classList.add('hidden');
-    trigger.setAttribute('aria-expanded', 'false');
-  }));
-}
-
-function squadMemberButton(member, activities) {
-  const latest = activities.filter((activity) => activity.agentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-  const active = selectedSquadView === 'agent' && member.id === selectedSquadMemberId;
-  const harborAgent = harborAgentForSquad(member.harborAgentId);
-  const level = harborAgent?.hierarchyLevel || 'L2';
-  const levelLabels = { L0: '中枢编排', L1: '业务编队', L2: '专项执行', L3: '任务执行' };
-  return `<button class="squad-member ${active ? 'active' : ''}" type="button" data-squad-member-id="${esc(member.id)}">
-    <span class="squad-avatar"><i data-lucide="bot"></i></span><span><strong>${esc(member.name)}</strong><small class="squad-hierarchy">${esc(level)} · ${esc(levelLabels[level] || '专项执行')}</small><small>${esc(member.role)}</small><small class="squad-link-label">${esc(squadRuntimeLabel(member.harborAgentId))}</small><em>${esc(latest ? latest.title : '暂无动作')} · ${esc(squadTime(latest?.createdAt))}</em></span>
-    <b class="status-pill ${member.status === 'working' ? 'info' : 'neutral'}">${member.status === 'working' ? '协作中' : '待命'}</b>
-  </button>`;
-}
-
-function squadExpandableText(content) {
-  const text = String(content || '');
-  if (text.length <= 220) return `<p>${esc(text)}</p>`;
-  return `<p class="squad-expandable-text">${esc(text)}</p><button class="squad-expand-toggle" type="button" data-squad-expand-toggle="true" aria-expanded="false">展开完整内容</button>`;
-}
-
-function bindSquadExpandableEntries(scope) {
-  $$('[data-squad-expand-toggle]', scope).forEach((button) => button.addEventListener('click', () => {
-    const text = button.previousElementSibling;
-    const expanded = button.getAttribute('aria-expanded') === 'true';
-    button.setAttribute('aria-expanded', String(!expanded));
-    button.textContent = expanded ? '展开完整内容' : '收起内容';
-    text?.classList.toggle('is-expanded', !expanded);
-  }));
-}
-
-function renderBusinessSquadDetail(businessSquad, members, memories, activities, squadMemories, squadActivities) {
-  const ownMemories = squadMemories.filter((item) => item.squadId === businessSquad.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const ownActivities = squadActivities.filter((item) => item.squadId === businessSquad.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const memberIds = new Set(members.map((member) => member.id));
-  const childMemories = memories.filter((item) => memberIds.has(item.agentId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const childActivities = activities.filter((item) => memberIds.has(item.agentId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const sessionCount = convs.filter((conversation) => conversation.scope === 'agent' && conversation.squadId === businessSquad.id && !conversation.archived).length;
-  els.squadMemberDetail.innerHTML = `
-    <div class="squad-detail-head business-squad-detail-head"><span class="squad-avatar"><i data-lucide="network"></i></span><div><h2>${esc(businessSquad.name)}</h2><p>${esc(businessSquad.description)} · 下辖 ${members.length} 个 Agent</p></div><span class="status-pill info">业务小队</span></div>
-    <section class="squad-agent-sessions squad-team-sessions"><div><strong>小队会话</strong><small>汇总下辖 Agent 的分发任务；不会显示中枢会话。</small></div><button class="btn secondary compact" type="button" data-open-squad-sessions="${esc(businessSquad.id)}"><i data-lucide="messages-square"></i>查看 ${sessionCount} 个会话</button><p>新建会话请先选定具体 Agent，以保证任务、记忆和证据归属正确。</p></section>
-    <div class="squad-scope-note"><i data-lucide="layers-2"></i><span>以下“小队自身”记录只归属 ${esc(businessSquad.name)}；“下辖 Agent 汇总”仅用于审阅，不会写入或覆盖任何 Agent 的独立记忆与动作。</span></div>
-    <div class="squad-detail-grid">
-      <section><div class="squad-section-head"><h3>小队自身动作</h3><small>业务级协作与升级记录</small></div><div class="squad-feed">${ownActivities.length ? ownActivities.map((activity) => `<article><b>${esc(activity.title)}</b>${squadExpandableText(activity.detail)}<time>${esc(squadTime(activity.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无小队自身动作</p>'}</div><form class="squad-inline-form squad-business-activity-form" data-squad-business-form="activity"><input name="title" maxlength="160" required placeholder="业务小队动作，例如：升级订单风险"/><textarea name="detail" maxlength="1000" required placeholder="记录订单小队层面的结论或协作动作…"></textarea><button class="btn secondary compact" type="submit"><i data-lucide="list-plus"></i>记录动作</button></form></section>
-      <section><div class="squad-section-head"><h3>小队自身记忆</h3><small>仅归属业务 Agent 小队</small></div><div class="squad-feed">${ownMemories.length ? ownMemories.map((memory) => `<article>${squadExpandableText(memory.content)}<time>${esc(squadTime(memory.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无小队自身记忆</p>'}</div><form class="squad-inline-form" data-squad-business-form="memory"><textarea name="content" maxlength="2000" required placeholder="记录订单小队共享上下文、共识或升级结论…"></textarea><button class="btn secondary compact" type="submit"><i data-lucide="brain"></i>写入小队记忆</button></form></section>
-    </div>
-    <section class="squad-exchange squad-child-rollup"><div class="squad-section-head"><h3>下辖 Agent 记忆与动作汇总</h3><small>只读汇总，与小队自身记录分开保存</small></div><div class="squad-child-rollup-grid"><div><b>Agent 独立动作</b><div class="squad-feed">${childActivities.length ? childActivities.map((activity) => `<article><b>${esc(squadAgentName(activity.agentId))} · ${esc(activity.title)}</b>${squadExpandableText(activity.detail)}<time>${esc(squadTime(activity.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无下辖 Agent 动作</p>'}</div></div><div><b>Agent 独立记忆</b><div class="squad-feed">${childMemories.length ? childMemories.map((memory) => `<article><b>${esc(squadAgentName(memory.agentId))}</b>${squadExpandableText(memory.content)}<time>${esc(squadTime(memory.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无下辖 Agent 记忆</p>'}</div></div></div></section>`;
-  $('[data-open-squad-sessions]', els.squadMemberDetail)?.addEventListener('click', () => openSquadConversationSpace(businessSquad));
-  bindSquadExpandableEntries(els.squadMemberDetail);
-  refreshIcons($('#view-squad'));
-}
-
-function renderSquad() {
-  const members = Array.isArray(squad.members) ? squad.members : [];
-  const businessSquads = Array.isArray(squad.subSquads) ? squad.subSquads : [];
-  const squadMemories = Array.isArray(squad.squadMemories) ? squad.squadMemories : [];
-  const squadActivities = Array.isArray(squad.squadActivities) ? squad.squadActivities : [];
-  const memories = Array.isArray(squad.memories) ? squad.memories : [];
-  const activities = Array.isArray(squad.activities) ? squad.activities : [];
-  const messages = Array.isArray(squad.messages) ? squad.messages : [];
-  const lead = squad.lead || { name: 'AEOS 中枢 Agent', model: 'deepseek-chat' };
-  const projects = Array.isArray(harbor.projects) ? harbor.projects : [];
-  const linkedProject = projects.find((project) => project.id === squad.projectId) || null;
-  const linkedLead = harborAgentForSquad(lead.harborAgentId);
-  if (!members.some((member) => member.id === selectedSquadMemberId)) selectedSquadMemberId = members[0]?.id || null;
-  if (!businessSquads.some((item) => item.id === selectedBusinessSquadId)) selectedBusinessSquadId = businessSquads[0]?.id || null;
-  if (!selectedBusinessSquadId && selectedSquadMemberId) selectedSquadView = 'agent';
-
-  els.squadLeadName.textContent = lead.name;
-  els.squadLeadModel.textContent = linkedLead ? `${linkedLead.model} · ${squadRuntimeLabel(linkedLead.id)}` : `${lead.model} · 未绑定 AI 港湾 Agent`;
-  els.squadMemberCount.textContent = String(members.length);
-  els.squadWorkingCount.textContent = `${members.filter((member) => member.status === 'working').length} 个协作中`;
-  els.squadMemoryCount.textContent = String(memories.length);
-  els.squadMessageCount.textContent = String(messages.length);
-  els.squadProjectSelect.innerHTML = `<option value="">未关联项目</option>${projects.map((project) => `<option value="${esc(project.id)}">${esc(project.key)} · ${esc(project.name)}</option>`).join('')}`;
-  els.squadProjectSelect.value = linkedProject?.id || '';
-  els.squadProjectStatus.textContent = linkedProject
-    ? `已关联 ${linkedProject.key} · ${linkedProject.status === 'in_progress' ? '进行中' : linkedProject.status}`
-    : '未关联 AI 港湾项目';
-  const grouped = businessSquads.map((businessSquad) => {
-    const children = members.filter((member) => member.squadId === businessSquad.id);
-    const linkedChildren = children.filter((member) => member.harborAgentId && harborAgentForSquad(member.harborAgentId)).length;
-    const active = selectedSquadView === 'business' && selectedBusinessSquadId === businessSquad.id;
-    const expanded = expandedSquadBusinessIds.has(businessSquad.id);
-    const fullyLinked = children.length > 0 && linkedChildren === children.length;
-    return `<section class="business-squad ${active ? 'active' : ''} ${expanded ? 'is-expanded' : ''}"><div class="business-squad-heading"><button class="business-squad-head" type="button" data-business-squad-id="${esc(businessSquad.id)}"><span class="squad-avatar"><i data-lucide="network"></i></span><span><strong>L1 · ${esc(businessSquad.name)}</strong><small>${esc(businessSquad.description)}</small><em>${linkedChildren}/${children.length} 已接入 AI 港湾 · ${squadMemories.filter((item) => item.squadId === businessSquad.id).length} 条小队记忆</em></span><b class="status-pill ${fullyLinked ? 'ok' : 'warn'}">${fullyLinked ? '已联通' : '待绑定'}</b></button><button class="business-squad-fold" type="button" data-business-squad-toggle-id="${esc(businessSquad.id)}" aria-label="${expanded ? '收起' : '展开'} ${esc(businessSquad.name)} 的子 Agent" aria-expanded="${expanded}"><i data-lucide="chevron-right"></i></button></div><div class="business-squad-children">${children.length ? children.map((member) => squadMemberButton(member, activities)).join('') : '<p class="squad-empty">暂无下辖 Agent</p>'}</div></section>`;
-  }).join('');
-  const ungrouped = members.filter((member) => !member.squadId || !businessSquads.some((item) => item.id === member.squadId));
-  els.squadMemberList.innerHTML = `<div class="squad-root-node"><span class="squad-root-mark"><i data-lucide="waypoints"></i></span><div><strong>L0 · ${esc(lead.name)}</strong><small>顶层编排 · 负责跨小队协调与治理门禁</small></div></div>${grouped || ''}${ungrouped.length ? `<section class="business-squad ungrouped"><div class="business-squad-title">L1 · 直属 Agent</div><div class="business-squad-children">${ungrouped.map((member) => squadMemberButton(member, activities)).join('')}</div></section>` : ''}`;
-
-  const businessSquad = selectedSquadView === 'business' ? businessSquads.find((item) => item.id === selectedBusinessSquadId) : null;
-  if (businessSquad) {
-    renderBusinessSquadDetail(businessSquad, members.filter((member) => member.squadId === businessSquad.id), memories, activities, squadMemories, squadActivities);
-    refreshIcons($('#view-squad'));
-    return;
-  }
-
-  const member = members.find((item) => item.id === selectedSquadMemberId);
-  if (!member) {
-    els.squadMemberDetail.innerHTML = harborEmpty('users-round', '请选择子 Agent', '查看其独立记忆、最近动作与队内协作消息');
-    refreshIcons($('#view-squad'));
-    return;
-  }
-  const memberActivities = activities.filter((activity) => activity.agentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const memberMemories = memories.filter((memory) => memory.agentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 8);
-  const memberMessages = messages.filter((message) => message.fromAgentId === member.id || message.toAgentId === member.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 12);
-  const recipients = members.filter((item) => item.id !== member.id);
-  const linkedHarborAgent = harborAgentForSquad(member.harborAgentId);
-  const availableHarborAgents = squadAvailableHarborAgents(member.id);
-  const memberConversations = convs.filter((conversation) => conversation.scope === 'agent' && conversation.agentId === member.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 5);
-  const binding = linkedHarborAgent
-    ? `<div class="squad-binding"><span>AI 港湾关联</span><strong>${esc(squadRuntimeLabel(linkedHarborAgent.id))}</strong><small>身份、模型、Runtime 与能力由 AI 港湾统一管理。</small></div>`
-    : availableHarborAgents.length
-      ? `<form class="squad-binding squad-inline-form" data-squad-form="bind"><select name="harborAgentId" required><option value="">选择 AI 港湾 Agent</option>${availableHarborAgents.map((agent) => `<option value="${esc(agent.id)}">${esc(agent.name)} · ${esc(agent.role)}</option>`).join('')}</select><button class="btn secondary compact" type="submit"><i data-lucide="link"></i>绑定港湾 Agent</button></form>`
-      : '<div class="squad-binding"><span>AI 港湾关联</span><strong>暂无可绑定 Agent</strong><small>请先在 AI 港湾创建 Agent，或解除其他小队成员的绑定。</small></div>';
-  els.squadMemberDetail.innerHTML = `
-    <div class="squad-detail-head"><span class="squad-avatar"><i data-lucide="bot"></i></span><div><h2>${esc(member.name)}</h2><p>${esc(member.role)} · ${esc(member.model)} · 独立记忆空间</p></div><span class="squad-detail-actions"><b class="status-pill ${member.status === 'working' ? 'info' : 'neutral'}">${member.status === 'working' ? '协作中' : '待命'}</b><button class="btn secondary compact squad-delete-member" type="button" data-squad-member-id="${esc(member.id)}">移出小队</button></span></div>
-    ${binding}
-    <section class="squad-agent-sessions"><div><strong>专属会话</strong><small>分发给该 Agent 的任务不显示在中枢会话</small></div><button class="btn secondary compact" type="button" data-open-agent-sessions="${esc(member.id)}"><i data-lucide="messages-square"></i>进入会话</button><p>${memberConversations.length ? `最近：${esc(memberConversations[0].title || '新对话')} · ${esc(formatConvTime(memberConversations[0].updatedAt))}` : '尚无分发会话'}</p></section>
-    <div class="squad-detail-grid">
-      <section><div class="squad-section-head"><h3>最近动作</h3><small>主 Agent 可直接审阅</small></div><div class="squad-feed">${memberActivities.length ? memberActivities.map((activity) => `<article><b>${esc(activity.title)}</b>${squadExpandableText(activity.detail)}<time>${esc(squadTime(activity.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无动作记录</p>'}</div></section>
-      <section class="squad-agent-memory"><div class="squad-section-head"><div><h3>独立记忆</h3><small>仅归属该子 Agent</small></div><button class="squad-memory-conversation-link" type="button" data-open-agent-sessions="${esc(member.id)}" title="进入 ${esc(member.name)} 的专属会话"><i data-lucide="messages-square"></i><span>点击继续会话</span></button></div><p class="squad-memory-conversation-hint">从这里可随时回到 ${esc(member.name)} 的独立对话，历史会话会一直保留在该 Agent 名下。</p><div class="squad-feed">${memberMemories.length ? memberMemories.map((memory) => `<article>${squadExpandableText(memory.content)}<time>${esc(squadTime(memory.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无记忆</p>'}</div><form class="squad-inline-form" data-squad-form="memory"><textarea name="content" maxlength="2000" required placeholder="为该子 Agent 记录任务上下文或结论…"></textarea><button class="btn secondary compact" type="submit"><i data-lucide="brain"></i>写入记忆</button></form></section>
-    </div>
-    <section class="squad-exchange"><div class="squad-section-head"><h3>队内协作消息</h3><small>由主 Agent 审阅的可追溯消息记录</small></div><div class="squad-message-feed">${memberMessages.length ? memberMessages.map((message) => `<article><span>${esc(squadAgentName(message.fromAgentId))} <i data-lucide="arrow-right"></i> ${esc(squadAgentName(message.toAgentId))}</span>${squadExpandableText(message.content)}<time>${esc(squadTime(message.createdAt))}</time></article>`).join('') : '<p class="squad-empty">暂无队内消息</p>'}</div>${recipients.length ? `<form class="squad-inline-form squad-message-form" data-squad-form="message">${squadRecipientTree(recipients, businessSquads)}<textarea name="content" maxlength="2000" required placeholder="记录 ${esc(member.name)} 发给队友的协作消息…"></textarea><button class="btn primary compact" type="submit"><i data-lucide="send"></i>发送协作消息</button></form>` : '<p class="squad-empty">至少需要两个子 Agent 才可登记相互协作消息</p>'}</section>`;
-  $$('[data-open-agent-sessions]', els.squadMemberDetail).forEach((button) => button.addEventListener('click', () => openAgentConversationSpace(member)));
-  bindSquadRecipientTree(els.squadMemberDetail);
-  bindSquadExpandableEntries(els.squadMemberDetail);
-  refreshIcons($('#view-squad'));
-}
-
 async function loadSquad(options = {}) {
   try {
     const response = await fetch('/api/agent-squad', { headers: { accept: 'application/json' } });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     squad = data;
-    renderSquad();
   } catch (error) {
-    if (!options.silent) toast(`加载 Agent 小队失败：${error.message}`, true);
-    els.squadMemberList.innerHTML = harborEmpty('cloud-off', 'Agent 小队数据暂不可用', '请检查本机服务后重试');
-    els.squadMemberDetail.innerHTML = '';
-    refreshIcons($('#view-squad'));
+    if (!options.silent) toast(`加载协作成员失败：${error.message}`, true);
   }
 }
 
 async function postSquad(path, payload) {
-  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) });
-  const data = await response.json();
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  squad = data.squad || squad;
-  renderSquad();
+  if (data.squad) squad = data.squad;
   return data.item;
-}
-
-async function deleteSquadMember(agentId) {
-  const member = (squad.members || []).find((item) => item.id === agentId);
-  if (!member) return;
-  const memoryCount = (squad.memories || []).filter((item) => item.agentId === agentId).length;
-  const messageCount = (squad.messages || []).filter((item) => item.fromAgentId === agentId || item.toAgentId === agentId).length;
-  if (!window.confirm(`确定将“${member.name}”移出 Agent 小队吗？将删除其 ${memoryCount} 条独立记忆和 ${messageCount} 条队内消息；AI 港湾中的 Agent 与 Runtime 不会被删除。`)) return;
-  const response = await fetch(`/api/agent-squad/members/${encodeURIComponent(agentId)}`, { method: 'DELETE', headers: { accept: 'application/json' } });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  squad = data.squad || squad;
-  selectedSquadMemberId = null;
-  renderSquad();
-  return data.item;
-}
-
-function openSquadMemberModal() {
-  const availableHarborAgents = squadAvailableHarborAgents();
-  if (!availableHarborAgents.length) {
-    toast('暂无可加入小队的 AI 港湾 Agent，请先在 AI 港湾创建并配置 Agent', true);
-    return;
-  }
-  els.squadMemberForm.reset();
-  const businessSelect = $('select[name="squadId"]', els.squadMemberForm);
-  const businessSquads = Array.isArray(squad.subSquads) ? squad.subSquads : [];
-  businessSelect.innerHTML = `<option value="">选择业务 Agent 小队</option>${businessSquads.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} · ${esc(item.description)}</option>`).join('')}`;
-  businessSelect.value = selectedBusinessSquadId || businessSquads[0]?.id || '';
-  const select = $('select[name="harborAgentId"]', els.squadMemberForm);
-  select.innerHTML = `<option value="">选择 AI 港湾 Agent</option>${availableHarborAgents.map((agent) => `<option value="${esc(agent.id)}">${esc(agent.name)} · ${esc(agent.role)}</option>`).join('')}`;
-  els.squadFormStatus.textContent = '';
-  els.squadModal.classList.remove('hidden');
-  refreshIcons(els.squadModal);
-  window.setTimeout(() => select?.focus(), 30);
-}
-
-function closeSquadMemberModal() {
-  els.squadModal.classList.add('hidden');
-  els.squadFormStatus.textContent = '';
-}
-
-async function submitSquadMember(event) {
-  event.preventDefault();
-  const form = new FormData(els.squadMemberForm);
-  const submit = $('button[type="submit"]', els.squadMemberForm);
-  submit.disabled = true;
-  els.squadFormStatus.textContent = '创建中…';
-  try {
-    const member = await postSquad('/api/agent-squad/members', Object.fromEntries(form));
-    selectedSquadMemberId = member.id;
-    selectedBusinessSquadId = member.squadId || selectedBusinessSquadId;
-    selectedSquadView = 'agent';
-    renderSquad();
-    closeSquadMemberModal();
-    toast(`${member.name} 已加入 Agent 小队`);
-  } catch (error) {
-    els.squadFormStatus.textContent = error.message;
-  } finally {
-    submit.disabled = false;
-  }
-}
-
-async function submitSquadDetail(event) {
-  const form = event.target.closest('[data-squad-form]');
-  if (!form) return;
-  event.preventDefault();
-  const kind = form.dataset.squadForm;
-  const content = new FormData(form).get('content');
-  const button = $('button[type="submit"]', form);
-  button.disabled = true;
-  try {
-    if (kind === 'memory') await postSquad('/api/agent-squad/memories', { agentId: selectedSquadMemberId, content });
-    if (kind === 'message') await postSquad('/api/agent-squad/messages', { fromAgentId: selectedSquadMemberId, toAgentId: new FormData(form).get('toAgentId'), content });
-    if (kind === 'bind') await postSquad('/api/agent-squad/member-links', { agentId: selectedSquadMemberId, harborAgentId: new FormData(form).get('harborAgentId') });
-    toast(kind === 'memory' ? '已写入子 Agent 独立记忆' : kind === 'bind' ? '已绑定 AI 港湾 Agent' : '已记录队内协作消息');
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function saveSquadProjectLink() {
-  const button = els.squadProjectSave;
-  button.disabled = true;
-  try {
-    await postSquad('/api/agent-squad/project-link', { projectId: els.squadProjectSelect.value });
-    toast(els.squadProjectSelect.value ? 'Agent 小队已关联 AI 港湾项目' : '已解除项目关联');
-  } catch (error) {
-    toast(`保存项目关联失败：${error.message}`, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function submitBusinessSquadDetail(event) {
-  const form = event.target.closest('[data-squad-business-form]');
-  if (!form) return;
-  event.preventDefault();
-  const businessSquad = squadBusinessById(selectedBusinessSquadId);
-  if (!businessSquad) return;
-  const kind = form.dataset.squadBusinessForm;
-  const values = Object.fromEntries(new FormData(form));
-  const button = $('button[type="submit"]', form);
-  button.disabled = true;
-  try {
-    if (kind === 'memory') await postSquad('/api/agent-squad/business-squads/memories', { squadId: businessSquad.id, content: values.content });
-    if (kind === 'activity') await postSquad('/api/agent-squad/business-squads/activities', { squadId: businessSquad.id, title: values.title, detail: values.detail });
-    toast(kind === 'memory' ? '已写入业务 Agent 小队独立记忆' : '已记录业务 Agent 小队动作');
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
 }
 
 async function verifyHarborRuntime(runtimeId, button) {
@@ -5576,14 +7576,13 @@ async function verifyHarborRuntime(runtimeId, button) {
 }
 
 function showHarborTab(tab) {
-  const selected = ['agents', 'models', 'usage', 'runtimes', 'projects'].includes(tab) ? tab : 'agents';
+  const selected = ['agents', 'runtimes', 'projects'].includes(tab) ? tab : 'agents';
   $$('[data-harbor-tab]').forEach((button) => {
     const active = button.dataset.harborTab === selected;
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
-  ['agents', 'models', 'usage', 'runtimes', 'projects'].forEach((name) => $(`#harbor-panel-${name}`).classList.toggle('hidden', name !== selected));
-  if (selected === 'usage') void loadUsage({ silent: true });
+  ['agents', 'runtimes', 'projects'].forEach((name) => $(`#harbor-panel-${name}`).classList.toggle('hidden', name !== selected));
 }
 
 function runtimeOptions(selected = '') {
@@ -5596,7 +7595,7 @@ function runtimeOptions(selected = '') {
 
 function agentOptions(selected = '') {
   const options = ['<option value="">由工作区 Owner 负责</option>'];
-  for (const agent of harbor.agents || []) {
+  for (const agent of visibleHarborAgents()) {
     options.push(`<option value="${esc(agent.id)}"${agent.id === selected ? ' selected' : ''}>${esc(agent.name)} · ${esc(agent.role)}</option>`);
   }
   return options.join('');
@@ -5605,7 +7604,7 @@ function agentOptions(selected = '') {
 const agentTypeLabels = { master: '系统主 Agent', specialist: '专业 Agent', tool: '工具 Agent' };
 
 function agentParentOptions(type, selected = '') {
-  const parents = eligibleParentAgents(harbor.agents || [], type);
+  const parents = eligibleParentAgents(visibleHarborAgents(), type);
   const options = ['<option value="">请选择上级 Agent</option>'];
   for (const agent of parents) {
     options.push(`<option value="${esc(agent.id)}"${agent.id === selected ? ' selected' : ''}>${esc(agent.name)} · ${esc(agent.registration?.code || agent.role)}</option>`);
@@ -5623,7 +7622,7 @@ function syncAgentRegistrationForm() {
 
   const { level } = registrationRule(typeSelect.value);
   const oldParent = parentSelect.value;
-  const parents = eligibleParentAgents(harbor.agents || [], typeSelect.value);
+  const parents = eligibleParentAgents(visibleHarborAgents(), typeSelect.value);
   parentSelect.innerHTML = agentParentOptions(typeSelect.value, oldParent);
   parentSelect.value = parents.some((agent) => agent.id === oldParent) ? oldParent : (parents[0]?.id || '');
   parentSelect.disabled = parents.length === 0;
@@ -5646,9 +7645,8 @@ function wireAgentRegistrationForm() {
   syncAgentRegistrationForm();
 }
 
-function openHarborModal(type, editItem = null) {
+function openHarborModal(type) {
   harborModalType = type;
-  harborModalEditId = type === 'model' && editItem ? editItem.id : null;
   els.harborFormStatus.textContent = '';
   els.harborForm.reset();
   const definitions = {
@@ -5659,9 +7657,12 @@ function openHarborModal(type, editItem = null) {
         <label><span>Agent 编码</span><input name="code" maxlength="80" pattern="[A-Za-z][A-Za-z0-9-]{1,79}" required placeholder="例如：erp-order-risk" /><small class="field-note">稳定标识；保存时会统一为小写，不能与已有 Agent 重复。</small></label>
         <label><span>Agent 类型</span><select name="type"><option value="master">系统主 Agent</option><option value="specialist" selected>专业 Agent</option><option value="tool">工具 Agent</option></select><small class="field-note">${agentTypeLabels.master}负责系统入口；专业与工具 Agent 只能归属对应上级。</small></label>
         <label><span>所属组织</span><input name="ownerOrg" maxlength="120" required placeholder="例如：供应链中心" /></label>
+        <label><span>归属系统</span><select name="systemId">${((catalogTree?.systems || []).filter((system) => !system.unregistered).map((system) => `<option value="${esc(system.id)}">${esc(system.name)}</option>`).join('')) || '<option value="aeos-hub">AEOS Hub</option>'}</select><small class="field-note">目录树第一层；决定这个 Agent 归属哪个系统。</small></label>
+        <label><span>主属业务域</span><select name="primaryDomainId">${Object.entries(CATALOG_DOMAIN_LABELS).map(([id, name]) => `<option value="${esc(id)}"${id === 'cross-domain' ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select><small class="field-note">目录树按主属域分组；共享能力选“跨系统协同”。</small></label>
+        <label><span>服务业务域</span><input name="domainIds" placeholder="逗号分隔，例如：order,kitting" /><small class="field-note">派单与筛选按服务域匹配；留空时自动包含主属域。</small></label>
         <label><span>业务域</span><input name="domain" maxlength="120" required placeholder="例如：order-risk" /></label>
-        <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" list="model-provider-options" /><small class="field-note">建议从模型中心的提供商中选择，便于费用估算。</small></label>
-        <label><span>模型</span><input name="model" maxlength="120" value="account-default" list="model-registry-options" /><small class="field-note">选择模型中心已登记的模型可自动估算费用。</small></label>
+        <label><span>模型提供商</span><input name="provider" maxlength="80" required value="openai-codex" /></label>
+        <label><span>模型</span><input name="model" maxlength="120" value="account-default" /></label>
         <label><span>执行 Runtime</span><select name="runtimeId">${runtimeOptions()}</select></label>
         <label><span>组织层级</span><input name="hierarchyLevel" readonly /><small class="field-note">由 Agent 类型自动确定，不能手动跨级。</small></label>
         <label><span>上级 Agent</span><select name="parentAgentId" required></select><small class="field-note">只显示符合该类型层级规则的上级 Agent。</small></label>
@@ -5692,28 +7693,9 @@ function openHarborModal(type, editItem = null) {
         <label><span>开始日期</span><input name="startDate" type="date" value="${localDateKey()}" /></label>
         <label><span>目标日期</span><input name="targetDate" type="date" /></label>
         <label class="wide"><span>项目目标</span><textarea name="objective" maxlength="1200" required placeholder="定义经营结果、硬约束和可验证完成条件"></textarea></label>
-        <fieldset class="wide"><legend>智能体编队</legend><div class="agent-checks">${(harbor.agents || []).length ? harbor.agents.map((agent) => `<label><input name="agentIds" type="checkbox" value="${esc(agent.id)}" /><span>${esc(agent.name)} · ${esc(agent.autonomyLevel)}</span></label>`).join('') : '<small class="field-note">当前没有可选智能体，可先创建项目，后续再组建编队。</small>'}</div></fieldset>
+        <fieldset class="wide"><legend>智能体编队</legend><div class="agent-checks">${visibleHarborAgents().length ? visibleHarborAgents().map((agent) => `<label><input name="agentIds" type="checkbox" value="${esc(agent.id)}" /><span>${esc(agent.name)} · ${esc(agent.autonomyLevel)}</span></label>`).join('') : '<small class="field-note">当前没有可选智能体，可先创建项目，后续再组建编队。</small>'}</div></fieldset>
         <label class="wide"><span>资源引用</span><input name="resourceRefs" placeholder="逗号分隔，例如：objective://V7.2, capability://delivery-risk" /></label>`,
     },
-    model: (() => {
-      const edit = editItem || null;
-      const pricing = edit?.pricing;
-      return {
-        title: edit ? `编辑模型 · ${edit.name}` : '登记模型', desc: '登记大模型的能力与参考单价；智能体选型和费用估算以模型中心为唯一口径。',
-        submit: edit ? '保存修改' : '登记模型',
-        fields: `<label><span>模型名称</span><input name="name" maxlength="120" required value="${esc(edit?.name || '')}" placeholder="例如：DeepSeek Chat（通用）" /></label>
-        <label><span>模型提供商</span><input name="provider" maxlength="80" required value="${esc(edit?.provider || '')}" list="model-provider-options" placeholder="例如：deepseek" /></label>
-        <label><span>模型标识</span><input name="model" maxlength="160" required value="${esc(edit?.model || '')}" list="model-registry-options" placeholder="调用时使用的模型 id，例如：deepseek-chat" /></label>
-        <label><span>上下文窗口（token）</span><input name="contextWindow" type="number" min="0" step="1000" value="${edit?.contextWindow ?? ''}" placeholder="例如：128000，留空表示未知" /></label>
-        <label><span>计价币种</span><select name="pricingCurrency"><option value="none"${!pricing ? ' selected' : ''}>不计价（只统计用量）</option><option value="CNY"${pricing?.currency === 'CNY' ? ' selected' : ''}>人民币 CNY</option><option value="USD"${pricing?.currency === 'USD' ? ' selected' : ''}>美元 USD</option></select></label>
-        <label><span>输入单价 / 百万 token</span><input name="inputPerMTok" type="number" min="0" step="0.01" value="${pricing?.inputPerMTok ?? ''}" placeholder="例如：2" /></label>
-        <label><span>缓存命中单价 / 百万 token</span><input name="cachedInputPerMTok" type="number" min="0" step="0.01" value="${pricing?.cachedInputPerMTok ?? ''}" placeholder="例如：0.5" /></label>
-        <label><span>输出单价 / 百万 token</span><input name="outputPerMTok" type="number" min="0" step="0.01" value="${pricing?.outputPerMTok ?? ''}" placeholder="例如：8" /></label>
-        <label><span>状态</span><select name="status"><option value="active"${(edit?.status || 'active') === 'active' ? ' selected' : ''}>可用</option><option value="inactive"${edit?.status === 'inactive' ? ' selected' : ''}>停用</option></select></label>
-        <label><span>能力标签</span><input name="capabilities" value="${esc((edit?.capabilities || []).join(', '))}" placeholder="逗号分隔，例如：深度推理, 工具调用, 代码" /></label>
-        <label class="wide"><span>备注</span><textarea name="notes" maxlength="500" placeholder="定价来源、适用场景或限制说明">${esc(edit?.notes || '')}</textarea></label>`,
-      };
-    })(),
   };
   const definition = definitions[type];
   if (!definition) return;
@@ -5729,7 +7711,6 @@ function openHarborModal(type, editItem = null) {
 
 function closeHarborModal() {
   harborModalType = null;
-  harborModalEditId = null;
   els.harborModal.classList.add('hidden');
   els.harborFormFields.innerHTML = '';
   els.harborFormStatus.textContent = '';
@@ -5742,38 +7723,21 @@ async function submitHarborForm(event) {
   const formData = new FormData(els.harborForm);
   let payload = Object.fromEntries(formData.entries());
   if (harborModalType === 'project') payload.agentIds = formData.getAll('agentIds');
-  const endpoints = { agent: '/api/harbor/agents', runtime: '/api/harbor/runtimes', project: '/api/harbor/projects', model: '/api/models' };
-  const labels = { agent: '智能体已创建', runtime: 'Runtime 已登记，等待真实连接与心跳', project: '协作项目已创建', model: harborModalEditId ? '模型已更新' : '模型已登记' };
+  const endpoints = { agent: '/api/harbor/agents', runtime: '/api/harbor/runtimes', project: '/api/harbor/projects' };
+  const labels = { agent: '智能体已创建', runtime: 'Runtime 已登记，等待真实连接与心跳', project: '协作项目已创建' };
   els.harborFormSubmit.disabled = true;
   els.harborFormStatus.textContent = '保存中...';
   try {
     if (harborModalType === 'agent') payload = buildAgentRegistrationPayload(payload, harbor.agents || []);
-    if (harborModalType === 'model') {
-      const currency = String(payload.pricingCurrency || 'none');
-      delete payload.pricingCurrency;
-      if (currency === 'none') {
-        payload.pricing = null;
-      } else {
-        const asPrice = (value) => (String(value ?? '').trim() === '' ? 0 : Number(value));
-        const prices = { inputPerMTok: asPrice(payload.inputPerMTok), cachedInputPerMTok: asPrice(payload.cachedInputPerMTok), outputPerMTok: asPrice(payload.outputPerMTok) };
-        delete payload.inputPerMTok;
-        delete payload.cachedInputPerMTok;
-        delete payload.outputPerMTok;
-        if (Object.values(prices).some((value) => !Number.isFinite(value) || value < 0)) throw new Error('单价必须是不小于 0 的数字');
-        payload.pricing = { currency, ...prices };
-      }
-      if (String(payload.contextWindow ?? '').trim() === '') delete payload.contextWindow;
-    }
-    const editing = harborModalType === 'model' && harborModalEditId;
-    const response = await fetch(editing ? `${endpoints[harborModalType]}/${encodeURIComponent(harborModalEditId)}` : endpoints[harborModalType], {
-      method: editing ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload),
+    const response = await fetch(endpoints[harborModalType], {
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     const completedType = harborModalType;
     closeHarborModal();
     await loadHarbor({ silent: true });
-    showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects', model: 'models' }[completedType]);
+    showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects' }[completedType]);
     toast(labels[completedType]);
   } catch (error) {
     els.harborFormStatus.textContent = error.message;
@@ -5789,10 +7753,6 @@ function resizeComposer() {
 function doSend(sourceText) {
   const text = (sourceText || els.input.value).trim();
   if (!text) return;
-  if (chatScope.type === 'squad') {
-    toast('小队会话仅用于查看；请在 Agent 小队中选择具体 Agent 后发起会话', true);
-    return;
-  }
   if (curConvId && runningConversationIds.has(curConvId)) {
     toast('上一条仍在执行，请等待完成或先停止', true);
     return;
@@ -5848,7 +7808,7 @@ async function deleteHarborAgent(agentId) {
 
 function appendLocalUser(text) {
   const wrap = appendMsg('user', text);
-  wrap.appendChild(msgMeta(`${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} · 你`));
+  wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 你`));
 }
 
 function restoreConversationTranscript(messages) {
@@ -5860,7 +7820,7 @@ function restoreConversationTranscript(messages) {
     return;
   }
   for (const item of rows) {
-    const time = item.createdAt ? new Date(item.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '历史记录';
+    const time = item.createdAt ? formatBeijingTime(item.createdAt) : '历史记录';
     if (item.role === 'user') {
       const wrap = appendMsg('user', item.text);
       wrap.appendChild(msgMeta(`${time} · 你`));
@@ -5874,7 +7834,7 @@ function restoreConversationTranscript(messages) {
     }
     const bubble = $('.bubble', wrap);
     bubble.innerHTML = md(item.text);
-    wrap.appendChild(msgMeta(`${time} · 中枢 Agent`));
+    wrap.appendChild(msgMeta(`${time} · 智能助手`));
   }
   els.empty.classList.add('hidden');
   els.messages.scrollTop = els.messages.scrollHeight;
@@ -5977,6 +7937,88 @@ function connect() {
       case 'user_message':
         if (message.convId === curConvId) appendLocalUser(message.text);
         break;
+      case 'dispatch_progress': {
+        if (message.convId === curConvId) renderDispatchProgress(message);
+        break;
+      }
+      case 'write_pending': {
+        if (message.convId !== curConvId) break;
+        if (document.querySelector(`[data-write-pending-id="${message.requestId}"]`)) break;
+        const pendingWrap = appendMsg('agent', '');
+        const pendingBubble = $('.bubble', pendingWrap);
+        if (pendingBubble) pendingBubble.innerHTML = md(`待确认的写操作：${message.summary}。`);
+        const pendingActions = document.createElement('div');
+        pendingActions.className = 'write-confirm-actions';
+        pendingActions.dataset.writePendingId = message.requestId;
+        pendingActions.innerHTML = '<button class="btn primary compact" type="button" data-write-confirm="approve">确认执行</button><button class="btn secondary compact" type="button" data-write-confirm="reject">取消</button>';
+        pendingActions.addEventListener('click', (event) => {
+          const button = event.target.closest('[data-write-confirm]');
+          if (!button) return;
+          const decision = button.getAttribute('data-write-confirm');
+          send({ type: 'write_decision', conversationId: message.convId, requestId: message.requestId, decision });
+          pendingActions.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+        });
+        pendingWrap.appendChild(pendingActions);
+        els.messages.scrollTop = els.messages.scrollHeight;
+        break;
+      }
+      case 'assistant_reply': {
+        if (message.convId !== curConvId) {
+          if (message.meta && message.meta.dispatchComplete) toast('自动分发完成，结果已写入会话');
+          break;
+        }
+        document.getElementById('dispatch-progress-line')?.remove();
+        const wrap = appendMsg('agent', '');
+        const bubble = $('.bubble', wrap);
+        if (bubble) {
+          bubble.innerHTML = md(message.text);
+          appendResultActions(bubble, message.text, {
+            copyLabel: '复制回答',
+            exportLabel: '导出回答',
+            filenamePrefix: '智能助手回答',
+          });
+        }
+        const traceTarget = message.meta?.requestId || message.meta?.writeTraceId || null;
+        if (message.convId === curConvId && traceTarget) {
+          const actions = document.createElement('div');
+          actions.className = 'assistant-reply-actions';
+          const viewButton = document.createElement('button');
+          viewButton.className = 'btn ghost compact';
+          viewButton.type = 'button';
+          viewButton.textContent = '查看处理记录';
+          viewButton.addEventListener('click', () => openTraceFor(String(traceTarget)));
+          actions.appendChild(viewButton);
+          wrap.appendChild(actions);
+        }
+        if (message.meta && message.meta.writeConfirmation) {
+          const actions = document.createElement('div');
+          actions.className = 'write-confirm-actions';
+          actions.dataset.writePendingId = message.meta.writeConfirmation.requestId;
+          actions.innerHTML = '<button class="btn primary compact" type="button" data-write-confirm="approve">确认执行</button><button class="btn secondary compact" type="button" data-write-confirm="reject">取消</button>';
+          wrap.appendChild(actions);
+          actions.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-write-confirm]');
+            if (!button) return;
+            const decision = button.getAttribute('data-write-confirm');
+            send({
+              type: 'write_decision',
+              conversationId: message.convId,
+              requestId: message.meta.writeConfirmation.requestId,
+              decision,
+            });
+            actions.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+            const note = document.createElement('small');
+            note.textContent = decision === 'approve' ? '已提交确认…' : '已提交取消…';
+            actions.appendChild(note);
+          });
+        }
+        wrap.appendChild(msgMeta(`${formatBeijingTime(new Date())} · 智能助手 · 分析工作台`));
+        els.empty.classList.add('hidden');
+        finishThinking();
+        setBusy(false);
+        els.messages.scrollTop = els.messages.scrollHeight;
+        break;
+      }
       case 'evt':
         handleEvt(message.method, message.params, message);
         break;
@@ -6049,6 +8091,16 @@ function connect() {
         els.btnSaveConfig.disabled = false;
         toast(message.message);
         break;
+      case 'dispatch_policy:data':
+        fillDispatchConfig(message.payload);
+        break;
+      case 'dispatch_policy_saved': {
+        if (message.payload) fillDispatchConfig(message.payload);
+        const dispatchStatus = $('#dispatch-cfg-status');
+        if (dispatchStatus) dispatchStatus.textContent = message.message || '已保存';
+        toast(message.message || '分发配置已保存');
+        break;
+      }
       default:
         break;
     }
@@ -6360,6 +8412,14 @@ els.inboxDetailRead?.addEventListener('click', () => {
 });
 els.inboxDetailModal?.addEventListener('mousedown', (event) => { if (event.target === els.inboxDetailModal) closeInboxDetail(); });
 els.registryRefresh.addEventListener('click', loadCapabilityRegistry);
+els.registrySystemGrid?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-registry-system-usage]');
+  if (!button) return;
+  const name = button.getAttribute('data-registry-system-usage') || '';
+  const systemId = registryUsageSystemId(name);
+  if (!systemId) { toast('该系统暂无 Hub 成本归属'); return; }
+  openUsageForSystem(systemId);
+});
 els.registrySearch?.addEventListener('input', () => { registryFilter.query = els.registrySearch.value; if (registrySnapshot) renderCapabilityRegistry(registrySnapshot); });
 els.registrySourceFilter?.addEventListener('change', () => { registryFilter.source = els.registrySourceFilter.value; if (registrySnapshot) renderCapabilityRegistry(registrySnapshot); });
 els.registryStateFilter?.addEventListener('change', () => { registryFilter.state = els.registryStateFilter.value; if (registrySnapshot) renderCapabilityRegistry(registrySnapshot); });
@@ -6375,12 +8435,25 @@ els.harborRuntimeList.addEventListener('click', (event) => {
   if (button) verifyHarborRuntime(button.dataset.runtimeId, button);
 });
 els.harborAgentList.addEventListener('click', async (event) => {
-  const groupToggle = event.target.closest('[data-harbor-business-squad-id]');
-  if (groupToggle) {
-    const squadId = groupToggle.dataset.harborBusinessSquadId;
-    if (expandedHarborBusinessSquadIds.has(squadId)) expandedHarborBusinessSquadIds.delete(squadId);
-    else expandedHarborBusinessSquadIds.add(squadId);
+  const systemToggle = event.target.closest('[data-catalog-system-toggle]');
+  if (systemToggle) {
+    const systemId = systemToggle.dataset.catalogSystemToggle;
+    if (expandedCatalogSystems.has(systemId)) expandedCatalogSystems.delete(systemId);
+    else expandedCatalogSystems.add(systemId);
     renderHarbor();
+    return;
+  }
+  const domainToggle = event.target.closest('[data-catalog-domain-toggle]');
+  if (domainToggle) {
+    const key = domainToggle.dataset.catalogDomainToggle;
+    if (expandedCatalogDomains.has(key)) expandedCatalogDomains.delete(key);
+    else expandedCatalogDomains.add(key);
+    renderHarbor();
+    return;
+  }
+  const usageButton = event.target.closest('[data-open-usage-detail]');
+  if (usageButton) {
+    showView('usage');
     return;
   }
   const conversationButton = event.target.closest('[data-harbor-open-conversation]');
@@ -6394,99 +8467,59 @@ els.harborAgentList.addEventListener('click', async (event) => {
     catch (error) { toast(`删除智能体失败：${error.message}`, true); }
     return;
   }
-  const button = event.target.closest('.harbor-add-to-squad');
-  if (!button || button.disabled) return;
-  button.disabled = true;
-  try {
-    const member = await postSquad('/api/agent-squad/members', { harborAgentId: button.dataset.harborAgentId, squadId: selectedBusinessSquadId || 'business-squad-orders' });
-    selectedSquadMemberId = member.id;
-    selectedBusinessSquadId = member.squadId || selectedBusinessSquadId;
-    selectedSquadView = 'agent';
-    await loadHarbor({ silent: true });
-    toast(`${member.name} 已加入 Agent 小队`);
-  } catch (error) {
-    toast(`加入 Agent 小队失败：${error.message}`, true);
-  } finally {
-    button.disabled = false;
+  const agentRow = event.target.closest('[data-catalog-agent-id]');
+  if (agentRow && !event.target.closest('button, a, input')) {
+    const agentId = agentRow.dataset.catalogAgentId;
+    catalogExpandedAgentId = catalogExpandedAgentId === agentId ? null : agentId;
+    renderHarbor();
   }
 });
+$$('[data-catalog-view]').forEach((button) => button.addEventListener('click', () => {
+  catalogView = button.dataset.catalogView === 'hierarchy' ? 'hierarchy' : 'ownership';
+  $$('[data-catalog-view]').forEach((item) => {
+    const active = item === button;
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-pressed', String(active));
+  });
+  renderHarbor();
+}));
 els.harborAgentSearch?.addEventListener('input', () => { harborAgentFilter.query = els.harborAgentSearch.value; renderHarbor(); });
+els.harborShowHiddenAgents?.addEventListener('change', () => { showHiddenHarborAgents = Boolean(els.harborShowHiddenAgents.checked); renderHarbor(); });
 els.harborAgentLevelFilter?.addEventListener('change', () => { harborAgentFilter.level = els.harborAgentLevelFilter.value; renderHarbor(); });
 els.harborAgentStatusFilter?.addEventListener('change', () => { harborAgentFilter.status = els.harborAgentStatusFilter.value; renderHarbor(); });
-els.harborAgentSquadFilter?.addEventListener('change', () => { harborAgentFilter.squad = els.harborAgentSquadFilter.value; renderHarbor(); });
+els.harborAgentDomainFilter?.addEventListener('change', () => { harborAgentFilter.domain = els.harborAgentDomainFilter.value; renderHarbor(); });
 els.harborAgentFilterClear?.addEventListener('click', () => {
-  harborAgentFilter = { query: '', level: 'all', status: 'all', squad: 'all' };
+  harborAgentFilter = { query: '', level: 'all', status: 'all', domain: 'all' };
   if (els.harborAgentSearch) els.harborAgentSearch.value = '';
   if (els.harborAgentLevelFilter) els.harborAgentLevelFilter.value = 'all';
   if (els.harborAgentStatusFilter) els.harborAgentStatusFilter.value = 'all';
+  if (els.harborAgentDomainFilter) els.harborAgentDomainFilter.value = 'all';
   renderHarbor();
 });
-els.harborModelList?.addEventListener('click', async (event) => {
-  const editButton = event.target.closest('[data-model-edit-id]');
-  if (editButton) {
-    const model = (modelRegistry.models || []).find((item) => item.id === editButton.dataset.modelEditId);
-    if (model) openHarborModal('model', model);
-    return;
-  }
-  const deleteButton = event.target.closest('[data-model-delete-id]');
-  if (deleteButton) {
-    try { await deleteModelEntry(deleteButton.dataset.modelDeleteId); }
-    catch (error) { toast(`删除模型失败：${error.message}`, true); }
-  }
-});
-els.harborUsageRefresh?.addEventListener('click', () => void loadUsage());
-els.harborUsageMonth?.addEventListener('change', () => {
-  usageMonth = els.harborUsageMonth.value || localMonthKey();
-  void loadUsage();
-});
-els.harborUsageAgentFilter?.addEventListener('change', () => void loadUsage({ silent: true }));
-if (els.harborUsageMonth && !els.harborUsageMonth.value) els.harborUsageMonth.value = usageMonth;
 els.harborModalClose.addEventListener('click', closeHarborModal);
 els.harborFormCancel.addEventListener('click', closeHarborModal);
 els.harborForm.addEventListener('submit', submitHarborForm);
 els.harborModal.addEventListener('mousedown', (event) => { if (event.target === els.harborModal) closeHarborModal(); });
-els.squadAddMember.addEventListener('click', openSquadMemberModal);
-els.squadModalClose.addEventListener('click', closeSquadMemberModal);
-els.squadFormCancel.addEventListener('click', closeSquadMemberModal);
-els.squadMemberForm.addEventListener('submit', submitSquadMember);
-els.squadModal.addEventListener('mousedown', (event) => { if (event.target === els.squadModal) closeSquadMemberModal(); });
-els.squadProjectSave.addEventListener('click', saveSquadProjectLink);
-els.squadMemberList.addEventListener('click', (event) => {
-  const businessSquadToggle = event.target.closest('[data-business-squad-toggle-id]');
-  if (businessSquadToggle) {
-    const squadId = businessSquadToggle.dataset.businessSquadToggleId;
-    if (expandedSquadBusinessIds.has(squadId)) expandedSquadBusinessIds.delete(squadId);
-    else expandedSquadBusinessIds.add(squadId);
-    renderSquad();
-    return;
-  }
-  const businessSquad = event.target.closest('[data-business-squad-id]');
-  if (businessSquad) {
-    selectedBusinessSquadId = businessSquad.dataset.businessSquadId;
-    selectedSquadView = 'business';
-    renderSquad();
-    return;
-  }
-  const member = event.target.closest('[data-squad-member-id]');
-  if (!member) return;
-  selectedSquadMemberId = member.dataset.squadMemberId;
-  selectedSquadView = 'agent';
-  renderSquad();
-});
-els.squadMemberDetail.addEventListener('submit', submitSquadDetail);
-els.squadMemberDetail.addEventListener('submit', submitBusinessSquadDetail);
-els.squadMemberDetail.addEventListener('click', (event) => {
-  const button = event.target.closest('.squad-delete-member');
-  if (!button || button.disabled) return;
-  button.disabled = true;
-  deleteSquadMember(button.dataset.squadMemberId)
-    .then((item) => { if (item) toast(`${item.member.name} 已移出 Agent 小队`); })
-    .catch((error) => toast(`移出 Agent 小队失败：${error.message}`, true))
-    .finally(() => { button.disabled = false; });
-});
 els.headerAgent.addEventListener('click', () => showView('chat'));
 els.headerAttention.addEventListener('click', () => showView('attention'));
 els.btnAttentionRefresh.addEventListener('click', () => loadDashboard({ force: true }));
+els.btnDailyBriefing?.addEventListener('click', () => { void openDailyBriefing(); });
+els.dailyBriefingClose?.addEventListener('click', closeDailyBriefing);
+els.dailyBriefingModal?.addEventListener('mousedown', (event) => { if (event.target === els.dailyBriefingModal) closeDailyBriefing(); });
+els.dailyBriefingCopy?.addEventListener('click', async () => {
+  if (!dailyBriefingMarkdown) { toast('简报还没生成好', true); return; }
+  try {
+    await navigator.clipboard.writeText(dailyBriefingMarkdown);
+    toast('简报已复制');
+  } catch {
+    toast('复制失败，请手动选择文本', true);
+  }
+});
+els.dailyBriefingDownload?.addEventListener('click', () => {
+  if (!dailyBriefingMarkdown) { toast('简报还没生成好', true); return; }
+  downloadTextFile(dailyBriefingMarkdown, `AEOS今日风险简报-${dailyBriefingWindowEnd || localDateKey()}.md`);
+});
+els.dailyBriefingDispatch?.addEventListener('click', () => { void dispatchDailyBriefingToAgent(); });
 els.attentionSearch?.addEventListener('input', () => {
   attentionFilter.query = els.attentionSearch.value;
   attentionResultsDismissed = false;
@@ -6581,10 +8614,6 @@ document.addEventListener('keydown', (event) => {
     closeHarborModal();
     return;
   }
-  if (event.key === 'Escape' && !els.squadModal.classList.contains('hidden')) {
-    closeSquadMemberModal();
-    return;
-  }
   if (event.key === 'Escape' && els.inboxDetailModal && !els.inboxDetailModal.classList.contains('hidden')) {
     closeInboxDetail();
     return;
@@ -6608,6 +8637,12 @@ window.addEventListener('hashchange', () => {
 });
 
 /* Agent, Guard, configuration and evidence controls */
+$('#btn-view-mode')?.addEventListener('click', () => {
+  businessMode = !businessMode;
+  localStorage.setItem(VIEW_MODE_KEY, businessMode ? 'business' : 'full');
+  applyNavVisibility();
+  if (!viewVisibleForRole(currentView, authSession)) showView('dashboard');
+});
 els.btnNew.addEventListener('click', newConversation);
 els.convSearch?.addEventListener('input', () => { conversationQuery = els.convSearch.value; renderConvs(); });
 els.btnSend.addEventListener('click', () => doSend());
@@ -6624,10 +8659,263 @@ els.guardDeny.addEventListener('click', () => decideGuard('decline'));
 els.cfgProvider.addEventListener('change', () => { els.cfgProviderHint.textContent = hintFor(els.cfgProvider.value); });
 els.btnAddProvider.addEventListener('click', () => { providerRows.push({ id: `provider-${providerRows.length + 1}`, wire_api: 'responses' }); renderProviders(); });
 els.btnSaveConfig.addEventListener('click', saveConfig);
+document.getElementById('btn-save-dispatch-cfg')?.addEventListener('click', saveDispatchConfig);
+document.getElementById('assistant-connectivity-chip')?.addEventListener('click', toggleConnectivityPanel);
+document.getElementById('assistant-connectivity-panel')?.addEventListener('click', (event) => {
+  if (event.target.closest('[data-open-ops]')) showView('ops');
+});
 els.evRefresh.addEventListener('click', loadEvidence);
 els.evidenceSearch?.addEventListener('input', renderEvidenceRows);
 els.evidenceSourceFilter?.addEventListener('change', renderEvidenceRows);
 els.chatScopeBack?.addEventListener('click', openHubConversationSpace);
+
+/* ---------- 统一链路追踪 ---------- */
+const TRACE_KIND_LABELS = { borrow: '借调', run: '执行', usage: '用量', evidence: '审计' };
+const TRACE_AGENT_LABELS = { 'gateway-control-platform': '中台网关', 'runtime-execution-query': 'PLM 助手' };
+const TRACE_CAPABILITY_LABELS = { query_control_platform: '查询', reason_control_platform: '分析', query_plm: 'PLM 查询', reason_plm: 'PLM 分析', query_local_files: '本地文件查询' };
+const TRACE_RUN_TASK_LABELS = { order_delivery_analysis: '订单交付分析', material_kitting_analysis: '齐套分析', quality_analysis: '质量分析', production_analysis: '生产分析' };
+const TRACE_RUN_TASK_SHORT_LABELS = { order_delivery_analysis: '订单交付', material_kitting_analysis: '齐套', quality_analysis: '质量', production_analysis: '生产' };
+
+function traceRunTaskLabel(run) {
+  const taskType = run?.input && typeof run.input.task_type === 'string' ? run.input.task_type : '';
+  return TRACE_RUN_TASK_LABELS[taskType] || '';
+}
+
+function traceRunTaskShortLabel(run) {
+  const taskType = run?.input && typeof run.input.task_type === 'string' ? run.input.task_type : '';
+  return TRACE_RUN_TASK_SHORT_LABELS[taskType] || '';
+}
+
+function traceRunObjectLabel(run) {
+  const ref = run?.input?.context?.businessObjectRef;
+  if (typeof ref !== 'string' || !ref.trim()) return '';
+  const parts = ref.trim().split('/');
+  return parts[parts.length - 1] || '';
+}
+
+function humanizeTraceText(value) {
+  let text = String(value ?? '');
+  for (const [agentId, label] of Object.entries(TRACE_AGENT_LABELS)) text = text.split(agentId).join(label);
+  for (const [code, label] of Object.entries(ERROR_HINTS)) text = text.split(code).join(label);
+  return text;
+}
+const TRACE_RESOLVED_LABELS = { 'borrow-order': '按记录编号', run: '按执行编号', request: '按请求编号', trace: '按记录编号' };
+
+function openTraceFor(id) {
+  const input = $('#trace-id-input');
+  if (input) input.value = id;
+  showView('trace');
+  void loadTrace(id);
+}
+
+function openExecutionRun(runId) {
+  selectedAiRunId = runId;
+  aiObsTab = 'runs';
+  showView('ai-obs');
+}
+
+async function loadTraceRecent() {
+  const root = $('#trace-recent');
+  if (!root) return;
+  if (root.dataset.bound !== '1') {
+    root.dataset.bound = '1';
+    root.addEventListener('click', (event) => {
+      const id = event.target.closest('[data-trace-id]')?.getAttribute('data-trace-id');
+      if (id) openTraceFor(id);
+    });
+  }
+  try {
+    const [ordersResponse, agentsResponse] = await Promise.all([
+      fetch('/api/borrow-orders?limit=8', { headers: { accept: 'application/json' } }),
+      fetch('/api/execution/agents', { headers: { accept: 'application/json' } }),
+    ]);
+    const ordersData = ordersResponse.ok ? await ordersResponse.json() : {};
+    const agentsData = agentsResponse.ok ? await agentsResponse.json() : {};
+    const orders = Array.isArray(ordersData?.orders) ? ordersData.orders : [];
+    const runIdsWithOrders = new Set(orders.map((order) => order.runId).filter(Boolean));
+    const borrowTraceIds = new Set(orders.map((order) => order.orderId));
+    // 同一 traceId 下的查询/推理/分发子分析属于同一次分析，列表按链路聚合而不是按 run 拆开。
+    const groups = new Map();
+    for (const run of (Array.isArray(agentsData?.runs) ? agentsData.runs : [])) {
+      if (runIdsWithOrders.has(run.runId)) continue;
+      const traceId = run.traceId || run.runId;
+      if (borrowTraceIds.has(traceId)) continue;
+      const list = groups.get(traceId) || [];
+      list.push(run);
+      groups.set(traceId, list);
+    }
+    const traceEntries = [...groups.entries()].map(([traceId, group]) => {
+      group.sort((left, right) => String(left.startedAt || '').localeCompare(String(right.startedAt || '')));
+      const latest = group[group.length - 1];
+      const fullLabels = [...new Set(group.map(traceRunTaskLabel).filter(Boolean))];
+      const shortLabels = [...new Set(group.map(traceRunTaskShortLabel).filter(Boolean))];
+      const objectLabel = group.map(traceRunObjectLabel).find(Boolean) || '';
+      const baseTitle = fullLabels.length > 1
+        ? `经营分析（${shortLabels.join('、')}）`
+        : (fullLabels[0] || TRACE_CAPABILITY_LABELS[group[0].capability] || group[0].capability);
+      const title = objectLabel ? `${baseTitle} · ${objectLabel}` : baseTitle;
+      const running = group.some((run) => run.state === 'dispatched' || run.state === 'running');
+      const failed = group.some((run) => run.state === 'failed' || run.state === 'recalled');
+      const status = running ? '运行中' : failed ? '有失败' : '已完成';
+      const at = latest.endedAt || latest.startedAt;
+      return {
+        at,
+        html: `
+      <button class="trace-recent-item" type="button" data-trace-id="${esc(traceId)}">
+        <span><strong>${esc(title)}</strong><small>${esc(group[0].agentId)} · ${group.length > 1 ? `${group.length} 个步骤 · ` : ''}${status}</small></span>
+        <time>${esc(formatDateTimeText(at))}</time>
+      </button>`,
+      };
+    });
+    // 借调单与执行链路是两条留痕来源：按时间合并排序，避免最新的分析被更早的记录压在下面。
+    const entries = [
+      ...orders.map((order) => ({
+        at: order.createdAt,
+        html: `
+      <button class="trace-recent-item" type="button" data-trace-id="${esc(order.orderId)}">
+        <span><strong>${esc(order.orderId)}</strong><small>借调 · ${esc(order.fromSystem)} → ${esc(order.providerSystem || '—')} · ${esc(order.status)}</small></span>
+        <time>${esc(formatDateTimeText(order.createdAt))}</time>
+      </button>`,
+      })),
+      ...traceEntries,
+    ].sort((left, right) => String(right.at || '').localeCompare(String(left.at || ''))).slice(0, 10);
+    const items = entries.map((entry) => entry.html);
+    root.innerHTML = items.length
+      ? `<div class="trace-recent-list">${items.join('')}</div>`
+      : '<div class="dashboard-loading">暂无借调单或执行记录</div>';
+    refreshIcons(root);
+  } catch {
+    root.innerHTML = '<div class="dashboard-loading">最近链路读取失败</div>';
+  }
+}
+
+function loadTraceView() {
+  const form = $('#trace-form');
+  if (form && form.dataset.bound !== '1') {
+    form.dataset.bound = '1';
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const id = $('#trace-id-input')?.value.trim();
+      if (id) void loadTrace(id);
+    });
+  }
+  void loadTraceRecent();
+}
+
+async function loadTrace(id) {
+  const root = $('#trace-result');
+  if (!root) return;
+  root.innerHTML = '<div class="dashboard-loading">正在读取链路…</div>';
+  try {
+    const [response, agentsResponse] = await Promise.all([
+      fetch(`/api/trace/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } }),
+      fetch('/api/execution/agents', { headers: { accept: 'application/json' } }).catch(() => null),
+    ]);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      root.innerHTML = harborEmpty('git-branch', '查询失败', esc(humanizeError(body.code, body.error || `HTTP ${response.status}`)));
+      return;
+    }
+    // 链路接口只带结论摘要；完整结论从执行面快照按 runId 取回，一次分析的所有结论在同一页展示。
+    let runDetails = new Map();
+    try {
+      const agentsData = agentsResponse && agentsResponse.ok ? await agentsResponse.json() : {};
+      runDetails = new Map((Array.isArray(agentsData?.runs) ? agentsData.runs : []).map((run) => [run.runId, run]));
+    } catch {
+      runDetails = new Map();
+    }
+    renderTrace(body, runDetails);
+  } catch (error) {
+    root.innerHTML = harborEmpty('git-branch', '查询失败', esc(error?.message || String(error)));
+  }
+}
+
+function traceConclusionsSection(runs, runDetails) {
+  const blocks = [];
+  for (const run of runs) {
+    if (!String(run.capability || '').startsWith('reason')) continue;
+    const detail = runDetails?.get(run.runId);
+    if (!detail || !detail.result) continue;
+    const label = traceRunTaskLabel(detail) || TRACE_CAPABILITY_LABELS[run.capability] || '分析';
+    const handler = run.handledBy?.agentName || run.handledBy?.agentId || '';
+    blocks.push(`<div class="trace-conclusion"><h3>${esc(label)} · ${esc(run.agentId)}${handler ? ` · 实际处理：${esc(handler)}` : ''}</h3><pre class="assistant-reply-text">${esc(summarizeReasoningResult(detail.result))}</pre></div>`);
+  }
+  if (!blocks.length) return '';
+  return `<section class="surface">
+      <div class="surface-head"><div><h2>分析结论</h2><p>同一次分析的订单交付、齐套、质量结论</p></div></div>
+      ${blocks.join('')}
+    </section>`;
+}
+
+function renderTrace(trace, runDetails = new Map()) {
+  const root = $('#trace-result');
+  if (!root) return;
+  if (!trace || trace.resolvedBy === 'none') {
+    root.innerHTML = harborEmpty('git-branch', '没有找到链路', `未找到与「${esc(trace?.traceId || '')}」关联的借调单、run 或编排请求`);
+    return;
+  }
+  const borrow = trace.borrowOrder;
+  const usage = Array.isArray(trace.usage) ? trace.usage : [];
+  const runs = Array.isArray(trace.runs) ? trace.runs : [];
+  const cost = usage.reduce((sum, item) => sum + Number(item.cost || 0), 0);
+  const queryRuns = runs.filter((item) => String(item.capability || '').startsWith('query')).length;
+  const lastRun = runs[runs.length - 1] ?? null;
+  const summary = `
+    <section class="surface">
+      <div class="surface-head">
+        <div><h2>链路概览</h2><p>${esc(TRACE_RESOLVED_LABELS[trace.resolvedBy] || trace.resolvedBy)} · <span class="mono">${esc(trace.traceId)}</span></p></div>
+      </div>
+      <div class="harbor-metrics usage-metrics">
+        <div><span>借调单</span><strong>${borrow ? esc(borrow.status) : '无'}</strong><small>${borrow ? esc(`${borrow.fromSystem} → ${borrow.providerSystem || '—'}`) : '直接派单 / 编排'}</small></div>
+        <div><span>执行环节</span><strong>${runs.length}</strong><small>查询 ${queryRuns} · 推理 ${runs.length - queryRuns}</small></div>
+        <div><span>证据引用</span><strong>${(trace.evidenceRefs || []).length}</strong><small>evidence_refs</small></div>
+        <div><span>总成本</span><strong>${cost ? `¥${formatUsageCost(cost)}` : '—'}</strong><small>${usage.length} 条用量记录</small></div>
+      </div>
+      ${runs.length && !businessMode ? `<div class="trace-actions"><button id="btn-trace-open-run" class="btn secondary compact" type="button">查看执行详情${runs.length > 1 ? `（${runs.length} 个 run）` : ''} → AI 运行观测</button></div>` : ''}
+    </section>`;
+
+  const timelineItems = (trace.timeline || []).map((item) => `
+    <li class="trace-entry">
+      <span class="trace-kind ${esc(item.kind)}">${esc(TRACE_KIND_LABELS[item.kind] || item.kind)}</span>
+      <div><strong>${esc(humanizeTraceText(item.title))}</strong>${item.detail ? `<small>${esc(humanizeTraceText(item.detail))}</small>` : ''}</div>
+      <time>${esc(formatDateTimeText(item.at))}</time>
+    </li>`).join('');
+  const timeline = `
+    <section class="surface">
+      <div class="surface-head"><div><h2>时间线</h2><p>借调、执行、用量与审计按时间排序</p></div></div>
+      <ul class="trace-timeline">${timelineItems || '<li class="trace-entry">暂无事件</li>'}</ul>
+    </section>`;
+
+  const usageRows = usage.map((item) => `
+    <tr>
+      <td>${esc(formatDateTimeText(item.endedAt))}</td>
+      <td>${esc(item.usageKind === 'query' ? '查询' : item.modelId || '模型')}</td>
+      <td>${esc(item.metering)}</td>
+      <td class="num">${item.tokensIn} / ${item.tokensOut}</td>
+      <td class="num">${item.cost ? `¥${Number(item.cost).toFixed(4)}` : '—'}</td>
+      <td>${esc(item.consumerSystemId || '—')}</td>
+      <td>${esc(item.callerUserId || item.callerAgentId || '—')}</td>
+    </tr>`).join('');
+  const hasWriteRun = runs.some((run) => String(run.capability || '').startsWith('write'));
+  const usageSection = `
+    <section class="surface">
+      <div class="surface-head"><div><h2>用量</h2><p>执行方与请求方归属</p></div></div>
+      ${hasWriteRun && !usage.length ? '<p class="form-hint form-hint-pad">写操作不调用模型，不产生 Token 或成本。</p>' : ''}
+      <div class="trace-scroll trace-usage-scroll">
+        <table class="trace-table">
+          <thead><tr><th>时间</th><th>模型/类型</th><th>计量</th><th class="num">Token in / out</th><th class="num">成本</th><th>请求方</th><th>调用方</th></tr></thead>
+          <tbody>${usageRows || '<tr><td colspan="7">没有用量记录</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>`;
+
+  root.innerHTML = summary + traceConclusionsSection(runs, runDetails) + timeline + usageSection;
+  refreshIcons();
+  $('#btn-trace-open-run')?.addEventListener('click', () => {
+    if (lastRun) openExecutionRun(lastRun.runId);
+    else showView('ai-obs');
+  });
+}
 
 localizeStaticDocument();
 refreshIcons();

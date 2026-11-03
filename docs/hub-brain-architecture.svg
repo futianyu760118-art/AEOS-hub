@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1006" viewBox="0 0 1200 1006" font-family="'Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6B7280"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0891B2"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EA580C"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="1006" fill="#FFFFFF"/>
+
+  <!-- 标题 -->
+  <text x="600" y="40" text-anchor="middle" font-size="24" font-weight="700" fill="#111827">AEOS Hub · 智能体大脑（虚拟人事系统）</text>
+  <text x="600" y="64" text-anchor="middle" font-size="13" fill="#6B7280">只管智能体的「人」：认人 → 选模型 → 算钱 → 借调；不管业务数据</text>
+
+  <!-- ============ ① 各业务系统 ============ -->
+  <rect x="40" y="82" width="1120" height="150" rx="16" fill="#F0FDF4" stroke="#34D399" stroke-width="1.5"/>
+  <text x="58" y="106" font-size="13.5" font-weight="700" fill="#065F46">① 各业务系统：每个系统自己养若干 Agent，反向连到 Hub</text>
+
+  <rect x="56" y="118" width="344" height="100" rx="10" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1"/>
+  <text x="70" y="140" font-size="13.5" font-weight="700" fill="#065F46">系统 A · 公司中控平台</text>
+  <line x1="70" y1="150" x2="386" y2="150" stroke="#D1FAE5" stroke-width="1"/>
+  <text x="70" y="168" font-size="12" fill="#374151">· 查询 Agent — deepseek（查订单/库存）</text>
+  <text x="70" y="185" font-size="12" fill="#374151">· 推理 Agent — GPT-4o（交付风险）</text>
+  <text x="70" y="202" font-size="12" fill="#374151">· 采购助手 — deepseek（下单前询价）</text>
+
+  <rect x="428" y="118" width="344" height="100" rx="10" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1"/>
+  <text x="442" y="140" font-size="13.5" font-weight="700" fill="#065F46">系统 B · 供应链系统</text>
+  <line x1="442" y1="150" x2="758" y2="150" stroke="#D1FAE5" stroke-width="1"/>
+  <text x="442" y="168" font-size="12" fill="#374151">· 齐套分析 Agent — GPT-4o</text>
+  <text x="442" y="185" font-size="12" fill="#374151">· 库存 Agent — deepseek（库存查询）</text>
+  <text x="442" y="202" font-size="12" fill="#374151">· 采购助手 — deepseek</text>
+
+  <rect x="800" y="118" width="344" height="100" rx="10" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1"/>
+  <text x="814" y="140" font-size="13.5" font-weight="700" fill="#065F46">系统 C · 新接入系统</text>
+  <line x1="814" y1="150" x2="1130" y2="150" stroke="#D1FAE5" stroke-width="1"/>
+  <text x="814" y="168" font-size="12" fill="#374151">· 质检 Agent — 本地模型（脱敏）</text>
+  <text x="814" y="185" font-size="12" fill="#374151">· 客服 Agent — deepseek</text>
+  <text x="814" y="202" font-size="12" fill="#374151">· 风控 Agent — GPT-4o</text>
+
+  <!-- ============ ② 添加 / 删除智能体 ============ -->
+  <rect x="40" y="252" width="1120" height="130" rx="16" fill="#ECFEFF" stroke="#06B6D4" stroke-width="1.5"/>
+  <text x="58" y="276" font-size="13.5" font-weight="700" fill="#155E75">② 添加智能体（3 步，系统自己操作，不用找 Hub 管理员）</text>
+
+  <rect x="56" y="290" width="330" height="58" rx="8" fill="#FFFFFF" stroke="#67E8F9" stroke-width="1"/>
+  <text x="70" y="312" font-size="12.5" font-weight="700" fill="#0E7490">① 起一个 Agent 运行时</text>
+  <text x="70" y="332" font-size="11.5" fill="#6B7280">自带令牌，连上 Hub</text>
+
+  <rect x="436" y="290" width="330" height="58" rx="8" fill="#FFFFFF" stroke="#67E8F9" stroke-width="1"/>
+  <text x="450" y="312" font-size="12.5" font-weight="700" fill="#0E7490">② 自报家门</text>
+  <text x="450" y="332" font-size="11.5" fill="#6B7280">名字 · 属于哪个系统 · 会啥能力</text>
+
+  <rect x="816" y="290" width="330" height="58" rx="8" fill="#FFFFFF" stroke="#67E8F9" stroke-width="1"/>
+  <text x="830" y="312" font-size="12.5" font-weight="700" fill="#0E7490">③ 记入台账，开始上班</text>
+  <text x="830" y="332" font-size="11.5" fill="#6B7280">Hub 建档后，Agent 定时报到（心跳）</text>
+
+  <line x1="386" y1="319" x2="432" y2="319" stroke="#0891B2" stroke-width="1.8" marker-end="url(#arrowTeal)"/>
+  <line x1="766" y1="319" x2="812" y2="319" stroke="#0891B2" stroke-width="1.8" marker-end="url(#arrowTeal)"/>
+
+  <text x="58" y="374" font-size="11.5" fill="#0E7490">删除：系统发「删掉 XX Agent」→ Hub 校验是自家的 → 注销（账单保留，历史可查）</text>
+
+  <!-- ============ ③ 跨系统协作（借调） ============ -->
+  <rect x="40" y="402" width="1120" height="130" rx="16" fill="#FFF7ED" stroke="#F97316" stroke-width="1.5"/>
+  <text x="58" y="426" font-size="13.5" font-weight="700" fill="#9A3412">③ 跨系统协作：A 系统的 Agent 经 Hub 请 B 系统的 Agent 干活，结果回给 A</text>
+
+  <rect x="146" y="438" width="280" height="54" rx="8" fill="#FFFFFF" stroke="#FDBA74" stroke-width="1"/>
+  <text x="160" y="458" font-size="12.5" font-weight="700" fill="#7C2D12">系统 A · 采购助手</text>
+  <text x="160" y="478" font-size="11" fill="#6B7280">例：下单前查「库存」</text>
+
+  <rect x="506" y="438" width="280" height="54" rx="8" fill="#EEF2FF" stroke="#818CF8" stroke-width="1"/>
+  <text x="520" y="458" font-size="12.5" font-weight="700" fill="#3730A3">Hub · 能力目录 / 协作中介</text>
+  <text x="520" y="478" font-size="11" fill="#6B7280">查目录 → 路由 → 记账</text>
+
+  <rect x="866" y="438" width="280" height="54" rx="8" fill="#FFFFFF" stroke="#FDBA74" stroke-width="1"/>
+  <text x="880" y="458" font-size="12.5" font-weight="700" fill="#7C2D12">系统 B · 库存 Agent</text>
+  <text x="880" y="478" font-size="11" fill="#6B7280">执行查询，返回结果</text>
+
+  <line x1="426" y1="465" x2="502" y2="465" stroke="#EA580C" stroke-width="2" marker-end="url(#arrowOrange)"/>
+  <text x="464" y="457" text-anchor="middle" font-size="10" font-weight="700" fill="#EA580C">① 借调请求</text>
+
+  <line x1="786" y1="465" x2="862" y2="465" stroke="#EA580C" stroke-width="2" marker-end="url(#arrowOrange)"/>
+  <text x="824" y="457" text-anchor="middle" font-size="10" font-weight="700" fill="#EA580C">② 派单</text>
+
+  <path d="M1006,492 C1006,522 286,522 286,492" fill="none" stroke="#EA580C" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#arrowOrange)"/>
+  <text x="646" y="528" text-anchor="middle" font-size="11.5" fill="#9A3412">③ 结果回传 A：{ 库存:500 件, 可下单:true }</text>
+
+  <!-- ============ ④ AEOS Hub（大脑） ============ -->
+  <rect x="40" y="552" width="1120" height="250" rx="16" fill="#EEF2FF" stroke="#6366F1" stroke-width="1.5"/>
+  <text x="58" y="574" font-size="13.5" font-weight="700" fill="#3730A3">④ AEOS Hub · 大脑核心四模块</text>
+
+  <rect x="56" y="590" width="256" height="190" rx="10" fill="#FFFFFF" stroke="#A5B4FC" stroke-width="1"/>
+  <text x="70" y="610" font-size="13" font-weight="700" fill="#1E1B4B">Agent 台账（人事档案）</text>
+  <text x="70" y="627" font-size="10" font-weight="700" fill="#B45309">已有 · 扩展</text>
+  <line x1="70" y1="635" x2="298" y2="635" stroke="#E0E7FF" stroke-width="1"/>
+  <text x="70" y="652" font-size="11.5" fill="#4B5563">身份 / 层级 / 生命周期 / 状态</text>
+  <text x="70" y="668" font-size="11.5" fill="#4B5563">模型绑定 · 能力清单</text>
+  <text x="70" y="684" font-size="11.5" fill="#4B5563">心跳 → 在线 / 离线 / 过期</text>
+  <text x="70" y="700" font-size="11.5" fill="#4B5563">例：库存Agent·deepseek·在线</text>
+
+  <rect x="332" y="590" width="256" height="190" rx="10" fill="#FFFFFF" stroke="#A5B4FC" stroke-width="1"/>
+  <text x="346" y="610" font-size="13" font-weight="700" fill="#1E1B4B">模型目录 + 路由器</text>
+  <text x="346" y="627" font-size="10" font-weight="700" fill="#047857">新增</text>
+  <line x1="346" y1="635" x2="574" y2="635" stroke="#E0E7FF" stroke-width="1"/>
+  <text x="346" y="652" font-size="11.5" fill="#4B5563">deepseek / GPT / 本地模型</text>
+  <text x="346" y="668" font-size="11.5" fill="#4B5563">按难度·成本·时延 选型</text>
+  <text x="346" y="684" font-size="11.5" fill="#4B5563">每 Agent 默认档 + 动态升降</text>
+  <text x="346" y="700" font-size="11.5" fill="#4B5563">例：普通查询→deepseek</text>
+
+  <rect x="608" y="590" width="256" height="190" rx="10" fill="#FFFFFF" stroke="#A5B4FC" stroke-width="1"/>
+  <text x="622" y="610" font-size="13" font-weight="700" fill="#1E1B4B">用量台账（计量计费）</text>
+  <text x="622" y="627" font-size="10" font-weight="700" fill="#047857">新增</text>
+  <line x1="622" y1="635" x2="850" y2="635" stroke="#E0E7FF" stroke-width="1"/>
+  <text x="622" y="652" font-size="11.5" fill="#4B5563">每次调用 tokens in/out</text>
+  <text x="622" y="668" font-size="11.5" fill="#4B5563">成本 / 次数 / 时长</text>
+  <text x="622" y="684" font-size="11.5" fill="#4B5563">按 Agent · 系统 聚合账单</text>
+  <text x="622" y="700" font-size="11.5" fill="#4B5563">例：1.2k+0.8k→¥0.06</text>
+
+  <rect x="884" y="590" width="256" height="190" rx="10" fill="#FFFFFF" stroke="#A5B4FC" stroke-width="1"/>
+  <text x="898" y="610" font-size="13" font-weight="700" fill="#1E1B4B">能力目录 + 协作中介</text>
+  <text x="898" y="627" font-size="10" font-weight="700" fill="#1D4ED8">部分已有</text>
+  <line x1="898" y1="635" x2="1126" y2="635" stroke="#E0E7FF" stroke-width="1"/>
+  <text x="898" y="652" font-size="11.5" fill="#4B5563">系统上报能力（自描述）</text>
+  <text x="898" y="668" font-size="11.5" fill="#4B5563">跨系统借调 A→Hub→B</text>
+  <text x="898" y="684" font-size="11.5" fill="#4B5563">派单 / 召回（执行面已通）</text>
+  <text x="898" y="700" font-size="11.5" fill="#4B5563">例：query_inventory→系统B</text>
+
+  <!-- 模型调用箭头（Hub ↔ 模型） -->
+  <line x1="170" y1="802" x2="170" y2="836" stroke="#6B7280" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="182" y="824" font-size="10.5" fill="#374151">按路由结果调用模型</text>
+  <line x1="500" y1="840" x2="500" y2="806" stroke="#6B7280" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="512" y="829" font-size="10.5" fill="#374151">token / 成本回传</text>
+
+  <!-- ============ ⑤ 模型供应商 ============ -->
+  <rect x="40" y="840" width="1120" height="120" rx="16" fill="#F5F3FF" stroke="#8B5CF6" stroke-width="1.5"/>
+  <text x="58" y="862" font-size="13.5" font-weight="700" fill="#5B21B6">⑤ 模型供应商（由路由器统一调用 / 计量）</text>
+
+  <rect x="56" y="878" width="344" height="70" rx="10" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1"/>
+  <text x="70" y="900" font-size="13" font-weight="700" fill="#4C1D95">DeepSeek</text>
+  <text x="70" y="920" font-size="11.5" fill="#6B7280">低成本·高吞吐 · 例：库存查询/报表</text>
+
+  <rect x="428" y="878" width="344" height="70" rx="10" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1"/>
+  <text x="442" y="900" font-size="13" font-weight="700" fill="#4C1D95">GPT / OpenAI</text>
+  <text x="442" y="920" font-size="11.5" fill="#6B7280">高难度推理 · 例：订单交付风险分析</text>
+
+  <rect x="800" y="878" width="344" height="70" rx="10" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1"/>
+  <text x="814" y="900" font-size="13" font-weight="700" fill="#4C1D95">本地模型（Ollama / vLLM）</text>
+  <text x="814" y="920" font-size="11.5" fill="#6B7280">脱敏/离线 · 例：质检报告/批处理</text>
+
+  <!-- 颜色说明 -->
+  <text x="600" y="984" text-anchor="middle" font-size="11" fill="#9CA3AF">颜色：绿=系统 · 青=添加/删除 · 橙=跨系统协作 · 蓝=Hub · 紫=模型（模块右上角标「已有/新增」）</text>
+</svg>

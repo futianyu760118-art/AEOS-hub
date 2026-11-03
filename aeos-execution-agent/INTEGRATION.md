@@ -29,7 +29,8 @@
 
 ### 1. 配置 `.env`
 
-复制 `.env.example` 为 `.env`，填 `EXECUTION_WS_URL` / `EXECUTION_PLANE_TOKEN` / `EXECUTION_AGENT_ID` / `EXECUTION_SOURCE_SYSTEM` / `TARGET_QUERY_*`（本系统只读查询凭据）。
+复制 `.env.example` 为 `.env`，推荐填写 `EXECUTION_WS_URL` / `EXECUTION_SYSTEM_ID` / `EXECUTION_SYSTEM_TOKEN` / `EXECUTION_AGENT_ID` / `EXECUTION_SOURCE_SYSTEM` / `TARGET_QUERY_*`（本系统只读查询凭据）。  
+升级期也可继续使用 legacy 的 `EXECUTION_PLANE_TOKEN`；配置了系统级令牌后优先使用系统级令牌。
 
 ### 2. 写本系统的查询适配器
 

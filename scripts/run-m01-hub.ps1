@@ -41,6 +41,8 @@ foreach ($name in @('M01_KEYCLOAK_HTTPS_PORT', 'M01_HUB_HTTPS_PORT')) {
 $env:NODE_EXTRA_CA_CERTS = $certificateFile
 $env:NODE_ENV = 'production'
 $env:AEOS_ENV = 'production'
+# MCP 子进程（Python）按 UTF-8 输出 stderr，否则 Codex 无法解码，错误会丢失。
+$env:PYTHONIOENCODING = 'utf-8'
 $env:AEOS_AUTH_MODE = 'm01'
 $env:AEOS_COOKIE_SECURE = '1'
 $env:HOST = '0.0.0.0'
@@ -52,6 +54,18 @@ $env:M01_REDIRECT_URI = "https://$($settings['M01_HUB_EXTERNAL_HOSTNAME']):$($se
 $env:M01_AUDIENCE = 'aeos-hub-web'
 $env:AEOS_M01_ALLOWED_ROLES = 'manager,supervisor,operator,owner,analyst'
 $env:EXECUTION_PLANE_TOKEN = $settings['EXECUTION_PLANE_TOKEN']
+
+# 执行面身份：M01 默认只接受每系统令牌；如需临时兼容旧根令牌，在 deploy/m01/.env 显式设为 1。
+$legacyRootEnabled = if ($settings.ContainsKey('EXECUTION_LEGACY_ROOT_ENABLED')) { $settings['EXECUTION_LEGACY_ROOT_ENABLED'].Trim() } else { '0' }
+if ($legacyRootEnabled -ne '0' -and $legacyRootEnabled -ne '1') {
+  throw 'EXECUTION_LEGACY_ROOT_ENABLED must be 0 or 1 in deploy/m01/.env.'
+}
+$env:EXECUTION_LEGACY_ROOT_ENABLED = $legacyRootEnabled
+
+# 可选：企业微信群机器人告警 webhook。未配置时告警只写页面与日志。
+if ($settings.ContainsKey('WECOM_ALERT_WEBHOOK') -and -not [string]::IsNullOrWhiteSpace($settings['WECOM_ALERT_WEBHOOK'])) {
+  $env:WECOM_ALERT_WEBHOOK = $settings['WECOM_ALERT_WEBHOOK']
+}
 
 # Personnel administration is fail-closed: it is enabled only when the feature
 # flag is on and a non-sentinel service-client secret is present in the ignored

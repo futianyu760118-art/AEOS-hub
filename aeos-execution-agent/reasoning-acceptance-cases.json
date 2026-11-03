@@ -1,0 +1,68 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-10-26",
+  "notes": "中台推理能力联调验收用例。required=true 的用例失败时 reasoning:check 退出码为 1；required=false 只提示、不计入失败。",
+  "cases": [
+    {
+      "id": "order-delivery-risk",
+      "name": "订单交付风险",
+      "required": true,
+      "expect_confidence": "not-low",
+      "input": {
+        "prompt": "分析订单 HJY20260903-261 的交付风险，给出结论、依据与建议。",
+        "task_type": "order_delivery_analysis",
+        "context": { "businessObjectRef": "business://order/HJY20260903-261" },
+        "constraints": { "read_only": true, "require_evidence": true }
+      }
+    },
+    {
+      "id": "material-kitting-shortage",
+      "name": "物料齐套缺口",
+      "required": true,
+      "expect_confidence": "not-low",
+      "input": {
+        "prompt": "分析订单 HJY20260903-261 的物料齐套缺口，指出缺料项、预计影响与建议动作。",
+        "task_type": "material_kitting_analysis",
+        "context": { "businessObjectRef": "business://order/HJY20260903-261" },
+        "constraints": { "read_only": true, "require_evidence": true }
+      }
+    },
+    {
+      "id": "quality-issue",
+      "name": "质量异常影响",
+      "required": true,
+      "expect_confidence": "not-low",
+      "input": {
+        "prompt": "分析订单 HJY20260903-261 相关的质量异常及其对交付的影响，结论必须引用质量数据证据。",
+        "task_type": "quality_analysis",
+        "context": { "businessObjectRef": "business://order/HJY20260903-261" },
+        "constraints": { "read_only": true, "require_evidence": true }
+      }
+    },
+    {
+      "id": "production-impact",
+      "name": "生产协同影响",
+      "required": true,
+      "expect_confidence": "not-low",
+      "input": {
+        "prompt": "分析订单 HJY20260903-261 的生产协同风险与排产影响，说明数据时间与置信度。",
+        "task_type": "production_analysis",
+        "context": { "businessObjectRef": "business://order/HJY20260903-261" },
+        "constraints": { "read_only": true, "require_evidence": true }
+      }
+    },
+    {
+      "id": "unknown-order-boundary",
+      "name": "不存在订单（边界）",
+      "required": false,
+      "expect_error_code": "NOT_FOUND",
+      "note": "中台应返回信封 404（无可用证据），并明确说明不代表无风险。",
+      "input": {
+        "prompt": "分析订单 HJY00000000-000 的交付风险。",
+        "task_type": "order_delivery_analysis",
+        "context": { "businessObjectRef": "business://order/HJY00000000-000" },
+        "constraints": { "read_only": true, "require_evidence": true }
+      }
+    }
+  ]
+}

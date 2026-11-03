@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { validateActivationGate, validateLifecycleTransition } from './agent-lifecycle.ts';
+import { DOMAIN_IDS, normalizeDomainIds } from './domain-registry.ts';
 
 const AUTONOMY_LEVELS = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'] as const;
 const AGENT_HIERARCHY_LEVELS = ['L0', 'L1', 'L2', 'L3'] as const;
@@ -27,7 +28,7 @@ const AGENT_PARENT_TYPE_BY_TYPE: Partial<Record<(typeof AGENT_TYPES)[number], (t
 };
 const AGENT_STATUSES = ['draft', 'idle', 'working', 'offline', 'archived'] as const;
 const RUNTIME_STATUSES = ['ready', 'online', 'busy', 'offline', 'unstable'] as const;
-const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli', 'remote-execution-agent'] as const;
+const RUNTIME_KINDS = ['codex-app-server', 'openai-responses', 'mcp-agent', 'custom-cli', 'remote-execution-agent', 'system-assistant'] as const;
 const RUNTIME_VERIFICATION_STATUSES = ['healthy', 'degraded', 'unhealthy', 'stopped', 'starting', 'unverified'] as const;
 const PROJECT_STATUSES = ['planned', 'in_progress', 'paused', 'completed', 'cancelled'] as const;
 const PROJECT_PRIORITIES = ['urgent', 'high', 'medium', 'low', 'none'] as const;
@@ -40,6 +41,7 @@ export const AgentHierarchyLevelSchema = z.enum(AGENT_HIERARCHY_LEVELS);
 export const AgentTypeSchema = z.enum(AGENT_TYPES);
 export const AgentLifecycleSchema = z.enum(AGENT_LIFECYCLES);
 export const HarborAgentStatusSchema = z.enum(AGENT_STATUSES);
+export const HarborDomainIdSchema = z.enum(DOMAIN_IDS);
 export const HarborRuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
 export const HarborRuntimeKindSchema = z.enum(RUNTIME_KINDS);
 export const HarborRuntimeVerificationStatusSchema = z.enum(RUNTIME_VERIFICATION_STATUSES);
@@ -136,7 +138,16 @@ export const HarborAgentSchema = z.object({
   instructions: trimmedString(5000),
   provider: trimmedString(80, 1),
   model: trimmedString(120, 1),
+  modelProfileId: identifierSchema.nullable().default(null),
   runtimeId: identifierSchema.nullable(),
+  /** 归属轴：所属系统（data/systems.json 的 systemId）。 */
+  systemId: identifierSchema.default('aeos-hub'),
+  /** 归属轴：主属业务域，目录树按它分组。 */
+  primaryDomainId: HarborDomainIdSchema.default('cross-domain'),
+  /** 归属轴：服务业务域，可多值；派单与筛选按它匹配。 */
+  domainIds: z.array(HarborDomainIdSchema).max(5).default([]),
+  /** 执行面独有 Agent 的外部标识；未登记港湾时为 null。 */
+  externalAgentId: identifierSchema.nullable().default(null),
   parentAgentId: identifierSchema.nullable().default(null),
   hierarchyLevel: AgentHierarchyLevelSchema.default('L2'),
   registration: AgentRegistrationSchema,
@@ -394,7 +405,8 @@ export type HarborAgentCreateInput = Readonly<Record<string, unknown>> & {
   runtimeId?: unknown;
 };
 const HARBOR_AGENT_CREATE_KEYS = new Set([
-  'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
+  'name', 'role', 'description', 'instructions', 'provider', 'model', 'modelProfileId', 'runtimeId',
+  'systemId', 'primaryDomainId', 'domainIds', 'externalAgentId',
   'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
   'code', 'type', 'ownerOrg', 'domain', 'lifecycle', 'allowedRuntimeCapabilities', 'taskServiceProfile',
 ]);
@@ -706,6 +718,13 @@ export class HarborStore {
       if (parentAgentId && !snapshot.agents.some((agent) => agent.id === parentAgentId)) {
         throw new Error('所选上级 Agent 不存在');
       }
+      const model = optionalText(input, 'model', 120, 'provider-default');
+      // 未显式指定 modelProfileId 时，默认沿用 model 字符串作为档 id，保证既有 create 路径自动对齐。
+      const modelProfileId = optionalText(input, 'modelProfileId', 160) || model;
+      const systemId = optionalText(input, 'systemId', 160, 'aeos-hub');
+      const primaryDomainId = enumValue(input, 'primaryDomainId', DOMAIN_IDS, 'cross-domain');
+      const domainIds = normalizeDomainIds(primaryDomainId, stringList(input.domainIds, 160));
+      const externalAgentId = optionalText(input, 'externalAgentId', 160) || null;
       const agent = HarborAgentSchema.parse({
         id: `agent-${this.idFactory()}`,
         name: requiredText(input, 'name', 80),
@@ -713,8 +732,13 @@ export class HarborStore {
         description: optionalText(input, 'description', 500),
         instructions: optionalText(input, 'instructions', 5000),
         provider: requiredText(input, 'provider', 80),
-        model: optionalText(input, 'model', 120, 'provider-default'),
+        model,
+        modelProfileId,
         runtimeId,
+        systemId,
+        primaryDomainId,
+        domainIds,
+        externalAgentId,
         parentAgentId,
         hierarchyLevel: expectedLevel,
         registration,
@@ -950,7 +974,12 @@ export class HarborStore {
           instructions: '结论必须引用 evidence_refs；只输出建议动作，不越过 Guard 执行高风险操作。',
           provider: 'openai-codex',
           model: 'account-default',
+          modelProfileId: 'account-default',
           runtimeId: 'runtime-codex-local',
+          systemId: 'aeos-hub',
+          primaryDomainId: 'cross-domain',
+          domainIds: ['cross-domain'],
+          externalAgentId: null,
           parentAgentId: null,
           hierarchyLevel: 'L0',
           registration: {

@@ -3,7 +3,25 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from '../src/execution-plane.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, executionPlaneTimeoutsFromEnv } from '../src/execution-plane.ts';
+import type { UsageEventAppendInput } from '../src/usage-ledger-store.ts';
+
+test('执行面超时参数从环境读取并钳位', () => {
+  const defaults = executionPlaneTimeoutsFromEnv({});
+  assert.equal(defaults.heartbeatIntervalMs, 5_000);
+  assert.equal(defaults.heartbeatTimeoutMs, 15_000);
+
+  const custom = executionPlaneTimeoutsFromEnv({
+    AEOS_HEARTBEAT_INTERVAL_MS: '20000',
+    AEOS_HEARTBEAT_TIMEOUT_MS: '10000',
+    AEOS_QUERY_TIMEOUT_MS: '999999999',
+    AEOS_REASONING_TIMEOUT_MS: 'bad',
+  });
+  assert.equal(custom.heartbeatIntervalMs, 20_000);
+  assert.equal(custom.heartbeatTimeoutMs, 20_000);
+  assert.equal(custom.queryTimeoutMs, 600_000);
+  assert.equal(custom.reasoningTimeoutMs, 240_000);
+});
 
 const QUERY_SCHEMA = {
   type: 'object',
@@ -69,6 +87,27 @@ test('注册后 agent 在线并出现在 list 中', (t) => {
   assert.equal(agents[0].sourceSystem, '公司中控平台');
 });
 
+test('网关注册记录 kind/gatewayVersion，直连默认普通执行体', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  h.registry.onRegister({
+    agentId: 'gateway-control-platform',
+    name: '公司中控平台网关',
+    version: '1.0.0',
+    sourceSystem: 'control-platform',
+    kind: 'system-gateway',
+    gatewayVersion: '1.0.0',
+    capabilities: [{ name: 'query_control_platform', description: '中台只读查询', constraints: { readOnly: true } }],
+  }, () => {});
+  const agents = h.registry.list().agents;
+  const gateway = agents.find((agent) => agent.agentId === 'gateway-control-platform');
+  assert.equal(gateway?.agentKind, 'system-gateway');
+  assert.equal(gateway?.gatewayVersion, '1.0.0');
+  const direct = agents.find((agent) => agent.agentId === h.agentId);
+  assert.equal(direct?.agentKind, 'execution-agent');
+  assert.equal(direct?.gatewayVersion, null);
+});
+
 test('注册校验：来源系统不能为空', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
@@ -112,7 +151,7 @@ test('回环连接地址会被识别为本机执行面', () => {
 
 test('执行面注册仅信任连接对端地址判定本机身份', () => {
   const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-  assert.match(server, /executionWss\.on\('connection', \(ws, request\) => \{\s+const peerAddress = request\.socket\.remoteAddress;/);
+  assert.match(server, /executionWss\.on\('connection', \(ws, request\) => \{[\s\S]{0,400}?const peerAddress = request\.socket\.remoteAddress;/);
   assert.match(server, /local: isLoopbackExecutionPeer\(peerAddress\),/);
   assert.doesNotMatch(server, /local:\s*msg\.local/);
 });
@@ -128,6 +167,17 @@ test('心跳刷新 lastSeenAt 与 runtimeStatus', (t) => {
   assert.equal(agent.lastSeenAt, '2026-10-14T00:00:10.000Z');
 });
 
+test('心跳未携带 currentRunId 时保留派单设置的 runId', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const { runId } = h.registry.dispatch(h.agentId, 'query_control_platform', { path: '/external/orders/list', params: {} });
+  h.registry.onHeartbeat(h.agentId, { status: 'working' });
+  assert.equal(h.registry.list().agents[0].currentRunId, runId);
+  h.registry.onHeartbeat(h.agentId, { status: 'idle', currentRunId: null });
+  assert.equal(h.registry.list().agents[0].currentRunId, null);
+});
+
+
 test('派单下发 dispatch 并创建 run', (t) => {
   const h = makeHarness(t);
   t.after(h.cleanup);
@@ -139,6 +189,9 @@ test('派单下发 dispatch 并创建 run', (t) => {
     runId,
     capability: 'query_control_platform',
     input: { path: '/external/material-kitting/shortages', params: { demand_no: 'X' } },
+    traceId: runId,
+    caller: null,
+    request_id: runId,
   });
   const run = h.registry.list().runs.find((r) => r.runId === runId);
   assert.equal(run?.state, 'dispatched');
@@ -172,6 +225,184 @@ test('结果回传：run_complete 完成并保存结果', (t) => {
   assert.equal(run?.state, 'completed');
   assert.deepEqual(run?.result, { rows: [{ demand_no: 'HJY1' }] });
   assert.equal(h.registry.list().agents[0].runtimeStatus, 'idle');
+});
+
+test('run_complete 携带 usage 时经 onUsageEvent 记账', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-usage-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const usageEvents: UsageEventAppendInput[] = [];
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => {
+      let n = 0;
+      return () => `id-${++n}`;
+    })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-1',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  const { runId } = registry.dispatch('agent-query-1', 'query_control_platform', { path: '/external/orders/list', params: {} });
+  registry.onRunComplete('agent-query-1', {
+    runId,
+    result: { rows: [] },
+    usage: { modelId: 'deepseek-chat', tokensIn: 120, tokensOut: 30, cost: 0.00018 },
+  });
+  assert.equal(usageEvents.length, 1);
+  assert.equal(usageEvents[0].agentId, 'agent-query-1');
+  assert.equal(usageEvents[0].systemId, '公司中控平台');
+  assert.equal(usageEvents[0].modelId, 'deepseek-chat');
+  assert.equal(usageEvents[0].runId, runId);
+  assert.equal(usageEvents[0].traceId, runId);
+  assert.equal(usageEvents[0].tokensIn, 120);
+  assert.equal(usageEvents[0].tokensOut, 30);
+  assert.equal(usageEvents[0].cost, 0.00018);
+});
+
+test('能力授权 enforce 时拒绝未授权派单，observe 时只告警', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-auth-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const build = (enforcement: 'observe' | 'enforce') => {
+    const registry = new ExecutionPlaneRegistry({
+      file: join(dir, `execution-plane-${enforcement}.json`),
+      idFactory: (() => {
+        let n = 0;
+        return () => `auth-${enforcement}-${++n}`;
+      })(),
+      isCapabilityAuthorized: () => ({ allowed: false, enforcement, reason: 'capability_not_granted' }),
+    });
+    registry.onRegister(
+      {
+        agentId: `agent-auth-${enforcement}`,
+        name: '查询智能体',
+        version: '1.0.0',
+        sourceSystem: '公司中控平台',
+        capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+      },
+      () => {},
+    );
+    return registry;
+  };
+
+  const enforced = build('enforce');
+  assert.throws(
+    () => enforced.dispatch('agent-auth-enforce', 'query_control_platform', { path: '/external/orders/list', params: {} }),
+    (error: unknown) => error instanceof ExecutionPlaneError && error.code === 'CAPABILITY_FORBIDDEN',
+  );
+
+  const observed = build('observe');
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const { runId } = observed.dispatch('agent-auth-observe', 'query_control_platform', { path: '/external/orders/list', params: {} });
+    assert.ok(runId);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('dispatch 可指定 traceId，run 与用量按 traceId 关联', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-trace-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const usageEvents: UsageEventAppendInput[] = [];
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => {
+      let n = 0;
+      return () => `id-${++n}`;
+    })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-trace',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  const caller = { systemId: 'control-platform', agentId: 'AG-000001', userId: 'u-1', taskId: 'AT-1', traceId: 'trace-1' };
+  const { runId } = registry.dispatch('agent-query-trace', 'query_control_platform', { path: '/external/orders/list', params: {} }, { traceId: 'borrow-trace-1', caller });
+  assert.equal(registry.getRun(runId)?.traceId, 'borrow-trace-1');
+  assert.deepEqual(registry.getRun(runId)?.caller, caller);
+  registry.onRunComplete('agent-query-trace', { runId, result: { rows: [] }, usage: { modelId: 'deepseek-chat', tokensIn: 1, tokensOut: 1 } });
+  assert.equal(usageEvents[0]?.traceId, 'borrow-trace-1');
+  assert.equal(usageEvents[0]?.callerAgentId, 'AG-000001');
+  assert.equal(usageEvents[0]?.callerUserId, 'u-1');
+});
+
+test('注册身份来自认证上下文：规范 systemId 覆盖自报值并进入用量归属', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-identity-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const usageEvents: UsageEventAppendInput[] = [];
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => { let n = 0; return () => `id-${++n}`; })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-identity',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '冒用其他系统',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+    {
+      authMode: 'system-token',
+      systemId: 'control-platform',
+      sourceSystem: 'control-platform',
+      sourceSystemName: '公司中控平台',
+      legacyUnresolved: false,
+    },
+  );
+
+  const agent = registry.list().agents.find((item) => item.agentId === 'agent-query-identity');
+  assert.equal(agent?.systemId, 'control-platform');
+  assert.equal(agent?.sourceSystem, 'control-platform');
+  assert.equal(agent?.sourceSystemName, '公司中控平台');
+  assert.equal(agent?.authMode, 'system-token');
+
+  const { runId } = registry.dispatch('agent-query-identity', 'query_control_platform', { path: '/external/orders/list', params: {} });
+  registry.onRunComplete('agent-query-identity', { runId, result: { rows: [] } });
+  assert.equal(usageEvents[0]?.systemId, 'control-platform');
+});
+
+test('未提供认证上下文时保持 legacy 自报口径', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const agent = h.registry.list().agents[0];
+  assert.equal(agent?.systemId, null);
+  assert.equal(agent?.authMode, 'legacy-root');
+  assert.equal(agent?.sourceSystemName, '公司中控平台');
+});
+
+test('模拟器注册被标记 simulated，供目录排除', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  h.registry.onRegister({
+    agentId: 'agent-simulated',
+    name: '模拟执行面',
+    version: '1.0.0',
+    sourceSystem: '公司中控平台',
+    simulated: true,
+    capabilities: [{ name: 'query_control_platform', description: '模拟查询', constraints: { readOnly: true } }],
+  }, () => {});
+  assert.equal(h.registry.list().agents.find((agent) => agent.agentId === 'agent-simulated')?.simulated, true);
+  assert.equal(h.registry.list().agents.find((agent) => agent.agentId === h.agentId)?.simulated, false);
 });
 
 test('失败回传：run_failed 记录错误', (t) => {
@@ -224,6 +455,65 @@ test('重启后从持久化文件恢复为离线', (t) => {
   const agent = registry2.list().agents.find((a) => a.agentId === h.agentId);
   assert.ok(agent);
   assert.equal(agent.connectionStatus, 'offline');
+});
+
+test('心跳落盘按 heartbeatPersistIntervalMs 节流', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-throttle-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'execution-plane.json');
+  const clock = { current: new Date('2026-10-14T00:00:00.000Z') };
+  const registry = new ExecutionPlaneRegistry({
+    file,
+    clock: () => clock.current,
+    heartbeatPersistIntervalMs: 30_000,
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-1',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  const registeredAt = JSON.parse(readFileSync(file, 'utf8')).agents[0].lastSeenAt;
+
+  clock.current = new Date('2026-10-14T00:00:05.000Z');
+  registry.onHeartbeat('agent-query-1', { status: 'idle' });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).agents[0].lastSeenAt, registeredAt);
+
+  clock.current = new Date('2026-10-14T00:00:35.000Z');
+  registry.onHeartbeat('agent-query-1', { status: 'idle' });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).agents[0].lastSeenAt, '2026-10-14T00:00:35.000Z');
+});
+
+test('run 快照按 maxRuns 保留最近记录', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-maxruns-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'execution-plane.json');
+  const registry = new ExecutionPlaneRegistry({
+    file,
+    maxRuns: 2,
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => { let n = 0; return () => `run-${++n}`; })(),
+  });
+  registry.onRegister(
+    {
+      agentId: 'agent-query-1',
+      name: '查询智能体',
+      version: '1.0.0',
+      sourceSystem: '公司中控平台',
+      capabilities: [{ name: 'query_control_platform', description: '中台只读查询', inputSchema: QUERY_SCHEMA, constraints: { readOnly: true } }],
+    },
+    () => {},
+  );
+  for (let i = 0; i < 3; i += 1) {
+    const { runId } = registry.dispatch('agent-query-1', 'query_control_platform', { path: '/external/orders/list', params: {} });
+    registry.onRunComplete('agent-query-1', { runId, result: { rows: [] } });
+  }
+  assert.equal(registry.list().runs.length, 2);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).runs.length, 2);
 });
 
 test('历史执行面记录缺少来源系统时标记待补充', (t) => {
@@ -301,4 +591,110 @@ test('推理结果缺少 evidence_refs 标记低置信度', (t) => {
   assert.equal(run?.state, 'completed');
   assert.equal((run?.result as { data_confidence?: string }).data_confidence, 'low');
   assert.ok((run?.result as { validation_note?: string }).validation_note);
+});
+
+test('派单 request_id 优先使用调用方提供的值', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  const { runId } = h.registry.dispatch(
+    h.agentId,
+    'query_control_platform',
+    { path: '/external/orders/list', params: {} },
+    { requestId: 'borrow-123' },
+  );
+  const message = h.sent[0] as Record<string, unknown>;
+  assert.equal(message.request_id, 'borrow-123');
+  assert.notEqual(message.request_id, runId);
+});
+
+const WRITE_SCHEMA = {
+  type: 'object',
+  properties: { operation: { type: 'string', enum: ['order.update_note'] } },
+  required: ['operation'],
+};
+
+function registerWriteAgent(registry: ExecutionPlaneRegistry, sent: unknown[]): void {
+  registry.onRegister({
+    agentId: 'agent-write-1',
+    name: '写智能体',
+    version: '1.0.0',
+    sourceSystem: '公司中控平台',
+    capabilities: [{
+      name: 'write_control_platform',
+      description: '受控写操作',
+      inputSchema: WRITE_SCHEMA,
+      constraints: { readOnly: false, approvalRequired: true, riskLevel: 'low', idempotent: true },
+    }],
+  }, (msg) => sent.push(msg));
+}
+
+test('写能力未经审批不能派单', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  registerWriteAgent(h.registry, h.sent);
+  assert.throws(
+    () => h.registry.dispatch('agent-write-1', 'write_control_platform', { operation: 'order.update_note' }),
+    (error: unknown) => error instanceof ExecutionPlaneError && error.code === 'WRITE_FORBIDDEN',
+  );
+});
+
+test('审批后写能力可以派单并携带 request_id', (t) => {
+  const h = makeHarness(t);
+  t.after(h.cleanup);
+  registerWriteAgent(h.registry, h.sent);
+  const { runId } = h.registry.dispatch(
+    'agent-write-1',
+    'write_control_platform',
+    { operation: 'order.update_note' },
+    { writeApproved: true, requestId: 'write-123' },
+  );
+  const message = h.sent.at(-1) as Record<string, unknown>;
+  assert.equal(message.type, 'dispatch');
+  assert.equal(message.request_id, 'write-123');
+  assert.equal(h.registry.getRun(runId)?.state, 'dispatched');
+});
+
+function writeRegistry(t: { after: (fn: () => void) => void }, usageEvents: unknown[]): { registry: ExecutionPlaneRegistry; runId: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'execution-plane-write-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const registry = new ExecutionPlaneRegistry({
+    file: join(dir, 'execution-plane.json'),
+    heartbeatTimeoutMs: 15_000,
+    clock: () => new Date('2026-10-14T00:00:00.000Z'),
+    idFactory: (() => { let n = 0; return () => `w-${++n}`; })(),
+    onUsageEvent: (event) => usageEvents.push(event),
+  });
+  registry.onRegister({
+    agentId: 'agent-write-usage',
+    name: '写智能体',
+    version: '1.0.0',
+    sourceSystem: '公司中控平台',
+    capabilities: [{
+      name: 'write_control_platform',
+      description: '受控写操作',
+      inputSchema: WRITE_SCHEMA,
+      constraints: { readOnly: false, approvalRequired: true },
+    }],
+  }, () => {});
+  const { runId } = registry.dispatch('agent-write-usage', 'write_control_platform', { operation: 'order.update_note' }, { writeApproved: true });
+  return { registry, runId };
+}
+
+test('写操作未上报用量时不记录 0 用量事件', (t) => {
+  const usageEvents: unknown[] = [];
+  const { registry, runId } = writeRegistry(t, usageEvents);
+  registry.onRunComplete('agent-write-usage', { runId, result: { ok: true } });
+  assert.equal(usageEvents.length, 0);
+});
+
+test('写操作上报用量时仍记录', (t) => {
+  const usageEvents: Array<Record<string, unknown>> = [];
+  const { registry, runId } = writeRegistry(t, usageEvents);
+  registry.onRunComplete('agent-write-usage', {
+    runId,
+    result: { ok: true },
+    usage: { modelId: 'deepseek-flash', tokensIn: 1, tokensOut: 2, cost: 0.01 },
+  });
+  assert.equal(usageEvents.length, 1);
+  assert.equal(usageEvents[0]?.metering, 'reported');
 });

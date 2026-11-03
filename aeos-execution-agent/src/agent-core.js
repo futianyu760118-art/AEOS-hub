@@ -3,11 +3,31 @@
 import WebSocket from 'ws';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
+const DEFAULT_QUERY_TIMEOUT_MS = 30_000;
+const DEFAULT_REASONING_TIMEOUT_MS = 200_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+
+function handlerTimeoutMs(capability, override) {
+  if (typeof override === 'number' && Number.isFinite(override) && override > 0) return override;
+  return /(^|[_-])reason(ing)?([_-]|$)/i.test(capability)
+    ? DEFAULT_REASONING_TIMEOUT_MS
+    : DEFAULT_QUERY_TIMEOUT_MS;
+}
+
+/** 优先使用每系统令牌；未配置时保留 legacy 根令牌，便于滚动升级。 */
+export function buildConnectionHeaders(config) {
+  if (config.systemId && config.systemToken) {
+    return {
+      'x-aeos-system-id': config.systemId,
+      'x-aeos-system-token': config.systemToken,
+    };
+  }
+  return { 'x-aeos-execution-token': config.token };
+}
 
 export class ExecutionAgentCore {
   constructor(config, handlers, log = console.log) {
-    this.config = config; // { wsUrl, token, agentId, name, version, protocolVersion, sourceSystem, capabilities }
+    this.config = config; // { wsUrl, token, systemId, systemToken, agentId, name, version, protocolVersion, sourceSystem, capabilities }
     this.handlers = handlers; // { [capability]: (input, ctx) => void }
     this.log = log;
     this.ws = null;
@@ -33,7 +53,7 @@ export class ExecutionAgentCore {
   }
 
   connect() {
-    const ws = new WebSocket(this.config.wsUrl, { headers: { 'x-aeos-execution-token': this.config.token } });
+    const ws = new WebSocket(this.config.wsUrl, { headers: buildConnectionHeaders(this.config) });
     this.ws = ws;
     ws.on('open', () => {
       this.reconnectAttempt = 0;
@@ -45,7 +65,7 @@ export class ExecutionAgentCore {
   }
 
   register() {
-    this.send({
+    const message = {
       type: 'register',
       agentId: this.config.agentId,
       name: this.config.name,
@@ -53,7 +73,11 @@ export class ExecutionAgentCore {
       protocolVersion: this.config.protocolVersion,
       sourceSystem: this.config.sourceSystem,
       capabilities: this.config.capabilities,
-    });
+    };
+    // 网关模式附带角色与版本；直连模式不带，保持协议向后兼容。
+    if (this.config.agentKind) message.kind = this.config.agentKind;
+    if (this.config.gatewayVersion) message.gatewayVersion = this.config.gatewayVersion;
+    this.send(message);
     this.log(`[agent] 已发送 register：${this.config.agentId}（${this.config.capabilities.map((c) => c.name).join(', ')}）`);
   }
 
@@ -79,33 +103,83 @@ export class ExecutionAgentCore {
       this.sendRunFailed(msg.runId, 'CAPABILITY_UNSUPPORTED', `不支持能力 ${capability}`);
       return;
     }
-    const ctx = {
-      runId: msg.runId,
-      aborted: false,
-      sendProgress: (detail) => this.send({ type: 'run_update', runId: msg.runId, state: 'running', detail }),
-      sendComplete: (result) => this.send({ type: 'run_complete', runId: msg.runId, result }),
-      sendFailed: (code, message) => this.sendRunFailed(msg.runId, code, message),
+    const runId = msg.runId;
+    const timeoutMs = handlerTimeoutMs(capability, msg.timeoutMs);
+    let timer = null;
+    const controller = new AbortController();
+    const finish = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (this.activeRun?.runId === runId) this.activeRun = null;
     };
-    this.activeRun = { runId: msg.runId, ctx };
-    this.log(`[agent] 收到派单 ${msg.runId}: ${capability}`);
+    const ctx = {
+      runId,
+      traceId: msg.traceId ?? null,
+      caller: msg.caller ?? null,
+      aborted: false,
+      signal: controller.signal,
+      sendProgress: (detail) => {
+        if (!ctx.aborted) this.send({ type: 'run_update', runId, state: 'running', detail });
+      },
+      sendComplete: (result, usage) => {
+        if (ctx.aborted) return;
+        ctx.aborted = true;
+        finish();
+        this.send(usage ? { type: 'run_complete', runId, result, usage } : { type: 'run_complete', runId, result });
+      },
+      sendFailed: (code, message) => {
+        if (ctx.aborted) return;
+        ctx.aborted = true;
+        finish();
+        this.sendRunFailed(runId, code, message);
+      },
+    };
+    this.activeRun = { runId, ctx, timer: null, controller };
+    this.log(`[agent] 收到派单 ${runId}: ${capability}`);
+    timer = setTimeout(() => {
+      if (this.activeRun?.runId !== runId) return;
+      ctx.aborted = true;
+      controller.abort();
+      this.activeRun = null;
+      this.sendRunFailed(runId, 'EXECUTION_TIMEOUT', `执行超时（${timeoutMs}ms）`);
+    }, timeoutMs);
+    timer.unref?.();
+    this.activeRun.timer = timer;
     Promise.resolve()
       .then(() => handler(msg.input ?? {}, ctx))
-      .then((result) => ctx.sendComplete(result))
-      .catch((error) => ctx.sendFailed('EXECUTION_FAILED', error?.message || String(error)));
+      .then((result) => {
+        if (!ctx.aborted) ctx.sendComplete(result);
+      })
+      .catch((error) => {
+        if (!ctx.aborted) ctx.sendFailed(error?.code || 'EXECUTION_FAILED', error?.message || String(error));
+      });
   }
 
   handleRecall(msg) {
     if (this.activeRun && (msg.runId === undefined || this.activeRun.runId === msg.runId)) {
-      this.activeRun.ctx.aborted = true;
+      const active = this.activeRun;
+      active.ctx.aborted = true;
+      active.controller?.abort();
+      if (active.timer) clearTimeout(active.timer);
       this.activeRun = null;
       this.log(`[agent] 收到召回 ${msg.runId ?? ''}`);
     }
   }
 
+  heartbeat() {
+    this.send({
+      type: 'heartbeat',
+      status: this.activeRun ? 'working' : 'idle',
+      currentRunId: this.activeRun?.runId ?? null,
+    });
+  }
+
   startHeartbeat(intervalMs) {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      this.send({ type: 'heartbeat', status: this.activeRun ? 'working' : 'idle' });
+      this.heartbeat();
     }, intervalMs);
   }
 
@@ -115,6 +189,7 @@ export class ExecutionAgentCore {
 
   scheduleReconnect() {
     this.stopHeartbeat();
+    if (this.activeRun?.timer) clearTimeout(this.activeRun.timer);
     this.activeRun = null;
     if (!this.shouldRun) return;
     const delay = Math.min(MAX_RECONNECT_DELAY_MS, 1000 * 2 ** this.reconnectAttempt);

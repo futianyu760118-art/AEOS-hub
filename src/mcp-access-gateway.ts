@@ -86,11 +86,11 @@ export class McpAccessGateway {
       arguments: input.args ?? {},
       policy: 'registry-readonly + runtime-readOnlyHint',
     };
-    this.recordEvidence({ kind: 'guard_decision', method: 'mcpServer/tool/call', thread_id: input.sessionId, summary: `auto-approved read-only MCP call: ${key}`, payload });
+    // 源头降噪：只读工具调用的“自动放行”与“成功完成”不再逐条写审计，
+    // 它们属于运行轨迹（会话/AI 观测可查）；审计台账只保留拒绝与失败。
     try {
       const result = await this.runtime.callMcpTool(input.sessionId, input.server, input.tool, input.args ?? {});
       this.failures.delete(key);
-      this.recordEvidence({ kind: 'mcp_tool_call', method: 'mcpServer/tool/call', thread_id: input.sessionId, summary: `completed: ${key}`, payload });
       return result;
     } catch (error) {
       const failures = (state?.failures ?? 0) + 1;

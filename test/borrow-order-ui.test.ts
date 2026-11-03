@@ -1,0 +1,70 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = process.cwd();
+const html = readFileSync(join(root, 'public', 'index.html'), 'utf8');
+const app = readFileSync(join(root, 'public', 'app.js'), 'utf8');
+const css = readFileSync(join(root, 'public', 'style.css'), 'utf8');
+
+test('导航与视图存在', () => {
+  assert.match(html, /data-view="borrow"/);
+  assert.match(html, /id="view-borrow"/);
+  assert.match(html, /id="btn-borrow-refresh"/);
+  assert.match(html, /id="btn-borrow-collapse"/);
+  assert.match(html, /id="borrow-list"/);
+  assert.match(html, /id="borrow-detail"/);
+  assert.match(html, /id="borrow-status-filter"/);
+});
+
+test('详情可收起且结果表格化', () => {
+  assert.match(app, /function clearBorrowSelection\(\)/);
+  assert.match(app, /function renderBorrowResultTable\(/);
+  assert.match(app, /再次点击或点「收起」关闭/);
+});
+
+test('借调内容中文化：能力、结果状态、参数与摘要', () => {
+  assert.match(app, /BORROW_CAPABILITY_LABELS/);
+  assert.match(app, /query_control_platform: '中台只读查询'/);
+  assert.match(app, /BORROW_RESULT_STATUS_LABELS/);
+  assert.match(app, /function renderBorrowInputValue/);
+  assert.match(app, /数据置信度/);
+  assert.match(app, /原始 JSON（技术排查用）/);
+});
+
+test('借调详情展示能力版本、schema 锚定与来源', () => {
+  assert.match(app, /能力版本/);
+  assert.match(app, /schema 锚定/);
+  assert.match(app, /order\.capabilityVersion/);
+  assert.match(app, /order\.inputSchemaHash/);
+  assert.match(app, /order\.outputSchemaHash/);
+  assert.match(app, /执行面 ·/);
+});
+
+test('视图注册与懒加载', () => {
+  assert.match(app, /view: 'borrow', label: '跨系统查询'/);
+  assert.match(app, /if \(view === 'borrow'\) loadBorrowOrders\(\);/);
+  assert.match(app, /function syncBorrowRefresh\(\)/);
+  assert.match(app, /'usage', 'borrow'/);
+});
+
+test('借调视图只读：没有写请求与操作按钮', () => {
+  const start = app.indexOf('// ---------- 跨系统借调（只读监控） ----------');
+  const end = app.indexOf('// ---------- 运行监控（只读） ----------');
+  assert.ok(start > 0 && end > start);
+  const block = app.slice(start, end);
+  assert.doesNotMatch(block, /method:\s*'(POST|PUT|PATCH|DELETE)'/);
+  assert.doesNotMatch(block, /btn-borrow-(create|cancel|retry)/);
+});
+
+test('缓存版本号符合约定', () => {
+  assert.match(html, /style\.css\?v=[a-z0-9-]+/);
+  assert.match(html, /app\.js\?v=[a-z0-9-]+/);
+});
+
+test('借调视图样式存在', () => {
+  assert.match(css, /\.borrow-table/);
+  assert.match(css, /\.borrow-row/);
+  assert.match(css, /\.borrow-json/);
+});

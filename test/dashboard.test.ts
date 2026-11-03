@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildCapabilityRegistry } from '../src/capability-registry.ts';
 import { buildDashboardSnapshot } from '../src/dashboard.ts';
+import { DEFAULT_DASHBOARD_READ_LIMITS, loadDashboardReadLimits } from '../src/dashboard-read-plan.ts';
 
 function toolResponse(payload: unknown) {
   return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
@@ -351,4 +355,35 @@ test('surfaces open quality issues without fabricating absent quality fields', (
   assert.match(snapshot.attentionRisks[0]?.evidenceRef ?? '', /quality-issue/);
   assert.equal(snapshot.metrics.attentionCount, 1);
   assert.equal(snapshot.dataAsOf, '2026-09-23T02:00:00Z');
+});
+
+test('看板分页上限：配置文件缺失时使用默认值', () => {
+  const limits = loadDashboardReadLimits(join(tmpdir(), 'aeos-dashboard-read-missing.json'));
+  assert.deepEqual(limits, DEFAULT_DASHBOARD_READ_LIMITS);
+});
+
+test('看板分页上限：读取配置并钳位到合法范围', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'aeos-dashboard-read-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'dashboard-read.json');
+  writeFileSync(file, JSON.stringify({ pageSize: 999, limits: { shortages: 0, workOrders: 7, quality: 'abc' } }), 'utf8');
+  const limits = loadDashboardReadLimits(file);
+  assert.equal(limits.pageSize, 200);
+  assert.equal(limits.shortages, 1);
+  assert.equal(limits.workOrders, 7);
+  assert.equal(limits.quality, DEFAULT_DASHBOARD_READ_LIMITS.quality);
+});
+
+test('看板读取使用分页上限与工单日期过滤', () => {
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.match(server, /loadDashboardReadLimits\(\)/);
+  assert.match(server, /planned_end_start: readPlan\.orders\.date_from/);
+  assert.match(server, /planned_end_end: readPlan\.orders\.date_to/);
+  assert.match(server, /readLimits\.shortages/);
+  assert.match(server, /readLimits\.workOrders/);
+});
+
+test('旧版 detail_orders_list 分页不超过 100', () => {
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.match(server, /Math\.min\(readLimits\.pageSize, 100\)/);
 });

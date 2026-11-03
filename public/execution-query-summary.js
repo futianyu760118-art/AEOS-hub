@@ -53,6 +53,20 @@ export function summarizeExecutionResult(path, data, requestParams = {}, intent)
   return `${paginationFact}：\n${lines.join('\n')}${remainder}${validationNotice}`;
 }
 
+/** 把内部证据引用翻成业务可读的来源标签。 */
+export function humanizeEvidenceRef(ref) {
+  const value = String(ref ?? '').trim();
+  if (!value) return '';
+  if (/^control-platform:\/\/kitting\//.test(value)) return '中台 · 齐套结果';
+  if (/^control-platform:\/\/order\//.test(value)) return '中台 · 订单';
+  if (/^control-platform:\/\/quality/.test(value)) return '中台 · 质量异常';
+  if (/^control-platform:\/\/production\//.test(value)) return '中台 · 生产';
+  if (/^control-platform:\/\/material/.test(value)) return '中台 · 物料';
+  if (/^control-platform:\/\/supplier/.test(value)) return '中台 · 供应商';
+  if (/^control-platform:\/\/reasoning\//.test(value)) return '系统';
+  return value;
+}
+
 /** 把推理能力结果转成可读中文摘要。 */
 export function summarizeReasoningResult(result) {
   const summary = typeof result?.summary === 'string' ? result.summary : '';
@@ -69,7 +83,10 @@ export function summarizeReasoningResult(result) {
     if (conclusion?.risk) lines.push(`   风险：${conclusion.risk}`);
     if (conclusion?.recommendation) lines.push(`   建议：${conclusion.recommendation}`);
     if (conclusion?.confidence) lines.push(`   置信度：${conclusion.confidence}`);
-    if (Array.isArray(conclusion?.evidence_refs) && conclusion.evidence_refs.length) lines.push(`   证据：${conclusion.evidence_refs.join('；')}`);
+    if (Array.isArray(conclusion?.evidence_refs) && conclusion.evidence_refs.length) {
+      const labels = [...new Set(conclusion.evidence_refs.map(humanizeEvidenceRef).filter(Boolean))];
+      lines.push(`   依据：${labels.join('；')}`);
+    }
   });
   if (dataAsOf) lines.push(`数据时间：${dataAsOf}`);
   if (confidence) lines.push(`数据置信度：${confidence}`);

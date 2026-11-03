@@ -39,6 +39,14 @@ test('number enum 校验', () => {
   assert.match(validateAgainstSchema('2', schema)!, /期望 number/);
 });
 
+test('integer 类型校验', () => {
+  const schema: Schema = { type: 'integer', enum: [0, 1, 2] };
+  assert.equal(validateAgainstSchema(2, schema), null);
+  assert.match(validateAgainstSchema(2.5, schema)!, /期望 integer/);
+  assert.match(validateAgainstSchema('2', schema)!, /期望 integer/);
+  assert.match(validateAgainstSchema(5, schema)!, /不在允许范围/);
+});
+
 test('boolean 类型校验', () => {
   assert.equal(validateAgainstSchema(true, { type: 'boolean' }), null);
   assert.match(validateAgainstSchema(1, { type: 'boolean' })!, /期望 boolean/);
@@ -70,4 +78,11 @@ test('未知字段默认放行（向前兼容）', () => {
 
 test('不支持的 type 报错', () => {
   assert.match(validateAgainstSchema({}, { type: 'symbol' as never })!, /不支持的 schema type/);
+});
+
+test('联合类型支持 string | null', () => {
+  const schema = { type: ['string', 'null'] as const, maxLength: 2000 };
+  assert.equal(validateAgainstSchema('客户要求改期', schema as never), null);
+  assert.equal(validateAgainstSchema(null, schema as never), null);
+  assert.match(validateAgainstSchema(123, schema as never) ?? '', /期望 string \| null/);
 });

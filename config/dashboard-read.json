@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "pageSize": 200,
+  "limits": {
+    "orders": 3,
+    "shortages": 10,
+    "kitting": 5,
+    "quality": 5,
+    "workOrders": 5,
+    "capacity": 3,
+    "productionScoped": 5
+  },
+  "note": "看板只读分页上限：pageSize 最大 200；limits 为各数据源最多翻页数。改这里即可调节速度与完整性，无需改代码。"
+}

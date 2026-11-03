@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "revision": 2,
+  "updatedAt": "2026-10-29T01:17:41.020Z",
+  "enabled": true,
+  "maxItemsPerAnalysis": 2,
+  "perItemTimeoutMs": 120000,
+  "dedupeHours": 24,
+  "dispatchDomains": [
+    "order",
+    "kitting",
+    "quality"
+  ],
+  "targets": {
+    "order": {
+      "systemId": "control-platform",
+      "capability": "reason_control_platform",
+      "taskType": "order_delivery_analysis"
+    },
+    "kitting": {
+      "systemId": "control-platform",
+      "capability": "reason_control_platform",
+      "taskType": "material_kitting_analysis"
+    },
+    "quality": {
+      "systemId": "control-platform",
+      "capability": "reason_control_platform",
+      "taskType": "quality_analysis"
+    },
+    "production": {
+      "systemId": "control-platform",
+      "capability": "reason_control_platform",
+      "taskType": "production_analysis"
+    }
+  }
+}

@@ -6,19 +6,64 @@ export function loadConfig(env = process.env) {
     return value;
   };
 
+  const legacyToken = (env.EXECUTION_PLANE_TOKEN ?? '').trim();
+  const systemId = (env.EXECUTION_SYSTEM_ID ?? '').trim();
+  const systemToken = (env.EXECUTION_SYSTEM_TOKEN ?? '').trim();
+  const wsUrl = required('EXECUTION_WS_URL');
+  if (Boolean(systemId) !== Boolean(systemToken)) {
+    throw new Error('EXECUTION_SYSTEM_ID 和 EXECUTION_SYSTEM_TOKEN 必须同时提供');
+  }
+  if (!systemId && !legacyToken) {
+    throw new Error('缺少环境变量 EXECUTION_PLANE_TOKEN，或同时提供 EXECUTION_SYSTEM_ID 和 EXECUTION_SYSTEM_TOKEN');
+  }
+
   return {
-    wsUrl: required('EXECUTION_WS_URL'),
-    token: required('EXECUTION_PLANE_TOKEN'),
+    wsUrl,
+    token: legacyToken,
+    systemId,
+    systemToken,
+    authMode: systemId ? 'system-token' : 'legacy-root',
     agentId: required('EXECUTION_AGENT_ID'),
     agentName: (env.EXECUTION_AGENT_NAME ?? '').trim() || required('EXECUTION_AGENT_ID'),
     agentVersion: (env.EXECUTION_AGENT_VERSION ?? '').trim() || '1.0.0',
     protocolVersion: (env.EXECUTION_PROTOCOL_VERSION ?? '').trim() || '1.0',
     sourceSystem: required('EXECUTION_SOURCE_SYSTEM'),
+    agentKind: (env.EXECUTION_AGENT_KIND ?? '').trim() || undefined,
+    gatewayVersion: (env.EXECUTION_GATEWAY_VERSION ?? '').trim() || undefined,
     targetQueryBaseUrl: required('TARGET_QUERY_BASE_URL'),
     targetQueryAppKey: required('TARGET_QUERY_APP_KEY'),
     targetQueryAppSecret: required('TARGET_QUERY_APP_SECRET'),
     targetReasoningUrl: (env.TARGET_REASONING_URL ?? '').trim(),
     targetReasoningAgentId: (env.TARGET_REASONING_AGENT_ID ?? '').trim(),
     targetReasoningToken: (env.TARGET_REASONING_TOKEN ?? '').trim(),
+    // 中台推理使用 HMAC 鉴权（X-App-Key/X-Timestamp/X-Signature），Token 仅保留给其他上游。
+    targetReasoningAppKey: (env.TARGET_REASONING_APP_KEY ?? '').trim(),
+    targetReasoningAppSecret: (env.TARGET_REASONING_APP_SECRET ?? '').trim(),
+    // 模型与思考强度当前由中台服务端配置，Hub 请求不再携带；保留配置项便于后续按次指定。
+    targetReasoningModel: (env.TARGET_REASONING_MODEL ?? '').trim() || 'deepseek-flash',
+    targetReasoningEffort: (env.TARGET_REASONING_EFFORT ?? '').trim() || 'high',
+    targetReasoningTimeoutMs: Number(env.TARGET_REASONING_TIMEOUT_MS) > 0
+      ? Math.trunc(Number(env.TARGET_REASONING_TIMEOUT_MS))
+      : 180_000,
+  };
+}
+
+/**
+ * 中控平台网关配置：单 Agent 兼容模式。
+ * 只有一个 WS 连接、两个能力；身份默认 gateway-control-platform，
+ * 与直连执行体（runtime-control-platform-query/reasoning）区分开，便于双轨。
+ */
+export function loadGatewayConfig(env = process.env) {
+  const value = (name, fallback) => (env[name] ?? '').trim() || fallback;
+  const base = loadConfig({
+    ...env,
+    EXECUTION_AGENT_ID: value('EXECUTION_AGENT_ID', 'gateway-control-platform'),
+    EXECUTION_AGENT_NAME: value('EXECUTION_AGENT_NAME', '公司中控平台网关'),
+    EXECUTION_SOURCE_SYSTEM: value('EXECUTION_SOURCE_SYSTEM', 'control-platform'),
+  });
+  return {
+    ...base,
+    agentKind: 'system-gateway',
+    gatewayVersion: (env.EXECUTION_GATEWAY_VERSION ?? '').trim() || '1.0.0',
   };
 }

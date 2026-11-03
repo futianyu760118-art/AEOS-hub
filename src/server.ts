@@ -3,6 +3,7 @@
 // 启动: npm run web   →   http://127.0.0.1:8787
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +15,7 @@ import { codexHome, configFile, readConfig, saveModelConfig, listEnvKeys, setEnv
 import { appendEvidence, evidenceFile, readRecentEvidence, evidenceHealth } from './evidence.ts';
 import { appendAuthenticationAuditEvidence } from './authentication-audit.ts';
 import { collectMcpPages, payloadOf } from './mcp-pagination.ts';
-import { dashboardReadPlan } from './dashboard-read-plan.ts';
+import { dashboardReadPlan, loadDashboardReadLimits } from './dashboard-read-plan.ts';
 import { serveRuntimeImage, validOrigin, boundedLimit } from './http-security.ts';
 import {
   DailyQuestionConflictError,
@@ -50,8 +51,6 @@ import {
 import {
   addAgentSquadActivity,
   addAgentSquadMemory,
-  addAgentBusinessSquadActivity,
-  addAgentBusinessSquadMemory,
   bindAgentSquadMember,
   createAgentSquadMember,
   deleteAgentSquadMember,
@@ -59,16 +58,6 @@ import {
   sendAgentSquadMessage,
   setAgentSquadProject,
 } from './agent-squad-store.ts';
-import {
-  loadModelRegistry,
-  createModel,
-  updateModel,
-  deleteModel,
-  findModelPricing,
-  ModelRegistryNotFoundError,
-  ModelRegistryError,
-} from './model-registry.ts';
-import { UsageStore } from './usage-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
 import {
   BrowserSessionAuth,
@@ -87,10 +76,70 @@ import { KeycloakPersonnelAdmin, readPersonnelAdminConfig } from './keycloak-per
 import { PersonnelApi } from './personnel-api.ts';
 import { AccessControlStore } from './access-control-store.ts';
 import { AccessControlApi } from './access-control-api.ts';
-import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer } from './execution-plane.ts';
+import { AgentControlApi } from './agent-control-api.ts';
+import { ExecutionPlaneRegistry, ExecutionPlaneError, isLoopbackExecutionPeer, executionPlaneTimeoutsFromEnv } from './execution-plane.ts';
+import { gatewayRegistrationEvidence } from './execution-gateway-audit.ts';
 import { ExecutionPlaneRuntimeAdapter } from './execution-plane-runtime-adapter.ts';
-import { ensureExecutionAgent } from './execution-agent-seed.ts';
+import { beijingDateString, ExecutionOrchestrationError, ExecutionOrchestrator } from './execution-orchestrator.ts';
+import { buildDailyBriefing, formatBriefingOrderPrompt, formatDailyBriefingMarkdown, selectBriefingDispatchOrders, type DailyBriefing } from './daily-briefing.ts';
+import { ConclusionDispatcher, DOMAIN_LABELS, formatConclusionDispatchReport, loadConclusionDispatchPolicy, saveConclusionDispatchPolicy } from './conclusion-dispatcher.ts';
+import { RecentAnalysisCache } from './recent-analysis-cache.ts';
+import { isExecutionAgentAllowed } from './execution-agent-policy.ts';
+import { authorizeCapability, filterRegistrationCapabilities, loadExecutionAgentPermissions } from './execution-agent-permissions.ts';
+import { createExecutionPolicyAuditor } from './execution-policy-audit.ts';
+import { formatHighestRiskAnswer } from './hub-execution-routing.ts';
+import { ACTION_LABELS, formatIntentExecutionAnswer, formatIntentRoutingReply, buildIntentDispatch, extractBusinessIdentifier, recognizeHubIntent, selectAgentForIntent } from './hub-intent-router.ts';
+import { ensureModelProfiles, loadModelProfiles } from './model-profile-store.ts';
+import { estimateUsageCostCny } from './model-pricing.ts';
+import { estimateUsageCostForModel } from './usage-cost.ts';
+import { recordThreadUsageTotal } from './codex-usage-baseline-store.ts';
+import { BorrowOrderStore, BORROW_ORDER_STATUSES, type BorrowOrderStatus } from './borrow-order-store.ts';
+import { BorrowOrderService, BorrowOrderServiceError, borrowOrderSummary } from './borrow-order-service.ts';
+import { CatalogApi } from './catalog-api.ts';
+import { ensureSystems, listSystems, getSystem, findSystemBySourceSystem } from './system-registry.ts';
+import { verifySystemToken } from './system-token.ts';
+import { parseCallerContext } from './caller-context.ts';
+import { WriteRequestStore, type WriteRequestRecord } from './write-request-store.ts';
+import { WriteRequestError, WriteRequestService } from './write-request-service.ts';
+import { buildConnectivitySummary } from './connectivity-summary.ts';
+import { looksLikeWriteCommand, parseWriteConfirmation, parseWriteIntentWithLLM } from './write-intent.ts';
+import { buildTrace, readEvidenceEntries } from './trace.ts';
+import { DEFAULT_TENANT_ID, resolveTenantId } from './tenant-registry.ts';
+import {
+  ExecutionIdentityError,
+  resolveExecutionPlaneAuth,
+  resolveRegistrationIdentity,
+  type ExecutionPlaneConnectionAuth,
+  type ExecutionRegistrationIdentity,
+  type RegisteredSystem,
+} from './execution-identity.ts';
+import { BorrowOrderApi } from './borrow-order-api.ts';
+import { CapabilityInvocationApi } from './capability-invocation-api.ts';
+import { CapabilityInvocationError, CapabilityInvocationService } from './capability-invocation-service.ts';
+import { CapabilityQueryTemplateError } from './capability-query-template.ts';
+import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
+import { OpsMonitor } from './ops-monitor.ts';
+import { ExecutionEventStore } from './execution-event-store.ts';
+import { AssistantEventStore } from './assistant-event-store.ts';
+import { AssistantEventApi } from './assistant-event-api.ts';
+import { OrchestrationTaskStore } from './orchestration-task-store.ts';
+import { OrchestrationTaskService } from './orchestration-task-service.ts';
+import { OrchestrationTaskExecutor } from './orchestration-task-executor.ts';
+import { BorrowOrderExecutionAdapter } from './orchestration-task-borrow-adapter.ts';
+import { OrchestrationTaskApi } from './orchestration-task-api.ts';
+import { routeModel } from './model-router.ts';
 import { parseIntentWithLLM } from './execution-intent-llm.ts';
+import {
+  ensureUsageLedger,
+  appendUsageEvent,
+  aggregateUsageByAgent,
+  aggregateUsageBySystem,
+  aggregateUsageByConsumerSystem,
+  aggregateUsageByCallerAgent,
+  aggregateUsageByCallerUser,
+  listUsageEvents,
+  type UsageEventAppendInput,
+} from './usage-ledger-store.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -175,15 +224,244 @@ const personnelAdmin = personnelAdminConfig.enabled
 const personnelApi = new PersonnelApi({ admin: personnelAdmin, g0DecisionStore, appendEvidence });
 const accessControlApi = new AccessControlApi({ admin: personnelAdmin, store: new AccessControlStore(), g0DecisionStore, appendEvidence });
 
+// ---------- 用量台账记账（中枢自身 LLM + 执行面用量上报，两条数据源共用） ----------
+function recordUsageEvent(event: UsageEventAppendInput): void {
+  try {
+    let cost = event.cost;
+    if (cost <= 0 && event.modelId && (event.tokensIn > 0 || event.tokensOut > 0)) {
+      const endedAt = new Date(event.endedAt || event.startedAt);
+      const estimated = estimateUsageCostForModel(event.modelId, {
+        inputTokens: event.tokensIn,
+        cachedInputTokens: event.cachedTokens ?? 0,
+        outputTokens: event.tokensOut,
+      }, Number.isNaN(endedAt.getTime()) ? new Date() : endedAt);
+      if (estimated !== null) cost = estimated;
+    }
+    appendUsageEvent({ ...event, cost, tenantId: resolveTenantId(event.systemId, listSystems()) });
+  } catch (error) {
+    console.warn('[usage-ledger] 记账失败:', (error as Error).message);
+  }
+}
+
 // ---------- 执行面接入（远程查询智能体：反向连接 + 心跳 + 派单/召回） ----------
 // 服务凭证来自环境变量 EXECUTION_PLANE_TOKEN；未配置则 /ws/agent 拒绝所有连接（fail-closed）。
 const EXECUTION_PLANE_TOKEN = process.env.EXECUTION_PLANE_TOKEN ?? '';
 const executionHealthSyncedAt = new Map<string, { status: 'healthy' | 'unhealthy'; at: number }>();
+// 借调服务晚绑定：执行面回调在运行期才会触发，构造顺序无 TDZ 风险。
+let borrowOrderService: BorrowOrderService | null = null;
+// 写服务同样晚绑定：run 状态回调（完成/失败/召回/离线回收）要把结果回填到写请求台账。
+let writeRequestServiceForRunEvents: WriteRequestService | null = null;
 const executionPlane = new ExecutionPlaneRegistry({
   file: join(dataDir, 'execution-plane.json'),
+  ...executionPlaneTimeoutsFromEnv(),
   onChange: () => syncExecutionHealth(),
+  onUsageEvent: (event) => recordUsageEvent(borrowOrderService ? borrowOrderService.attributeUsage(event) : event),
+  onRunStateChange: (event) => {
+    borrowOrderService?.handleRunStateChange(event);
+    if (!writeRequestServiceForRunEvents) return;
+    if (event.state === 'completed') {
+      writeRequestServiceForRunEvents.onRunFinished(event.runId, { state: 'completed', result: event.result });
+    } else if (event.state === 'failed') {
+      writeRequestServiceForRunEvents.onRunFinished(event.runId, { state: 'failed', error: event.error ?? null });
+    } else if (event.state === 'recalled') {
+      writeRequestServiceForRunEvents.onRunFinished(event.runId, { state: 'failed', error: { code: 'RECALLED', message: '写操作已召回' } });
+    }
+  },
+  onAgentOffline: (event) => borrowOrderService?.handleAgentOffline(event),
+  isCapabilityAuthorized: (agent, capability) => {
+    const systemId = agent.systemId ?? agent.sourceSystem;
+    const tenantId = resolveTenantId(systemId, listSystems());
+    return authorizeCapability(loadExecutionAgentPermissions(), {
+      systemId,
+      agentId: agent.agentId,
+      capability,
+      tenantId,
+    });
+  },
 });
-setInterval(() => { executionPlane.markStaleOffline(); }, 5_000);
+const agentControlApi = new AgentControlApi({ rootSecret: EXECUTION_PLANE_TOKEN, executionPlane, appendEvidence });
+// 执行面三张配置（准入/授权/选路）变更审计：首次只建基线，之后按文件哈希写 evidence。
+createExecutionPolicyAuditor({ appendEvidence }).start();const executionOrchestrator = new ExecutionOrchestrator(executionPlane, appendEvidence);
+// 结论自动分发：中枢出结论后，按策略交给其他系统的执行面能力继续只读分析。
+const conclusionDispatcher = new ConclusionDispatcher(executionPlane, {
+  appendEvidence,
+  systemLabel: (systemId) => listSystems().find((system) => system.systemId === systemId)?.name ?? systemId,
+});
+// 最高风险分析短时缓存：5 分钟内相同问题直接复用，避免重复调用执行面。
+type HighestRiskCacheEntry = {
+  answer: string;
+  requestId: string;
+  queryRunId: string;
+  reasoningRunId: string;
+  orderNo: string;
+  cachedAt: string;
+};
+const HIGHEST_RISK_CACHE_TTL_MS = 5 * 60_000;
+const highestRiskAnswerCache = new RecentAnalysisCache<HighestRiskCacheEntry>({ ttlMs: HIGHEST_RISK_CACHE_TTL_MS });
+// 写操作审批：提交 → 人工审批 → 派单；写能力只能由该服务在审批后派单。
+const writeRequestStore = new WriteRequestStore();
+const writeRequestService = new WriteRequestService({
+  store: writeRequestStore,
+  plane: executionPlane,
+  loadPermissions: loadExecutionAgentPermissions,
+  tenantIdOf: (systemId) => systemId ? resolveTenantId(systemId, listSystems()) : null,
+  appendEvidence,
+});
+writeRequestServiceForRunEvents = writeRequestService;
+const catalogApi = new CatalogApi((tenantId) => {
+  const allSystems = listSystems();
+  const systems = tenantId ? allSystems.filter((system) => system.tenantId === tenantId) : allSystems;
+  const systemIds = new Set(systems.map((system) => system.systemId));
+  const harbor = loadHarbor();
+  const executionAgents = executionPlane.list().agents.filter((agent) => {
+    if (!tenantId) return true;
+    return resolveTenantId(agent.systemId ?? agent.sourceSystem, allSystems) === tenantId;
+  });
+  return {
+    harbor: {
+      ...harbor,
+      agents: tenantId ? harbor.agents.filter((agent) => systemIds.has(agent.systemId)) : harbor.agents,
+    },
+    systems,
+    executionAgents,
+    mcp: (() => { try { return loadMcpRegistry(); } catch { return null; } })(),
+    usage: {
+      byAgent: aggregateUsageByAgent(tenantId),
+      bySystem: aggregateUsageBySystem(tenantId),
+    },
+  };
+});
+const executionEventStore = new ExecutionEventStore();
+const assistantEventStore = new AssistantEventStore();
+const assistantEventApi = new AssistantEventApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  store: assistantEventStore,
+  appendEvidence,
+  recordUsage: recordUsageEvent,
+});
+const borrowOrderStore = new BorrowOrderStore({ file: join(dataDir, 'borrow-orders.json') });
+borrowOrderService = new BorrowOrderService({
+  store: borrowOrderStore,
+  executionPlane,
+  appendEvidence,
+  tenantId: process.env.AEOS_TENANT_ID,
+});
+const borrowOrderApi = new BorrowOrderApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  service: borrowOrderService,
+  appendEvidence,
+});
+let capabilityTemplateOverrides: unknown;
+try {
+  const capabilityTemplateFile = join(dataDir, 'capability-query-templates.json');
+  if (existsSync(capabilityTemplateFile)) {
+    capabilityTemplateOverrides = JSON.parse(readFileSync(capabilityTemplateFile, 'utf8'));
+  }
+} catch (error) {
+  console.warn('[capability-invocation] 模板覆盖文件加载失败，使用内置模板:', (error as Error).message);
+}
+const capabilityInvocationService = new CapabilityInvocationService({
+  borrowOrders: borrowOrderService,
+  executionPlane,
+  templates: capabilityTemplateOverrides,
+});
+const capabilityInvocationApi = new CapabilityInvocationApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  service: capabilityInvocationService,
+  appendEvidence,
+});
+const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
+const orchestrationTaskService = new OrchestrationTaskService({
+  store: orchestrationTaskStore,
+  executionPlane,
+  tenantId: process.env.AEOS_TENANT_ID,
+});
+const orchestrationTaskExecutor = new OrchestrationTaskExecutor({
+  store: orchestrationTaskStore,
+  borrowPort: new BorrowOrderExecutionAdapter({ borrowOrderService }),
+});
+const orchestrationTaskApi = new OrchestrationTaskApi({
+  rootSecret: EXECUTION_PLANE_TOKEN,
+  enabled: process.env.ORCHESTRATION_TASKS_ENABLED === '1',
+  service: orchestrationTaskService,
+  store: orchestrationTaskStore,
+  executor: orchestrationTaskExecutor,
+  appendEvidence,
+});
+try {
+  const reconciled = borrowOrderService.reconcileOnStartup();
+  if (reconciled.reconciled || reconciled.failed) {
+    console.log(`[borrow-order] 启动对账：同步 ${reconciled.reconciled}，失败 ${reconciled.failed}`);
+  }
+} catch (error) {
+  console.warn('[borrow-order] 启动对账失败:', (error as Error).message);
+}
+// ---------- 运行监控与告警（页面 + 日志；企微渠道配置 webhook 后自动启用） ----------
+const alertCenter = new AlertCenter({
+  channels: [new LogAlertChannel(), new WeComAlertChannel()],
+});
+const opsMonitor = new OpsMonitor({
+  alertCenter,
+  executionPlane,
+  listBorrowOrders: () => borrowOrderStore.load().orders,
+  checkKeycloak,
+  checkMcp,
+  backupLogFile: process.env.AEOS_BACKUP_LOG?.trim() || 'G:\\PyCharm\\data\\aeos-hub-backup\\backup.log',
+  diskPaths: ['G:\\', 'C:\\'],
+});
+setTimeout(() => {
+  void opsMonitor.runOnce().catch((error) => console.warn('[ops] 首次检查失败:', (error as Error).message));
+}, 5_000);
+setInterval(() => {
+  void opsMonitor.runOnce().catch((error) => console.warn('[ops] 检查失败:', (error as Error).message));
+}, 60_000);
+setInterval(() => {
+  executionPlane.markStaleOffline();
+  const timedOut = executionPlane.markRunTimeouts();
+  const orphaned = executionPlane.reconcileIdleRuns();
+  if (timedOut > 0) console.warn(`[execution-plane] 运行超时：${timedOut}`);
+  if (orphaned > 0) console.warn(`[execution-plane] 空闲孤儿任务：${orphaned}`);
+}, 5_000);
+
+const companyControlPython = process.platform === 'win32'
+  ? join(root, '.venv', 'Scripts', 'python.exe')
+  : join(root, '.venv', 'bin', 'python');
+const companyControlDir = join(root, 'mcp-company-control');
+const companyControlQuery = join(root, 'scripts', 'company-control-query.py');
+
+/** 登录服务检查：M01 模式下探测 OIDC 发现端点；本地模式跳过。 */
+async function checkKeycloak(): Promise<'ok' | 'fail' | 'skip'> {
+  const issuer = process.env.M01_ISSUER?.trim();
+  if (!issuer) return 'skip';
+  try {
+    const response = await fetch(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    return response.ok ? 'ok' : 'fail';
+  } catch {
+    return 'fail';
+  }
+}
+
+/** 中台接口检查：复用执行面同一份只读 ping 辅助脚本。 */
+function checkMcp(): Promise<'ok' | 'fail' | 'skip'> {
+  if (!existsSync(companyControlPython) || !existsSync(companyControlQuery)) return Promise.resolve('skip');
+  return new Promise((resolve) => {
+    execFile(companyControlPython, [companyControlQuery, '/common/ping', '{}'], {
+      cwd: companyControlDir,
+      timeout: 15_000,
+      windowsHide: true,
+    }, (error, stdout) => {
+      if (error) return resolve('fail');
+      try {
+        const parsed = JSON.parse(String(stdout).trim()) as { ok?: unknown };
+        return resolve(parsed.ok === true ? 'ok' : 'fail');
+      } catch {
+        return resolve('fail');
+      }
+    });
+  });
+}
 
 // 执行面心跳 → Harbor runtime 健康（节流：状态变化立即写，否则每 agent 最多 30s 写一次）。
 function syncExecutionHealth(): void {
@@ -206,15 +484,34 @@ function syncExecutionHealth(): void {
   }
 }
 
-// 幂等自动注册公司中台执行面智能体（G1 开箱可用）。失败不阻塞启动，可稍后手动跑 scripts/ensure-execution-agent.ts。
+// 旧的一体化中台执行面 Agent 已退役；中台现在注册「查询」「推理」两个独立 Agent。
+// 不再自动补种旧 Agent，避免港湾出现离线的重复档案。历史脚本 scripts/ensure-execution-agent.ts 仅保留手工兼容用途。
+
+// 幂等补齐模型目录种子档（data/model-profiles.json）。失败不阻塞启动。
 try {
-  ensureExecutionAgent();
+  ensureModelProfiles();
 } catch (error) {
-  console.warn('[execution-agent-seed] 自动注册失败:', (error as Error).message);
+  console.warn('[model-profile-store] 模型目录初始化失败:', (error as Error).message);
+}
+
+// 幂等补齐默认系统登记（data/systems.json）。失败不阻塞启动。
+try {
+  ensureSystems();
+} catch (error) {
+  console.warn('[system-registry] 系统登记初始化失败:', (error as Error).message);
+}
+
+// 幂等初始化用量台账（data/usage-ledger.json）。失败不阻塞启动。
+try {
+  ensureUsageLedger();
+} catch (error) {
+  console.warn('[usage-ledger] 用量台账初始化失败:', (error as Error).message);
 }
 
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
+// 会话发起人：把 Hub 内对话/分析产生的用量归属到具体 M01 用户（“按调用方”视图）。
+const conversationActorId = new Map<string, string>();
 const convByThread = new Map<string, string>(); // codex threadId -> convId
 const activeTurn = new Map<string, { convId: string; turnId: string | null }>(); // threadId -> 进行中的 turn
 const dailyQuestionGenerationLocks = new Map<string, Promise<DailyQuestionConfig>>();
@@ -237,6 +534,7 @@ const RUNTIME_WAIT_MS = 120_000;
 const DECISION_DATA_REFRESH_MS = 5 * 60_000;
 const viewOf = new Map<WebSocket, string | null>(); // ws -> 正在查看的 convId
 const actorOf = new Map<WebSocket, string>(); // ws -> 服务端生成的审计 actor
+const actorContextOf = new Map<WebSocket, { actorId: string; roles: string[]; tenantId?: string }>();
 const pendingGuard = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 const pendingApprovals = new Map<string, RuntimeApprovalRequest>();
 const allSockets = new Set<WebSocket>();
@@ -248,76 +546,6 @@ const agentRunCaptures = new Map<string, AgentRunCapture>();
 const agentTranscriptBuffers = new Map<string, string>();
 const MAX_CONVERSATION_MESSAGES = 200;
 const MAX_CONVERSATION_MESSAGE_CHARS = 16_000;
-
-// ---------- 用量与费用台账 ----------
-// 事件中的 tokenUsage 是会话累计值；store 内部按 threadTotals 求增量，避免重复记账。
-const usageStore = new UsageStore({ pricingResolver: findModelPricing });
-
-function usageCountsOf(source: unknown): { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number } | null {
-  if (!isRecord(source)) return null;
-  const pick = (key: string): number => {
-    const value = source[key];
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
-  };
-  return {
-    inputTokens: pick('inputTokens'),
-    cachedInputTokens: pick('cachedInputTokens'),
-    cacheWriteInputTokens: pick('cacheWriteInputTokens'),
-    outputTokens: pick('outputTokens'),
-    reasoningOutputTokens: pick('reasoningOutputTokens'),
-    totalTokens: pick('totalTokens'),
-  };
-}
-
-/** 把 thread/tokenUsage/updated 归集到智能体用量台账；费用按模型注册中心单价估算。 */
-function recordTokenUsageFromEvent(event: RuntimeEvent): void {
-  try {
-    const data = isRecord(event.data) ? event.data : {};
-    const threadId = typeof data.threadId === 'string' ? data.threadId : event.sessionId;
-    if (!threadId) return;
-    const tokenUsage = isRecord(data.tokenUsage) ? data.tokenUsage.tokenUsage ?? data.tokenUsage : data;
-    // total 是会话累计口径；没有 total 时退回 last（单轮口径）。
-    const counts = usageCountsOf(isRecord(tokenUsage) ? (isRecord(tokenUsage.total) ? tokenUsage.total : tokenUsage) : null);
-    if (!counts || counts.totalTokens <= 0) return;
-
-    const convId = convByThread.get(threadId) ?? null;
-    const conv = convId ? convCache.get(convId) : null;
-    const runId = (typeof data.turnId === 'string' && data.turnId) || activeTurn.get(threadId)?.turnId || null;
-
-    // 智能体归属：agent 会话按小队成员解析到 AI 港湾 Agent；hub 会话归入中枢 Agent。
-    let agentId = 'agent-aeos-hub';
-    let agentName = 'AEOS 中枢 Agent';
-    let scope: 'hub' | 'agent' = 'hub';
-    if (conv?.scope === 'agent' && conv.agentId) {
-      scope = 'agent';
-      const squadSnapshot = loadAgentSquad();
-      const member = squadSnapshot.members.find((item) => item.id === conv.agentId);
-      const resolved = member?.harborAgentId || member?.id || conv.agentId;
-      agentId = resolved;
-      agentName = member?.name || conv.agentId;
-    }
-
-    const choice = conv?.lastChoice ?? null;
-    const config = readConfig();
-    const provider = choice?.provider?.trim() || config.modelProvider?.trim() || 'openai';
-    const model = choice?.model?.trim() || config.model?.trim() || 'account-default';
-
-    usageStore.record({
-      sessionId: threadId,
-      runId,
-      conversationId: convId,
-      agentId,
-      agentName,
-      scope,
-      provider,
-      model,
-      usage: counts,
-    });
-  } catch (error) {
-    // 费用记账是旁路能力，任何失败不允许影响对话主链路。
-    console.warn('[usage] token 用量记账失败:', (error as Error).message);
-  }
-}
 
 // ---------- 会话加载 ----------
 for (const c of loadConversations()) convCache.set(c.id, c);
@@ -642,11 +870,67 @@ async function persistAgentDispatchResult(runId: string, fallbackText = ''): Pro
   }
 }
 
+// ---------- Codex 运行时用量记账（第三次台账来源） ----------
+// app-server 的 thread/tokenUsage/updated 报告线程累计用量；基线持久化后只记增量。
+// 归属：threadId → 会话 → Harbor Agent；未关联会话时记到中枢 Agent。
+function codexUsageInt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+}
+
+function recordCodexTokenUsage(event: RuntimeEvent): void {
+  const params = event.data as {
+    threadId?: unknown;
+    tokenUsage?: { total?: { inputTokens?: unknown; cachedInputTokens?: unknown; outputTokens?: unknown } };
+  } | undefined;
+  const threadId = typeof params?.threadId === 'string' && params.threadId.trim()
+    ? params.threadId.trim()
+    : event.sessionId;
+  const total = params?.tokenUsage?.total;
+  if (!threadId || !total) return;
+  const inputTokens = codexUsageInt(total.inputTokens);
+  const cachedInputTokens = codexUsageInt(total.cachedInputTokens);
+  const outputTokens = codexUsageInt(total.outputTokens);
+  if (!inputTokens && !outputTokens) return;
+
+  const delta = recordThreadUsageTotal(threadId, { inputTokens, cachedInputTokens, outputTokens });
+  if (!delta.inputTokens && !delta.cachedInputTokens && !delta.outputTokens) return;
+
+  const convId = convByThread.get(threadId);
+  const conv = convId ? convCache.get(convId) : undefined;
+  const callerUserId = convId ? conversationActorId.get(convId) ?? null : null;
+  const configuredModel = readConfig().model?.trim();
+  const modelName = conv?.lastChoice?.model?.trim() || configuredModel || 'deepseek-flash';
+  const profiles = loadModelProfiles().profiles;
+  const profile = profiles.find((item) => !item.followsDefault && item.modelName === modelName)
+    ?? profiles.find((item) => !item.followsDefault && item.provider === 'deepseek');
+  const cost = profile
+    ? estimateUsageCostCny(profile, {
+      inputTokens: delta.inputTokens,
+      cachedInputTokens: delta.cachedInputTokens,
+      outputTokens: delta.outputTokens,
+    }, new Date(event.occurredAt))
+    : 0;
+  recordUsageEvent({
+    agentId: conv?.agentId || 'agent-aeos-hub',
+    systemId: 'aeos-hub',
+    modelId: profile?.id ?? modelName,
+    runId: null,
+    callerUserId,
+    tokensIn: delta.inputTokens,
+    cachedTokens: delta.cachedInputTokens,
+    tokensOut: delta.outputTokens,
+    cost,
+    metering: 'app-server',
+    startedAt: event.occurredAt,
+    endedAt: new Date().toISOString(),
+  });
+}
+
 function handleRuntimeEvent(event: RuntimeEvent): void {
   if (event.kind === 'notification') {
-    // 用量事件走旁路记账，不进入前端通知白名单，也不冲击对话流。
+    // 用量通知只用于记账，不进入前端事件流。
     if (event.name === 'thread/tokenUsage/updated') {
-      recordTokenUsageFromEvent(event);
+      recordCodexTokenUsage(event);
       return;
     }
     if (!NOTIFY_ALLOW.has(event.name)) return;
@@ -909,7 +1193,430 @@ async function startTurn(convId: string, text: string, choice?: { provider?: str
   }
 }
 
+// ---------- 对话内写操作：自然语言发起 → 对话内确认 → 审批派单 ----------
+const pendingWriteByConversation = new Map<string, { id: string; summary: string }>();
+const lastOrderByConversation = new Map<string, string>();
+const writeConversationByRequest = new Map<string, string>();
+
+/** Hub 重启后从写请求台账恢复对话内的待确认/已派单状态，避免请求变成无人可批的孤儿。 */
+function rehydrateConversationWrites(): void {
+  try {
+    for (const record of writeRequestStore.load()) {
+      const convId = typeof record.conversationId === 'string' ? record.conversationId.trim() : '';
+      if (!convId || !convCache.has(convId)) continue;
+      if (record.status === 'pending_approval') {
+        if (pendingWriteByConversation.has(convId)) continue;
+        const summary = describeWriteIntent({
+          operation: record.operation,
+          input: isRecord(record.input) ? record.input : {},
+        });
+        pendingWriteByConversation.set(convId, { id: record.id, summary });
+      } else if (record.status === 'dispatched') {
+        if (!writeConversationByRequest.has(record.id)) writeConversationByRequest.set(record.id, convId);
+      }
+    }
+  } catch (error) {
+    console.warn('[write-chat] 恢复待确认写操作失败:', (error as Error).message);
+  }
+}
+rehydrateConversationWrites();
+
+function describeWriteIntent(
+  intent: { operation: string; input: Record<string, unknown> },
+  operationDetails?: Array<{ name: string; title?: string; fields?: Array<{ name: string; label: string }> }>,
+): string {
+  const orderNo = typeof intent.input.orderNo === 'string' ? intent.input.orderNo : '';
+  const detail = operationDetails?.find((item) => item.name === intent.operation);
+  const changesSource = isRecord(intent.input.changes) ? intent.input.changes : {};
+  const parts = Object.entries(changesSource).map(([key, value]) => {
+    const label = detail?.fields?.find((field) => field.name === key)?.label ?? key;
+    return `${label}：${String(value)}`;
+  });
+  const head = detail?.title ?? intent.operation;
+  return `${head}${orderNo ? ` · 订单 ${orderNo}` : ''}${parts.length ? `（${parts.join('；')}）` : ''}`;
+}
+
+function pushAssistantReply(convId: string, text: string, meta?: Record<string, unknown>): void {
+  appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text });
+  pushConv(convId, { type: 'assistant_reply', convId, text, ...(meta ? { meta } : {}) });
+  pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `write-chat-${randomUUID()}`, sessionId: 'hub-write', occurredAt: new Date().toISOString() });
+}
+
+/** 对话内确认/取消：按钮与文字“确认/取消”共用同一条路径。 */
+function decidePendingWrite(
+  convId: string,
+  pending: { id: string; summary: string },
+  actor: { actorId: string; roles: string[]; tenantId?: string },
+  decision: 'approve' | 'reject',
+): void {
+  const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
+  const roles = Array.isArray(actor.roles) ? actor.roles : [];
+  const canWrite = roles.includes('manager') || roles.includes('supervisor');
+  if (!canWrite) {
+    pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
+    return;
+  }
+  if (decision === 'reject') {
+    try {
+      writeRequestService.reject(pending.id, { id: actor.actorId, roles, tenantId }, '用户在对话中取消');
+    } catch {
+      // 已不在待审批状态时忽略。
+    }
+    pendingWriteByConversation.delete(convId);
+    pushAssistantReply(convId, '已取消本次写操作，未修改任何数据。');
+    return;
+  }
+  writeConversationByRequest.set(pending.id, convId);
+  try {
+    const record = writeRequestService.approve(pending.id, { id: actor.actorId, roles, tenantId });
+    pendingWriteByConversation.delete(convId);
+    if (record.status === 'completed' || record.status === 'failed') {
+      notifyWriteRecord(writeRequestStore.get(record.id) ?? record);
+    } else {
+      pushAssistantReply(convId, `已确认并派单：${pending.summary}。执行完成后会在这里回报结果。`);
+    }
+  } catch (error) {
+    writeConversationByRequest.delete(pending.id);
+    pushAssistantReply(convId, `写操作未能执行：${(error as Error).message}`);
+  }
+}
+
+function notifyWriteRecord(record: WriteRequestRecord): void {
+  const convId = writeConversationByRequest.get(record.id);
+  if (!convId) return;
+  writeConversationByRequest.delete(record.id);
+  const orderNo = (record.input as Record<string, unknown> | null)?.orderNo;
+  const result = isRecord(record.result) ? record.result : {};
+  const handledBy = isRecord(result.handled_by) ? result.handled_by : {};
+  const handler = typeof handledBy.agentName === 'string' ? handledBy.agentName
+    : typeof handledBy.agentId === 'string' ? handledBy.agentId : '';
+  const runRef = record.runId ? ` · run ${record.runId}` : '';
+  const hints: string[] = [];
+  if (record.status === 'completed') {
+    const after = isRecord(record.result) && isRecord(record.result.after) ? record.result.after : {};
+    if (typeof after.status === 'string' && after.status === 'closed') {
+      hints.push(`该订单状态已变为 closed，如需恢复可回复：更新订单 ${orderNo || '…'} 状态为 open`);
+    }
+  }
+  const text = record.status === 'completed'
+    ? `写操作完成：${record.operation}${orderNo ? ` · 订单 ${String(orderNo)}` : ''}${handler ? ` · 处理方 ${handler}` : ''}。${hints.length ? ` ${hints.join(' ')}` : ''}`
+    : `写操作失败：${record.error?.message || '未知错误'}（请求 ${record.id}${runRef}）。`;
+  pushAssistantReply(convId, text, record.runId ? { writeTraceId: `write-${record.id}` } : undefined);
+}
+
+/** 页面/API 审批后同步对话侧状态：清掉“待确认”按钮，并让完成/失败消息回到原会话。 */
+function syncConversationWriteState(record: WriteRequestRecord): void {
+  const convId = typeof record.conversationId === 'string' ? record.conversationId.trim() : '';
+  if (!convId) return;
+  const pending = pendingWriteByConversation.get(convId);
+  if (pending && pending.id === record.id && record.status !== 'pending_approval') {
+    pendingWriteByConversation.delete(convId);
+    if (record.status === 'rejected') pushAssistantReply(convId, '写操作已取消，未修改任何数据。');
+  }
+  if (record.status === 'dispatched' && !writeConversationByRequest.has(record.id)) {
+    writeConversationByRequest.set(record.id, convId);
+  }
+}
+
+async function handleConversationalWrite(
+  convId: string,
+  text: string,
+  actor?: { actorId: string; roles: string[]; tenantId?: string },
+): Promise<boolean> {
+  const contextLastOrder = lastOrderByConversation.get(convId);
+  const pending = pendingWriteByConversation.get(convId);
+  const confirmation = parseWriteConfirmation(text);
+  if (confirmation) {
+    if (!pending || !actor) return false;
+    decidePendingWrite(convId, pending, actor, confirmation === 'confirm' ? 'approve' : 'reject');
+    return true;
+  }
+
+  if (!looksLikeWriteCommand(text)) return false;
+  if (!actor) return false;
+  const tenantId = actor.tenantId && actor.tenantId !== 'local-dev' ? actor.tenantId : DEFAULT_TENANT_ID;
+  const roles = Array.isArray(actor.roles) ? actor.roles : [];
+  const canWrite = roles.includes('manager') || roles.includes('supervisor');
+  if (!canWrite) {
+    pushAssistantReply(convId, '当前账号没有写操作权限（需要 manager / supervisor）。');
+    return true;
+  }
+
+  // 同一会话同时只允许一笔待确认写操作；否则旧请求会失去按钮、变成孤儿。
+  if (pending) {
+    const current = writeRequestStore.get(pending.id);
+    if (current && current.status === 'pending_approval') {
+      pushAssistantReply(convId, `还有一笔待确认的写操作：${pending.summary}。请先回复“确认”或“取消”，再发起新的写操作。`);
+      return true;
+    }
+    pendingWriteByConversation.delete(convId);
+  }
+
+  // 由提供方声明的写能力 + 输入 schema 驱动解析，不在 Hub 里硬编码具体写命令。
+  const capabilities = writeRequestService.listCapabilities(tenantId);
+  const hasOrderRef = /business:\/\//.test(text)
+    || Boolean(extractBusinessIdentifier(text))
+    || /(它|该|这条|这个订单|上一条)/.test(text)
+    || contextLastOrder != null;
+  if (!hasOrderRef) {
+    pushAssistantReply(convId, '请提供要修改的订单号，例如：改写订单 HJ202602-0009-0028 的交付日期为 2026-11-15。');
+    return true;
+  }
+  const intent = await parseWriteIntentWithLLM(
+    text,
+    capabilities,
+    {},
+    contextLastOrder ? { fallbackOrderNo: contextLastOrder } : {},
+  );
+  if (intent.kind === 'clarify') {
+    pushAssistantReply(convId, intent.message);
+    return true;
+  }
+  if (intent.kind !== 'write') return false;
+
+  const summary = describeWriteIntent(
+    intent,
+    capabilities.find((item) => item.systemId === intent.systemId && item.capability === intent.capability)?.operationDetails,
+  );
+  try {
+    const { record } = writeRequestService.create({
+      tenantId,
+      capability: intent.capability,
+      systemId: intent.systemId,
+      input: intent.input,
+      reason: `对话内发起：${intent.raw}`.slice(0, 500),
+      requestedBy: { kind: 'user', id: actor.actorId },
+      conversationId: convId,
+      idempotencyKey: `chat-${randomUUID()}`,
+    });
+    pendingWriteByConversation.set(convId, { id: record.id, summary });
+    pushAssistantReply(
+      convId,
+      `即将执行：${summary}。
+点击「确认执行」或回复“确认”；点击「取消」或回复“取消”放弃。`,
+      { writeConfirmation: { requestId: record.id, summary } },
+    );
+  } catch (error) {
+    pushAssistantReply(convId, `写操作未能提交：${(error as Error).message}`);
+  }
+  return true;
+}
+
+/**
+ * 中枢对话的通用意图路由：识别业务域与动作；最高风险订单走编排，
+ * 其他已识别意图返回可用 Agent 与补充信息提示；无法识别时交给 Codex。
+ */
+async function routeHubExecutionTurn(convId: string, text: string, actor?: { actorId: string; roles: string[]; tenantId?: string }): Promise<boolean> {
+  const conv = getConv(convId);
+  if ((conv?.scope ?? 'hub') !== 'hub') return false;
+  // 把 M01 用户作为调用方传入执行面，用量台账才能按人归属。
+  const caller = actor?.actorId
+    ? { systemId: 'aeos-hub', agentId: null, userId: actor.actorId, taskId: null, traceId: null }
+    : null;
+  if (await handleConversationalWrite(convId, text, actor)) return true;
+  const intent = recognizeHubIntent(text);
+  // 范围控制：用户可直接要求“下一条高风险订单”，跳过最近已分析过的订单。
+  const wantsNextOrder = /^(下一条|下一个|下个)\s*(高风险)?\s*订单?/.test(text.trim());
+  if (intent.action === 'chat' && !wantsNextOrder) return false;
+  const effectiveIntent = wantsNextOrder
+    ? { ...intent, domain: 'cross-domain' as const, action: 'highest-risk' as const, confidence: 'high' as const }
+    : intent;
+
+  const agents = executionPlane.list().agents;
+  const selection = selectAgentForIntent(effectiveIntent, agents);
+  const sessionId = conv?.threadId || 'hub-execution-orchestrator';
+
+  if (effectiveIntent.action !== 'highest-risk') {
+    const plan = selection ? buildIntentDispatch(intent, text) : null;
+    if (selection && plan) {
+      const runId = `hub-intent-${randomUUID()}`;
+      const envelope = { type: 'evt', convId, sessionId, runId, runtimeInstanceId: 'hub-execution-orchestrator' };
+      pushConv(convId, {
+        ...envelope,
+        method: 'turn/started',
+        params: { threadId: sessionId, turn: { id: runId, threadId: sessionId } },
+      });
+      pushConv(convId, {
+        ...envelope,
+        method: 'item/reasoning/textDelta',
+        params: {
+          itemId: `reasoning:${runId}`,
+          delta: `已识别为${ACTION_LABELS[intent.action]}，正在调用${selection.name}（${selection.capability}）…`,
+        },
+      });
+      try {
+        const result = await executionOrchestrator.runCapability({
+          agentId: selection.agentId,
+          capability: selection.capability,
+          input: plan.input,
+          timeoutMs: plan.timeoutMs,
+          caller,
+        });
+        const answer = formatIntentExecutionAnswer(intent, result);
+        appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
+        pushConv(convId, { type: 'assistant_reply', convId, text: answer, meta: { runId, agentId: selection.agentId, capability: selection.capability } });
+        pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
+      } catch (error) {
+        const message = `执行面调用失败：${(error as Error).message}`;
+        appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: message });
+        pushConv(convId, { type: 'assistant_reply', convId, text: message });
+        pushConv(convId, { type: 'turn_end', convId, status: 'failed', runId, sessionId, message, occurredAt: new Date().toISOString() });
+      }
+      return true;
+    }
+
+    const reply = formatIntentRoutingReply(intent, selection);
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: reply });
+    pushConv(convId, { type: 'assistant_reply', convId, text: reply });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `hub-route-${randomUUID()}`, sessionId, occurredAt: new Date().toISOString() });
+    return true;
+  }
+
+  if (!selection) {
+    const reply = formatIntentRoutingReply(intent, null);
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: reply });
+    pushConv(convId, { type: 'assistant_reply', convId, text: reply });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId: `hub-route-${randomUUID()}`, sessionId, occurredAt: new Date().toISOString() });
+    return true;
+  }
+
+  const runId = `hub-orch-${randomUUID()}`;
+  // 短时缓存：同一问题 5 分钟内重复提问直接复用上次结果；“重新分析/下一条”不走缓存。
+  const forceRefresh = /重新分析|再分析|重跑/.test(text);
+  const cacheKey = `highest-risk|${beijingDateString()}|${text.trim().replace(/\s+/g, ' ').toLowerCase()}`;
+  const cached = !forceRefresh && !wantsNextOrder ? highestRiskAnswerCache.get(cacheKey) : null;
+  if (cached) {
+    const analyzedAt = new Date(cached.cachedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    const answer = `${cached.answer}\n\n（本次结果来自 ${analyzedAt} 的分析，5 分钟内重复提问会直接复用；如需重新分析，请回复“重新分析”。）`;
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
+    pushConv(convId, {
+      type: 'assistant_reply',
+      convId,
+      text: answer,
+      meta: {
+        requestId: cached.requestId,
+        queryRunId: cached.queryRunId,
+        reasoningRunId: cached.reasoningRunId,
+        orderNo: cached.orderNo,
+        cached: true,
+        cachedAt: cached.cachedAt,
+      },
+    });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
+    return true;
+  }
+  const envelope = { type: 'evt', convId, sessionId, runId, runtimeInstanceId: 'hub-execution-orchestrator' };
+  pushConv(convId, {
+    ...envelope,
+    method: 'turn/started',
+    params: { threadId: sessionId, turn: { id: runId, threadId: sessionId } },
+  });
+  pushConv(convId, {
+    ...envelope,
+    method: 'item/reasoning/textDelta',
+    params: { itemId: `reasoning:${runId}`, delta: '正在查询当前风险最高的订单，并交给系统推理智能体…' },
+  });
+
+  try {
+    const excludeOrderNos = wantsNextOrder
+      ? conclusionDispatcher.recentBusinessObjectRefs(24)
+        .filter((ref) => ref.startsWith('business://order/'))
+        .map((ref) => ref.slice('business://order/'.length))
+      : undefined;
+    const result = await executionOrchestrator.highestRiskOrder({
+      reasoningAgentId: selection.agentId,
+      text,
+      caller,
+      ...(excludeOrderNos && excludeOrderNos.length ? { excludeOrderNos } : {}),
+    });
+    lastOrderByConversation.set(convId, result.order.orderNo);
+    const answer = formatHighestRiskAnswer(result);
+    if (!forceRefresh && !wantsNextOrder) {
+      highestRiskAnswerCache.set(cacheKey, {
+        answer,
+        requestId: result.requestId,
+        queryRunId: result.queryRunId,
+        reasoningRunId: result.reasoningRunId,
+        orderNo: result.order.orderNo,
+        cachedAt: new Date().toISOString(),
+      });
+    }
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: answer, phase: 'final_answer' });
+    pushConv(convId, {
+      type: 'assistant_reply',
+      convId,
+      text: answer,
+      meta: {
+        requestId: result.requestId,
+        queryRunId: result.queryRunId,
+        reasoningRunId: result.reasoningRunId,
+        orderNo: result.order.orderNo,
+      },
+    });
+    // 结论自动分发：不阻塞主回答，过程中推送进度，完成后在同一会话追加报告。
+    void conclusionDispatcher
+      .dispatchForObject(
+        {
+          businessObjectRef: result.order.businessObjectRef,
+          orderNo: result.order.orderNo,
+          title: result.order.businessObjectRef,
+        },
+        {
+          traceId: result.requestId,
+          force: forceRefresh,
+          onProgress: (event) => {
+            pushConv(convId, {
+              type: 'dispatch_progress',
+              convId,
+              phase: event.phase,
+              domain: event.domain ?? null,
+              domainLabel: event.domain ? DOMAIN_LABELS[event.domain] : null,
+              index: event.index,
+              total: event.total,
+              status: event.status ?? null,
+              conclusions: event.conclusions ?? null,
+            });
+          },
+        },
+      )
+      .then((report) => {
+        const text = formatConclusionDispatchReport(report);
+        if (!text) return;
+        appendConversationMessage(convId, { id: `dispatch-${randomUUID()}`, role: 'assistant', text, phase: 'follow_up' });
+        pushConv(convId, {
+          type: 'assistant_reply',
+          convId,
+          text,
+          meta: { dispatchId: report.dispatchId, traceId: report.traceId, counts: report.counts, dispatchComplete: true },
+        });
+      })
+      .catch((error) => {
+        const text = `自动分发失败：${(error as Error).message || '未知错误'}`;
+        appendConversationMessage(convId, { id: `dispatch-${randomUUID()}`, role: 'assistant', text });
+        pushConv(convId, { type: 'assistant_reply', convId, text });
+      });
+    pushConv(convId, { type: 'turn_end', convId, status: 'completed', runId, sessionId, occurredAt: new Date().toISOString() });
+  } catch (error) {
+    const message = wantsNextOrder && error instanceof ExecutionOrchestrationError && error.code === 'NO_ELIGIBLE_ORDER'
+      ? '没有更多未分析的高风险订单；如需重新分析，请回复“重新分析”。'
+      : `执行面编排失败：${(error as Error).message}`;
+    appendConversationMessage(convId, { id: `assistant-${randomUUID()}`, role: 'assistant', text: message });
+    pushConv(convId, { type: 'assistant_reply', convId, text: message });
+    pushConv(convId, { type: 'turn_end', convId, status: 'failed', runId, sessionId, message, occurredAt: new Date().toISOString() });
+  }
+  return true;
+}
+
 // ---------- HTTP ----------
+/** 系统 ID 可能包含中文；浏览器/curl 只能安全传 ASCII，故支持百分号编码后再比对令牌。 */
+function decodeSystemIdHeader(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(payload));
@@ -1035,12 +1742,15 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             readInventory: () => codexRuntime.listMcpServerStatus(),
             server: 'company-control',
             tools: dashboardTools,
+            // 每次清单 RPC 自身最多 20 秒；只重试 3 次，避免启动时无限等待。
+            attempts: 3,
           });
           registry = buildCapabilityRegistry(registeredServers, runtimeInventory, warnings[0]);
         } catch (error) {
           const message = error instanceof McpReadinessError
             ? error.message
             : '中控只读能力清单读取失败，请稍后刷新';
+          console.warn('[dashboard] MCP 未就绪：', message);
           warnings.push(message);
           const unavailable = { source: 'company-control', error: { code: 'MCP_NOT_READY', message } };
           orderRiskResponse = unavailable;
@@ -1053,6 +1763,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
           // unverified call merely to replace it with a misleading empty result.
         } else {
         const readPlan = dashboardReadPlan(new Date());
+        const readLimits = loadDashboardReadLimits();
         const [orders, shortages, kitting, quality, workOrders, capacity] = await Promise.allSettled([
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
@@ -1061,7 +1772,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-order-risk',
             runtimeInventory,
-          }), readPlan.orders),
+          }), readPlan.orders, readLimits.orders, Math.min(readLimits.pageSize, 100)),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1069,7 +1780,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-material-shortage',
             runtimeInventory,
-          }), {}),
+          }), {}, readLimits.shortages, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1077,7 +1788,7 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             args: pageArgs,
             purpose: 'manager-dashboard-material-kitting',
             runtimeInventory,
-          }), readPlan.kitting),
+          }), readPlan.kitting, readLimits.kitting, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id,
             server: 'company-control',
@@ -1087,15 +1798,18 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
             runtimeInventory,
           // Attention 同时需要拿到质量事项的终态，才能将此前已进入队列的
           // 事项以中台证据归入“已闭环”；前端仍只把非终态计入待关注指标。
-          }), { status: 'open,in_progress,closed,resolved,completed,cancelled,canceled' }),
+          }), { status: 'open,in_progress,closed,resolved,completed,cancelled,canceled' }, readLimits.quality, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id, server: 'company-control', tool: 'production_work_orders_list',
             args: pageArgs, purpose: 'manager-dashboard-production-work-orders', runtimeInventory,
-          }), {}),
+          }), {
+            planned_end_start: readPlan.orders.date_from,
+            planned_end_end: readPlan.orders.date_to,
+          }, readLimits.workOrders, readLimits.pageSize),
           collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
             sessionId: session.id, server: 'company-control', tool: 'production_capacity_list',
             args: pageArgs, purpose: 'manager-dashboard-production-capacity', runtimeInventory,
-          }), readPlan.capacity),
+          }), readPlan.capacity, readLimits.capacity, readLimits.pageSize),
         ]);
         if (orders.status === 'fulfilled') orderRiskResponse = orders.value;
         else warnings.push(`中控平台订单数据读取失败：${orders.reason instanceof Error ? orders.reason.message : String(orders.reason)}`);
@@ -1117,9 +1831,9 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
           const workOrderNo = typeof firstWorkOrder.work_order_no === 'string' ? firstWorkOrder.work_order_no : typeof firstWorkOrder.work_order_id === 'string' ? firstWorkOrder.work_order_id : '';
           if (orderNo || workOrderNo) {
             const [operations, links, reports] = await Promise.allSettled([
-              orderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_operations_list', args: pageArgs, purpose: 'manager-dashboard-production-operations', runtimeInventory }), { order_no: orderNo }) : Promise.resolve(undefined),
-              collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_order_links_list', args: pageArgs, purpose: 'manager-dashboard-production-links', runtimeInventory }), { ...(orderNo ? { order_no: orderNo } : {}), ...(workOrderNo ? { work_order_no: workOrderNo } : {}) }),
-              workOrderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_reports_list', args: pageArgs, purpose: 'manager-dashboard-production-reports', runtimeInventory }), { work_order_no: workOrderNo }) : Promise.resolve(undefined),
+              orderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_operations_list', args: pageArgs, purpose: 'manager-dashboard-production-operations', runtimeInventory }), { order_no: orderNo }, readLimits.productionScoped, readLimits.pageSize) : Promise.resolve(undefined),
+              collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_order_links_list', args: pageArgs, purpose: 'manager-dashboard-production-links', runtimeInventory }), { ...(orderNo ? { order_no: orderNo } : {}), ...(workOrderNo ? { work_order_no: workOrderNo } : {}) }, readLimits.productionScoped, readLimits.pageSize),
+              workOrderNo ? collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({ sessionId: session.id, server: 'company-control', tool: 'production_reports_list', args: pageArgs, purpose: 'manager-dashboard-production-reports', runtimeInventory }), { work_order_no: workOrderNo }, readLimits.productionScoped, readLimits.pageSize) : Promise.resolve(undefined),
             ]);
             if (operations.status === 'fulfilled' && operations.value) productionResponses.operations = operations.value;
             if (links.status === 'fulfilled') productionResponses.orderLinks = links.value;
@@ -1159,17 +1873,93 @@ async function loadDashboardSnapshot(force = false): Promise<DashboardSnapshot> 
   }
 }
 
+// ---------- 每日风险简报：按“需求日期 = 今天”口径只读汇总齐套红色风险 ----------
+const DAILY_BRIEFING_TTL_MS = 5 * 60_000;
+let dailyBriefingCache: { at: number; windowEnd: string; brief: DailyBriefing; markdown: string } | null = null;
+
+async function loadDailyBriefing(force = false): Promise<{ at: number; windowEnd: string; brief: DailyBriefing; markdown: string }> {
+  const windowEnd = beijingDateString();
+  if (!force && dailyBriefingCache && dailyBriefingCache.windowEnd === windowEnd
+    && Date.now() - dailyBriefingCache.at < DAILY_BRIEFING_TTL_MS) {
+    return dailyBriefingCache;
+  }
+  let sessionId: string | null = null;
+  try {
+    const session = await runtimeSupervisor.createSession(CODEX_RUNTIME_ID, {
+      workingDirectory: root,
+      metadata: { purpose: 'daily-briefing-readonly' },
+    });
+    sessionId = session.id;
+    const runtimeInventory = await waitForReadOnlyMcpTools({
+      readInventory: () => codexRuntime.listMcpServerStatus(),
+      server: 'company-control',
+      tools: ['material_kitting_results_list'],
+    });
+    const response = await collectMcpPages((pageArgs) => mcpAccessGateway.callReadOnly({
+      sessionId: session.id,
+      server: 'company-control',
+      tool: 'material_kitting_results_list',
+      args: pageArgs,
+      purpose: 'daily-briefing-kitting',
+      runtimeInventory,
+    }), { risk_level: 'red', required_date_start: windowEnd, required_date_end: windowEnd }, 5, 200);
+    const payload = payloadOf(response);
+    if (payload.error) throw new Error(`中台齐套查询失败：${JSON.stringify(payload.error)}`);
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    const brief = buildDailyBriefing({
+      rows,
+      windowEnd,
+      dataAsOf: typeof payload.data_as_of === 'string' ? payload.data_as_of : null,
+      confidence: typeof payload.data_confidence === 'string' ? payload.data_confidence : 'unknown',
+      stale: typeof payload.stale === 'boolean' ? payload.stale : null,
+      warnings: Array.isArray(payload.warnings) ? payload.warnings.filter((item): item is string => typeof item === 'string') : [],
+    });
+    const entry = { at: Date.now(), windowEnd, brief, markdown: formatDailyBriefingMarkdown(brief) };
+    dailyBriefingCache = entry;
+    return entry;
+  } finally {
+    if (sessionId) await runtimeSupervisor.deleteSession(CODEX_RUNTIME_ID, sessionId).catch(() => undefined);
+  }
+}
+
 /**
  * AEOS keeps a warm, read-only decision snapshot even while no browser is
  * open. This is intentionally separate from the removed Autopilot: it does
  * not create cases, send notifications, or call any non-read-only tool.
  */
+function dashboardHasBusinessData(snapshot: DashboardSnapshot): boolean {
+  return Boolean(snapshot.businessData?.available)
+    || (snapshot.risks?.length ?? 0) > 0
+    || (snapshot.kittingRisks?.length ?? 0) > 0
+    || (snapshot.qualityRisks?.length ?? 0) > 0
+    || (snapshot.attentionRisks?.length ?? 0) > 0
+    || Boolean(snapshot.productionAssessment?.available);
+}
+
 async function refreshDecisionData(): Promise<DashboardSnapshot> {
   if (decisionDataRefreshPromise) return decisionDataRefreshPromise;
   decisionDataRefreshPromise = (async () => {
-    const snapshot = await loadDashboardSnapshot(true);
-    latestDecisionData = structuredClone(snapshot);
-    latestDecisionDataAt = new Date().toISOString();
+    let snapshot = await loadDashboardSnapshot(true);
+    // MCP/Codex 冷启动时第一次读取可能拿不到业务数据：短暂等待后重试一次，
+    // 且空快照不写入缓存，避免重启后一直返回空看板。
+    if (!dashboardHasBusinessData(snapshot)) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      snapshot = await loadDashboardSnapshot(true);
+    }
+    if (dashboardHasBusinessData(snapshot)) {
+      latestDecisionData = structuredClone(snapshot);
+      latestDecisionDataAt = new Date().toISOString();
+    } else {
+      console.warn('[dashboard] 快照没有业务数据，暂不缓存；下次刷新会重试', (snapshot.warnings ?? []).slice(0, 3).join('；'));
+    }
+    console.log('[dashboard] snapshot', JSON.stringify({
+      orders: snapshot.risks.length,
+      kitting: snapshot.kittingRisks.length,
+      quality: snapshot.qualityRisks.length,
+      attention: snapshot.attentionRisks.length,
+      available: snapshot.businessData?.available ?? false,
+      warnings: (snapshot.warnings ?? []).slice(0, 3),
+    }));
     return snapshot;
   })();
   try {
@@ -1396,6 +2186,298 @@ const server = createServer(async (req, res) => {
     sendJson(res, 200, authGateway.session(req.headers.cookie));
     return;
   }
+  // ---------- 系统自助增删本系统 Agent 控制面（token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/agents')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method !== 'GET' && req.method !== 'DELETE') {
+        try { body = await readJsonBody(req); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = await agentControlApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+      });
+      if (!outcome) { sendJson(res, 404, { error: 'agent-control endpoint not found' }); }
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 跨系统借调（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/borrow-orders')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = borrowOrderApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'borrow-order endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 能力模板自动派单（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/capability-invocations')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = capabilityInvocationApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'capability-invocation endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 跨系统任务交接（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/orchestration-tasks')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = orchestrationTaskApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'orchestration-task endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 中台助手观测上报（系统 token 鉴权，绕过 cookie 网关） ----------
+  if (url.pathname.startsWith('/api/system/assistant-events')) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 128 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = assistantEventApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        systemId: decodeSystemIdHeader(headerValue('x-aeos-system-id')),
+        token: headerValue('x-aeos-system-token'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) sendJson(res, 404, { error: 'assistant-event endpoint not found' });
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 写操作请求（系统 token：可提交/查询；审批只能由 Hub 用户完成） ----------
+  if (url.pathname.startsWith('/api/system/write-requests')) {
+    try {
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const systemId = decodeSystemIdHeader(headerValue('x-aeos-system-id'));
+      const token = headerValue('x-aeos-system-token');
+      if (!systemId || !token || !verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token)) {
+        sendJson(res, 401, { error: 'authentication required' });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/system/write-requests') {
+        const body = await readJsonBody(req, 128 * 1024).catch(() => null);
+        if (!isRecord(body)) { sendJson(res, 400, { error: 'invalid write request body' }); return; }
+        const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+        if (!requestId) { sendJson(res, 400, { error: 'requestId 必填' }); return; }
+        let caller = null;
+        if (body.caller !== undefined) {
+          try {
+            caller = parseCallerContext(body.caller);
+          } catch (error) {
+            sendJson(res, 400, { error: `caller 无效：${(error as Error).message}` });
+            return;
+          }
+          if (caller && caller.systemId !== systemId) {
+            sendJson(res, 400, { error: 'caller.systemId 必须等于发起系统' });
+            return;
+          }
+        }
+        const outcome = writeRequestService.create({
+          tenantId: resolveTenantId(systemId, listSystems()) ?? DEFAULT_TENANT_ID,
+          capability: typeof body.capability === 'string' ? body.capability : '',
+          systemId: typeof body.toSystem === 'string' ? body.toSystem : null,
+          input: body.input,
+          reason: typeof body.reason === 'string' ? body.reason : '',
+          requestedBy: { kind: 'system', id: systemId },
+          caller,
+          idempotencyKey: requestId,
+        });
+        sendJson(res, outcome.idempotent ? 200 : 201, outcome);
+        return;
+      }
+      const detailMatch = url.pathname.match(/^\/api\/system\/write-requests\/([^/]+)$/);
+      if (detailMatch && req.method === 'GET') {
+        const id = decodeURIComponent(detailMatch[1] ?? '').trim();
+        const record = writeRequestStore.get(id);
+        if (!record) { sendJson(res, 404, { error: 'write request not found' }); return; }
+        const requesterSystem = record.requestedBy.kind === 'system' ? record.requestedBy.id : null;
+        if (requesterSystem !== systemId && record.systemId !== systemId) {
+          sendJson(res, 403, { error: 'write request not visible to this system' });
+          return;
+        }
+        sendJson(res, 200, { request: record });
+        return;
+      }
+      sendJson(res, 404, { error: 'write request endpoint not found' });
+    } catch (error) {
+      if (error instanceof WriteRequestError) {
+        sendJson(res, error.status, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+    }
+    return;
+  }
+  // ---------- 统一链路查询（系统 token，只读，限参与方） ----------
+  const systemTraceMatch = url.pathname.match(/^\/api\/system\/trace\/([^/]+)$/);
+  if (systemTraceMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const headerValue = (name: string): string => {
+      const value = req.headers[name];
+      return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+    };
+    const systemId = decodeSystemIdHeader(headerValue('x-aeos-system-id'));
+    const token = headerValue('x-aeos-system-token');
+    if (!systemId || !token || !verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token)) {
+      sendJson(res, 401, { error: 'authentication required' });
+      return;
+    }
+    const traceId = decodeURIComponent(systemTraceMatch[1] ?? '').trim();
+    if (!traceId || traceId.length > 200) { sendJson(res, 400, { error: 'traceId 无效' }); return; }
+    const agents = executionPlane.list().agents;
+    const systemOfAgent = (agentId: string): string | null => {
+      const agent = agents.find((item) => item.agentId === agentId);
+      return agent ? agent.systemId ?? agent.sourceSystem : null;
+    };
+    const trace = buildTrace(traceId, {
+      borrowOrderById: (orderId) => borrowOrderStore.get(orderId),
+      borrowOrders: () => borrowOrderStore.load().orders,
+      runById: (runId) => executionPlane.getRun(runId),
+      allRuns: () => executionPlane.list().runs,
+      usageEvents: () => listUsageEvents(5_000),
+      evidenceEntries: () => readEvidenceEntries(),
+    });
+    const participated = trace.borrowOrder?.fromSystem === systemId
+      || trace.borrowOrder?.providerSystem === systemId
+      || trace.runs.some((run) => systemOfAgent(run.agentId) === systemId)
+      || trace.usage.some((event) => event.systemId === systemId || event.consumerSystemId === systemId);
+    if (!participated) { sendJson(res, 403, { error: 'trace not visible to this system' }); return; }
+    sendJson(res, 200, trace);
+    return;
+  }
+  // ---------- 执行 run 召回（系统 token，只读试点内的取消链路） ----------
+  const systemRecallMatch = url.pathname.match(/^\/api\/system\/execution\/runs\/([^/]+)\/recall$/);
+  if (systemRecallMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const headerValue = (name: string): string => {
+      const value = req.headers[name];
+      return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+    };
+    const systemId = decodeSystemIdHeader(headerValue('x-aeos-system-id'));
+    const token = headerValue('x-aeos-system-token');
+    if (!systemId || !token || !verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token)) {
+      sendJson(res, 401, { error: 'authentication required' });
+      return;
+    }
+    const runId = decodeURIComponent(systemRecallMatch[1] ?? '').trim();
+    if (!runId) { sendJson(res, 400, { error: 'runId 无效' }); return; }
+    const run = executionPlane.getRun(runId);
+    if (!run) { sendJson(res, 404, { error: 'run not found' }); return; }
+    const agent = executionPlane.list().agents.find((item) => item.agentId === run.agentId);
+    const agentSystem = agent ? agent.systemId ?? agent.sourceSystem : null;
+    if (!agent || agentSystem !== systemId) {
+      sendJson(res, 403, { error: 'run not visible to this system' });
+      return;
+    }
+    if (run.state === 'completed' || run.state === 'failed' || run.state === 'recalled') {
+      sendJson(res, 409, { error: `run 已结束：${run.state}`, state: run.state });
+      return;
+    }
+    if (agent.currentRunId !== runId) {
+      sendJson(res, 409, { error: 'run 已不是当前执行任务', currentRunId: agent.currentRunId });
+      return;
+    }
+    const result = executionPlane.recall(run.agentId);
+    try {
+      appendEvidence({
+        kind: 'app_event',
+        actor_id: `execution-token:system:${systemId}`,
+        actor_type: 'system',
+        object_ref: `hub://execution-run/${encodeURIComponent(runId)}`,
+        source_system: systemId,
+        correlation_id: 'execution-run-recalled',
+        summary: 'execution run recalled',
+        payload: { runId, agentId: run.agentId, recalled: result.recalled },
+      });
+    } catch {
+      // 审计失败不改变召回结果。
+    }
+    sendJson(res, 200, { runId, recalled: result.recalled, state: executionPlane.getRun(runId)?.state ?? null });
+    return;
+  }
   const publicAsset = isPublicLoginResource(url.pathname, req.method);
   if (!authGateway.canAccess(url.pathname, req.method, req.headers.cookie)) {
     sendJson(res, 401, { error: 'authentication required' });
@@ -1412,6 +2494,85 @@ const server = createServer(async (req, res) => {
   }
   const requestActorContext = publicAsset ? null : authGateway.actorFromCookie(req.headers.cookie);
   const requestActor = publicAsset ? 'anonymous' : requestActorContext!.actorId;
+  const actorTenant = requestActorContext?.tenantId?.trim();
+  const requestTenantId = !actorTenant || actorTenant === 'local-dev' ? DEFAULT_TENANT_ID : actorTenant;
+  // ---------- 写操作审批（浏览器会话；创建与审批仅 manager / supervisor） ----------
+  if (url.pathname.startsWith('/api/write-requests')) {
+    try {
+      const roles = requestActorContext?.roles ?? [];
+      const canWrite = roles.includes('manager') || roles.includes('supervisor');
+      const actor = { id: requestActor, roles, tenantId: requestTenantId };
+      if (url.pathname === '/api/write-requests/capabilities' && req.method === 'GET') {
+        sendJson(res, 200, { capabilities: writeRequestService.listCapabilities(requestTenantId) });
+        return;
+      }
+      if (url.pathname === '/api/write-requests') {
+        if (req.method === 'GET') {
+          const status = url.searchParams.get('status');
+          const limit = Number(url.searchParams.get('limit') || 100);
+          sendJson(res, 200, {
+            requests: writeRequestService.list({
+              tenantId: requestTenantId,
+              status: status === 'pending_approval' || status === 'rejected' || status === 'dispatched'
+                || status === 'completed' || status === 'failed' || status === 'cancelled' ? status : null,
+              limit: Number.isFinite(limit) ? limit : 100,
+            }),
+          });
+          return;
+        }
+        if (req.method === 'POST') {
+          if (!canWrite) { sendJson(res, 403, { error: '只有 manager / supervisor 可以提交写操作' }); return; }
+          const body = await readJsonBody(req, 128 * 1024).catch(() => null);
+          if (!isRecord(body)) { sendJson(res, 400, { error: 'invalid write request body' }); return; }
+          const outcome = writeRequestService.create({
+            tenantId: requestTenantId,
+            capability: typeof body.capability === 'string' ? body.capability : '',
+            systemId: typeof body.systemId === 'string' ? body.systemId : null,
+            input: body.input,
+            reason: typeof body.reason === 'string' ? body.reason : '',
+            requestedBy: { kind: 'user', id: requestActor },
+            idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : null,
+          });
+          sendJson(res, outcome.idempotent ? 200 : 201, outcome);
+          return;
+        }
+      }
+      const match = url.pathname.match(/^\/api\/write-requests\/([^/]+)(?:\/(approve|reject))?$/);
+      if (match) {
+        const id = decodeURIComponent(match[1] ?? '').trim();
+        if (!match[2] && req.method === 'GET') {
+          sendJson(res, 200, { request: writeRequestService.get(id, requestTenantId) });
+          return;
+        }
+        if (match[2] && req.method === 'POST') {
+          if (!canWrite) { sendJson(res, 403, { error: '只有 manager / supervisor 可以审批写操作' }); return; }
+          const body = await readJsonBody(req, 16 * 1024).catch(() => null);
+          const record = match[2] === 'approve'
+            ? writeRequestService.approve(id, actor, isRecord(body) && typeof body.note === 'string' ? body.note : null)
+            : writeRequestService.reject(id, actor, isRecord(body) && typeof body.reason === 'string' ? body.reason : null);
+          syncConversationWriteState(record);
+          sendJson(res, 200, { request: record });
+          return;
+        }
+      }
+      sendJson(res, 404, { error: 'write request endpoint not found' });
+    } catch (error) {
+      if (error instanceof WriteRequestError) {
+        sendJson(res, error.status, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+    }
+    return;
+  }
+  if (url.pathname === '/api/connectivity') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const agents = executionPlane.list().agents.filter((agent) => (
+      resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId
+    ));
+    sendJson(res, 200, buildConnectivitySummary(agents));
+    return;
+  }
   let rel: string;
   try {
     rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
@@ -1491,68 +2652,23 @@ const server = createServer(async (req, res) => {
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
+  const catalogResponse = catalogApi.handle({ method: req.method, pathname: url.pathname, tenantId: requestTenantId });
+  if (catalogResponse) { sendJson(res, catalogResponse.status, catalogResponse.body); return; }
   if (url.pathname === '/api/harbor') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
-      sendJson(res, 200, loadHarbor());
-    } catch (error) {
-      sendJson(res, 500, { error: (error as Error).message });
-    }
-    return;
-  }
-  if (url.pathname === '/api/models') {
-    if (req.method === 'GET') {
-      try { sendJson(res, 200, loadModelRegistry()); } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
-      return;
-    }
-    if (req.method === 'POST') {
-      try {
-        const item = createModel(await readJsonBody(req));
-        appendEvidence({ kind: 'app_event', summary: 'model registered', payload: { id: item.id, provider: item.provider, model: item.model } });
-        sendJson(res, 201, { item });
-      } catch (error) {
-        sendJson(res, 400, { error: (error as Error).message });
-      }
-      return;
-    }
-    sendJson(res, 405, { error: 'method not allowed' });
-    return;
-  }
-  const modelMatch = url.pathname.match(/^\/api\/models\/([^/]+)$/);
-  if (modelMatch) {
-    let modelId = '';
-    try { modelId = decodeURIComponent(modelMatch[1] ?? '').trim(); } catch { modelId = ''; }
-    if (!modelId) { sendJson(res, 400, { error: '模型 id 无效' }); return; }
-    try {
-      if (req.method === 'PATCH') {
-        const item = updateModel(modelId, await readJsonBody(req));
-        appendEvidence({ kind: 'app_event', summary: 'model updated', payload: { id: item.id, provider: item.provider, model: item.model } });
-        sendJson(res, 200, { item });
-        return;
-      }
-      if (req.method === 'DELETE') {
-        const item = deleteModel(modelId);
-        appendEvidence({ kind: 'app_event', summary: 'model removed', payload: { id: item.id, provider: item.provider, model: item.model } });
-        sendJson(res, 200, { item });
-        return;
-      }
-      sendJson(res, 405, { error: 'method not allowed' });
-    } catch (error) {
-      const status = error instanceof ModelRegistryNotFoundError ? 404 : error instanceof ModelRegistryError ? 400 : 500;
-      sendJson(res, status, { error: (error as Error).message, code: errorCode(error) });
-    }
-    return;
-  }
-  if (url.pathname === '/api/usage/summary') {
-    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    try {
-      const summary = usageStore.summary({
-        from: url.searchParams.get('from') ?? undefined,
-        to: url.searchParams.get('to') ?? undefined,
-        agentId: url.searchParams.get('agentId') ?? undefined,
-        recentLimit: url.searchParams.get('recentLimit') ? Number(url.searchParams.get('recentLimit')) : undefined,
+      const snapshot = loadHarbor();
+      const systemIds = new Set(listSystems().filter((system) => system.tenantId === requestTenantId).map((system) => system.systemId));
+      const agents = snapshot.agents.filter((agent) => systemIds.has(agent.systemId));
+      const agentIds = new Set(agents.map((agent) => agent.id));
+      const projects = snapshot.projects.filter((project) => project.agentIds.some((id) => agentIds.has(id))
+        || (project.leadType === 'agent' && agentIds.has(project.leadId)));
+      sendJson(res, 200, {
+        ...snapshot,
+        agents,
+        projects,
+        runs: snapshot.runs.filter((run) => agentIds.has(run.agentId)),
       });
-      sendJson(res, 200, summary);
     } catch (error) {
       sendJson(res, 500, { error: (error as Error).message });
     }
@@ -1584,8 +2700,6 @@ const server = createServer(async (req, res) => {
     '/api/agent-squad/activities': addAgentSquadActivity,
     '/api/agent-squad/memories': addAgentSquadMemory,
     '/api/agent-squad/messages': sendAgentSquadMessage,
-    '/api/agent-squad/business-squads/memories': addAgentBusinessSquadMemory,
-    '/api/agent-squad/business-squads/activities': addAgentBusinessSquadActivity,
   };
   if (url.pathname.startsWith('/api/agent-squad/')) {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
@@ -1603,7 +2717,7 @@ const server = createServer(async (req, res) => {
         const agent = resolveHarborAgent(input.harborAgentId);
         const current = loadAgentSquad();
         if (current.lead.harborAgentId === agent.id || current.lead.id === agent.id) throw new Error('主 Agent 不能重复加入为子 Agent');
-        item = createAgentSquadMember({ harborAgentId: agent.id, name: agent.name, role: agent.role, model: agent.model, squadId: input.squadId });
+        item = createAgentSquadMember({ harborAgentId: agent.id, name: agent.name, role: agent.role, model: agent.model });
       } else if (url.pathname === '/api/agent-squad/member-links') {
         const agent = resolveHarborAgent(input.harborAgentId);
         const current = loadAgentSquad();
@@ -1769,6 +2883,82 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/briefing/daily') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const entry = await loadDailyBriefing(url.searchParams.get('refresh') === '1');
+      sendJson(res, 200, {
+        brief: entry.brief,
+        markdown: entry.markdown,
+        cachedAt: new Date(entry.at).toISOString(),
+      });
+    } catch (error) {
+      sendJson(res, 503, { error: (error as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/api/briefing/daily/dispatch') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const roles = requestActorContext?.roles ?? [];
+    if (!requestActorContext || (!roles.includes('manager') && !roles.includes('supervisor'))) {
+      sendJson(res, 403, { error: '只有管理者可以把简报分发给 Agent' });
+      return;
+    }
+    try {
+      const policy = loadConclusionDispatchPolicy();
+      if (!policy.enabled) {
+        sendJson(res, 409, { error: '结论分发未启用：请在系统配置中开启自动分发后再发送' });
+        return;
+      }
+      const entry = await loadDailyBriefing();
+      if (!entry.brief.top.length) {
+        sendJson(res, 409, { error: `今日（${entry.windowEnd}）没有红色齐套风险，无需分发` });
+        return;
+      }
+      const caller = { systemId: 'aeos-hub', agentId: null, userId: requestActorContext.actorId, taskId: null, traceId: null };
+      // 执行面推理能力只分析具体对象，且会先按锚点去中台取证据：
+      // 因此按订单逐条派发，锚点用真实的 business://order/<订单号>。
+      const orderNos = selectBriefingDispatchOrders(entry.brief, 3);
+      if (!orderNos.length) {
+        sendJson(res, 409, { error: `今日（${entry.windowEnd}）没有可派发的订单` });
+        return;
+      }
+      const report = await conclusionDispatcher.dispatch(
+        orderNos.map((orderNo) => ({
+          domain: 'kitting' as const,
+          businessObjectRef: `business://order/${orderNo}`,
+          orderNo,
+          title: `今日风险简报 ${entry.windowEnd} · 订单 ${orderNo}`,
+          prompt: formatBriefingOrderPrompt(entry.brief, orderNo),
+        })),
+        { caller, force: true, traceId: `briefing-${entry.windowEnd}`, policy: { ...policy, maxItemsPerAnalysis: orderNos.length } },
+      );
+      const markdown = formatConclusionDispatchReport(report);
+      sendJson(res, 200, {
+        dispatchId: report.dispatchId,
+        status: report.status,
+        counts: report.counts,
+        orders: orderNos,
+        items: report.items.map((item) => ({
+          domain: item.domain,
+          businessObjectRef: item.businessObjectRef,
+          status: item.status,
+          reason: item.reason ?? null,
+          systemId: item.systemId ?? null,
+          agentId: item.agentId ?? null,
+          runId: item.runId ?? null,
+          summary: item.summary ?? null,
+        })),
+        markdown,
+        message: markdown || (report.status === 'disabled'
+          ? '结论分发未启用'
+          : report.items.map((item) => `${item.reason ?? item.status}${item.error?.message ? `：${item.error.message}` : ''}`).join('；') || '本次分发未产生可展示结论'),
+      });
+    } catch (error) {
+      sendJson(res, 503, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/attention/search') {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
@@ -1868,8 +3058,8 @@ const server = createServer(async (req, res) => {
       const id = decodeURIComponent(harborAgentDeleteMatch[1] ?? '').trim();
       if (!id) throw new Error('Agent id 无效');
       const squad = loadAgentSquad();
-      if (squad.lead.harborAgentId === id) throw new Error('该 Agent 是当前小队主 Agent，请先更换主 Agent 关联');
-      if (squad.members.some((member) => member.harborAgentId === id)) throw new Error('该 Agent 仍在 Agent 小队中，请先将其移出小队');
+      if (squad.lead.harborAgentId === id) throw new Error('该 Agent 是当前主 Agent，请先更换主 Agent 关联');
+      if (squad.members.some((member) => member.harborAgentId === id)) throw new Error('该 Agent 仍在协作成员中，请先将其移出');
       const item = deleteHarborAgent({ id });
       sendJson(res, 200, { item });
     } catch (error) {
@@ -1897,6 +3087,30 @@ const server = createServer(async (req, res) => {
     return;
   }
   // ---------- 执行面接入 HTTP API（仪表盘读取 + 派单/召回 + LLM 意图解析） ----------
+  if (url.pathname === '/api/execution/highest-risk-order') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const input = await readJsonBody(req, 8 * 1024);
+      const result = await executionOrchestrator.highestRiskOrder({
+        reasoningAgentId: typeof input.reasoningAgentId === 'string' ? input.reasoningAgentId : '',
+        text: typeof input.text === 'string' ? input.text : '',
+      });
+      sendJson(res, 200, result);
+    } catch (error) {
+      if (error instanceof ExecutionOrchestrationError) {
+        sendJson(res, error.status, {
+          error: error.message,
+          code: error.code,
+          requestId: error.requestId,
+          queryRunId: error.queryRunId,
+          reasoningRunId: error.reasoningRunId,
+        });
+      } else {
+        sendJson(res, 500, { error: (error as Error).message || '编排失败' });
+      }
+    }
+    return;
+  }
   const executionParseIntentMatch = url.pathname.match(/^\/api\/execution\/parse-intent$/);
   if (executionParseIntentMatch) {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
@@ -1908,7 +3122,38 @@ const server = createServer(async (req, res) => {
       const agent = agentId ? executionPlane.list().agents.find((item) => item.agentId === agentId) : undefined;
       const intent = agent?.capabilities.find((cap) => cap.intent)?.intent;
       // LLM 优先路径，按 Agent 注册的查询语义（intent）动态解析；失败返回 { error }，由前端回退。
-      sendJson(res, 200, await parseIntentWithLLM(text, { intent }));
+      // 模型选择统一走选型器（意图解析是轻任务 → light 档，deepseek-flash + effort=low）。
+      const route = routeModel({ difficulty: 'light' });
+      const routedProfile = route.satisfied ? route.profile : null;
+      const routedModel = route.executable && routedProfile ? routedProfile.modelName : undefined;
+      sendJson(res, 200, await parseIntentWithLLM(text, {
+        intent,
+        model: routedModel,
+        effort: routedProfile?.effort,
+        // 用量回调：把中枢自身这次 DeepSeek 调用的 Token/成本记账（systemId 对齐中枢注册码 aeos-hub）。
+        onUsage: (usage) => {
+          const cost = routedProfile
+            ? estimateUsageCostCny(routedProfile, {
+              inputTokens: usage.tokensIn,
+              cachedInputTokens: usage.cachedTokens,
+              outputTokens: usage.tokensOut,
+            }, new Date(usage.endedAt))
+            : 0;
+          recordUsageEvent({
+            agentId: 'agent-aeos-hub',
+            systemId: 'aeos-hub',
+            modelId: routedProfile?.id ?? usage.model,
+            runId: null,
+            tokensIn: usage.tokensIn,
+            cachedTokens: usage.cachedTokens,
+            tokensOut: usage.tokensOut,
+            cost,
+            metering: 'direct',
+            startedAt: usage.startedAt,
+            endedAt: usage.endedAt,
+          });
+        },
+      }));
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
@@ -1917,7 +3162,93 @@ const server = createServer(async (req, res) => {
   const executionAgentsMatch = url.pathname.match(/^\/api\/execution\/agents$/);
   if (executionAgentsMatch) {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
-    sendJson(res, 200, executionPlane.list());
+    const snapshot = executionPlane.list();
+    const agents = snapshot.agents.filter((agent) => resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId);
+    const agentIds = new Set(agents.map((agent) => agent.agentId));
+    sendJson(res, 200, { agents, runs: snapshot.runs.filter((run) => agentIds.has(run.agentId)) });
+    return;
+  }
+  if (url.pathname === '/api/execution/capability-templates') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const agentId = url.searchParams.get('agentId')?.trim();
+    const templates = capabilityInvocationService.listTemplates().filter((template) => {
+      if (template.providerAgentId && agentId && template.providerAgentId !== agentId) return false;
+      return resolveTenantId(template.providerSystem, listSystems()) === requestTenantId;
+    });
+    sendJson(res, 200, { templates });
+    return;
+  }
+  if (url.pathname === '/api/execution/capability-invocations') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const body = await readJsonBody(req, 128 * 1024);
+      const result = capabilityInvocationService.invoke({
+        fromSystem: 'aeos-hub',
+        body: {
+          ...body,
+          fromAgentId: typeof body.fromAgentId === 'string' && body.fromAgentId.trim()
+            ? body.fromAgentId
+            : 'hub-execution-dashboard',
+        },
+      });
+      const terminal = result.order.status === 'completed' || result.order.status === 'failed';
+      sendJson(res, result.idempotent || terminal ? 200 : 202, {
+        invocation: {
+          capability: result.capability,
+          templateVersion: result.templateVersion,
+          borrowOrderId: result.order.orderId,
+          runId: result.order.runId,
+          status: result.order.status,
+        },
+        order: result.order,
+        idempotent: result.idempotent,
+      });
+    } catch (error) {
+      if (error instanceof CapabilityInvocationError) {
+        sendJson(res, error.httpStatus, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else if (error instanceof BorrowOrderServiceError) {
+        sendJson(res, error.httpStatus, { error: error.message, code: error.code, ...(error.details ?? {}) });
+      } else if (error instanceof CapabilityQueryTemplateError) {
+        sendJson(res, error.code === 'INVALID_ARGUMENT' ? 400 : 500, { error: error.message, code: error.code });
+      } else {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+    }
+    return;
+  }
+  const executionRunEventsMatch = url.pathname.match(/^\/api\/execution\/runs\/([^/]+)\/events$/);
+  if (executionRunEventsMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const runId = decodeURIComponent(executionRunEventsMatch[1] ?? '').trim();
+    const run = runId ? executionPlane.getRun(runId) : undefined;
+    const runAgent = run ? executionPlane.list().agents.find((agent) => agent.agentId === run.agentId) : undefined;
+    if (!runId || !run || !runAgent || resolveTenantId(runAgent.systemId ?? runAgent.sourceSystem, listSystems()) !== requestTenantId) {
+      sendJson(res, 404, { error: 'run not found' });
+      return;
+    }
+    try {
+      const limit = boundedLimit(url.searchParams.get('limit'));
+      sendJson(res, 200, {
+        runId,
+        count: executionEventStore.countByRun(runId, requestTenantId),
+        events: executionEventStore.listByRun(runId, limit, requestTenantId),
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 中台助手观测只读 API（登录用户） ----------
+  if (url.pathname === '/api/assistant-events') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const systemId = url.searchParams.get('system')?.trim() || undefined;
+    const traceId = url.searchParams.get('traceId')?.trim() || undefined;
+    const limit = boundedLimit(url.searchParams.get('limit'));
+    sendJson(res, 200, {
+      events: assistantEventStore.listEvents({ systemId, traceId, tenantId: requestTenantId, limit }),
+      traces: assistantEventStore.listTraces({ systemId, tenantId: requestTenantId, limit }),
+      count: assistantEventStore.countEvents({ systemId, traceId, tenantId: requestTenantId }),
+    });
     return;
   }
   const executionDispatchMatch = url.pathname.match(/^\/api\/execution\/agents\/([^/]+)\/dispatch$/);
@@ -1929,7 +3260,15 @@ const server = createServer(async (req, res) => {
       const input = await readJsonBody(req);
       const capability = typeof input.capability === 'string' ? input.capability.trim() : '';
       if (!capability) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'capability 不能为空');
-      sendJson(res, 200, executionPlane.dispatch(agentId, capability, input.input));
+      sendJson(res, 200, executionPlane.dispatch(agentId, capability, input.input, {
+        caller: {
+          systemId: 'aeos-hub',
+          agentId: null,
+          userId: requestActorContext?.actorId ?? null,
+          taskId: null,
+          traceId: null,
+        },
+      }));
     } catch (error) {
       const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
       sendJson(res, status, { error: (error as Error).message, ...(error instanceof ExecutionPlaneError ? { code: error.code } : {}) });
@@ -1942,10 +3281,146 @@ const server = createServer(async (req, res) => {
     try {
       const agentId = decodeURIComponent(executionRecallMatch[1] ?? '').trim();
       if (!agentId) throw new ExecutionPlaneError('INVALID_ARGUMENT', 'agentId 无效');
-      sendJson(res, 200, executionPlane.recall(agentId));
+      const result = executionPlane.recall(agentId);
+      if (result.recalled) {
+        try {
+          appendEvidence({
+            kind: 'app_event',
+            actor_id: requestActorContext?.actorId ? `human:${requestActorContext.actorId}` : 'execution-ui',
+            actor_type: requestActorContext ? 'human' : 'system',
+            object_ref: `hub://execution-run/${encodeURIComponent(result.runId ?? agentId)}`,
+            source_system: 'aeos-hub',
+            correlation_id: 'execution-run-recalled',
+            summary: 'execution run recalled from UI',
+            payload: {
+              runId: result.runId,
+              agentId,
+              actor: requestActorContext?.actorId ?? null,
+            },
+          });
+        } catch {
+          // 审计失败不改变召回结果。
+        }
+      }
+      sendJson(res, 200, result);
     } catch (error) {
       const status = error instanceof ExecutionPlaneError && error.code === 'AGENT_NOT_FOUND' ? 404 : 400;
       sendJson(res, status, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- 用量台账只读 API（按 Agent/系统聚合 + 明细） ----------
+  // ---------- 运行监控只读 API（manager / supervisor） ----------
+  if (url.pathname === '/api/ops/status') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const roles = requestActorContext?.roles ?? [];
+    if (!roles.includes('manager') && !roles.includes('supervisor')) {
+      sendJson(res, 403, { error: 'forbidden' });
+      return;
+    }
+    const limit = boundedLimit(url.searchParams.get('limit'));
+    sendJson(res, 200, {
+      snapshot: opsMonitor.snapshot(),
+      alerts: alertCenter.list(limit),
+      alertCounts: alertCenter.counts(),
+      channels: { log: true, wecom: alertCenter.channelEnabled('wecom') },
+    });
+    return;
+  }
+  // ---------- 跨系统借调只读监控（登录用户，只读） ----------
+  if (url.pathname === '/api/borrow-orders') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const statusRaw = url.searchParams.get('status');
+      let status: BorrowOrderStatus | undefined;
+      if (statusRaw) {
+        if (!(BORROW_ORDER_STATUSES as readonly string[]).includes(statusRaw)) {
+          sendJson(res, 400, { error: `status 无效：${statusRaw}` });
+          return;
+        }
+        status = statusRaw as BorrowOrderStatus;
+      }
+      const limit = boundedLimit(url.searchParams.get('limit'));
+      const orders = borrowOrderService ? borrowOrderService.listAll({ status, tenantId: requestTenantId, limit }) : [];
+      const all = borrowOrderStore.load().orders.filter((order) => order.tenantId === requestTenantId);
+      const byStatus: Record<string, number> = {};
+      for (const item of all) byStatus[item.status] = (byStatus[item.status] ?? 0) + 1;
+      const systems = new Set<string>();
+      for (const item of all) {
+        systems.add(item.fromSystem);
+        if (item.providerSystem) systems.add(item.providerSystem);
+      }
+      sendJson(res, 200, {
+        orders: orders.map(borrowOrderSummary),
+        counts: {
+          total: all.length,
+          active: (byStatus.pending ?? 0) + (byStatus.dispatched ?? 0) + (byStatus.running ?? 0),
+          completed: byStatus.completed ?? 0,
+          failed: byStatus.failed ?? 0,
+          cancelled: byStatus.cancelled ?? 0,
+          byStatus,
+          systems: systems.size,
+        },
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  const borrowDetailMatch = url.pathname.match(/^\/api\/borrow-orders\/([^/]+)$/);
+  if (borrowDetailMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const orderId = decodeURIComponent(borrowDetailMatch[1] ?? '').trim();
+    const order = orderId ? borrowOrderStore.get(orderId) : null;
+    if (!order) { sendJson(res, 404, { error: 'borrow order not found' }); return; }
+    sendJson(res, 200, { order });
+    return;
+  }
+  // ---------- 统一链路查询（登录用户，只读） ----------
+  const traceMatch = url.pathname.match(/^\/api\/trace\/([^/]+)$/);
+  if (traceMatch) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    const traceId = decodeURIComponent(traceMatch[1] ?? '').trim();
+    if (!traceId || traceId.length > 200) { sendJson(res, 400, { error: 'traceId 无效' }); return; }
+    const trace = buildTrace(traceId, {
+      borrowOrderById: (orderId) => {
+        const order = borrowOrderStore.get(orderId);
+        return order && order.tenantId === requestTenantId ? order : null;
+      },
+      borrowOrders: () => borrowOrderStore.load().orders.filter((order) => order.tenantId === requestTenantId),
+      runById: (runId) => executionPlane.getRun(runId),
+      allRuns: () => executionPlane.list().runs,
+      usageEvents: () => listUsageEvents(5_000, requestTenantId),
+      evidenceEntries: () => readEvidenceEntries().filter((entry) => entry.tenant_id === requestTenantId),
+    });
+    const tenantAgents = new Set(executionPlane.list().agents
+      .filter((agent) => resolveTenantId(agent.systemId ?? agent.sourceSystem, listSystems()) === requestTenantId)
+      .map((agent) => agent.agentId));
+    if (trace.runs.some((run) => !tenantAgents.has(run.agentId))) {
+      sendJson(res, 404, { error: 'trace not found' });
+      return;
+    }
+    sendJson(res, 200, trace);
+    return;
+  }
+  if (url.pathname === '/api/usage/summary') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    sendJson(res, 200, {
+      byAgent: aggregateUsageByAgent(requestTenantId),
+      bySystem: aggregateUsageBySystem(requestTenantId),
+      byConsumerSystem: aggregateUsageByConsumerSystem(requestTenantId),
+      byCallerAgent: aggregateUsageByCallerAgent(requestTenantId),
+      byCallerUser: aggregateUsageByCallerUser(requestTenantId),
+    });
+    return;
+  }
+  if (url.pathname === '/api/usage/events') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const limit = boundedLimit(url.searchParams.get('limit'));
+      sendJson(res, 200, { events: listUsageEvents(limit, requestTenantId) });
+    } catch (e) {
+      sendJson(res, 400, { error: (e as Error).message });
     }
     return;
   }
@@ -1960,6 +3435,7 @@ const server = createServer(async (req, res) => {
         throw new Error('invalid actor filter');
       }
       sendJson(res, 200, await readRecentEvidence(limit, evidenceFile, {
+        tenantId: requestTenantId,
         ...(actorId ? { actorId } : {}),
         ...(requestedActorType ? { actorType: requestedActorType as 'human' | 'service' | 'agent' | 'system' } : {}),
       }));
@@ -2008,18 +3484,62 @@ const executionServer = createServer((_req, res) => {
   res.writeHead(404);
   res.end('execution plane control channel (WebSocket only)');
 });
+
+// P1：连接鉴权结果缓存到 IncomingMessage，供 verifyClient 与 connection 复用。
+const executionPlaneAuthByRequest = new WeakMap<IncomingMessage, ExecutionPlaneConnectionAuth | null>();
+
+function executionHeader(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') return '';
+  try { return decodeURIComponent(raw).trim(); } catch { return raw.trim(); }
+}
+
+function toRegisteredSystem(systemId: string): RegisteredSystem | null {
+  const system = getSystem(systemId);
+  return system ? { systemId: system.systemId, name: system.name, status: system.status } : null;
+}
+
+function authenticateExecutionPlane(req: IncomingMessage): ExecutionPlaneConnectionAuth | null {
+  if (executionPlaneAuthByRequest.has(req)) return executionPlaneAuthByRequest.get(req) ?? null;
+  const auth = resolveExecutionPlaneAuth({
+    systemId: executionHeader(req.headers['x-aeos-system-id']),
+    systemToken: executionHeader(req.headers['x-aeos-system-token']),
+    legacyToken: executionHeader(req.headers['x-aeos-execution-token']),
+  }, {
+    rootSecret: EXECUTION_PLANE_TOKEN,
+    verifySystemToken: (systemId, token) => verifySystemToken(EXECUTION_PLANE_TOKEN, systemId, token),
+    getSystem: toRegisteredSystem,
+    // 兼容期默认允许旧根令牌；设置 EXECUTION_LEGACY_ROOT_ENABLED=0 后只接受每系统令牌。
+    allowLegacyRoot: process.env.EXECUTION_LEGACY_ROOT_ENABLED !== '0',
+  });
+  executionPlaneAuthByRequest.set(req, auth);
+  return auth;
+}
+
+function executionRegistrationIdentity(
+  auth: ExecutionPlaneConnectionAuth,
+  reportedSource: unknown,
+): ExecutionRegistrationIdentity {
+  return resolveRegistrationIdentity(auth, reportedSource, {
+    findBySourceSystem: (sourceSystem) => {
+      const system = findSystemBySourceSystem(sourceSystem);
+      return system ? { systemId: system.systemId, name: system.name, status: system.status } : null;
+    },
+  });
+}
 const executionWss = new WebSocketServer({
   server: executionServer,
   path: '/execution-agent',
   maxPayload: 1024 * 1024,
-  verifyClient: (info: { req: IncomingMessage }) => {
-    if (!EXECUTION_PLANE_TOKEN) return false;
-    const token = info.req.headers['x-aeos-execution-token'];
-    return typeof token === 'string' && token === EXECUTION_PLANE_TOKEN;
-  },
+  verifyClient: (info: { req: IncomingMessage }) => Boolean(authenticateExecutionPlane(info.req)),
 });
 const executionWsAgent = new Map<WebSocket, string>(); // ws -> agentId（register 后建立）
 executionWss.on('connection', (ws, request) => {
+  const auth = executionPlaneAuthByRequest.get(request) ?? null;
+  if (!auth) {
+    ws.close(1008, 'Authentication required');
+    return;
+  }
   const peerAddress = request.socket.remoteAddress;
   ws.on('message', (raw) => {
     let msg: Record<string, unknown>;
@@ -2027,31 +3547,229 @@ executionWss.on('connection', (ws, request) => {
     const type = msg.type as string;
     try {
       if (type === 'register') {
-        const reply = executionPlane.onRegister(
-          {
-            agentId: msg.agentId,
-            name: msg.name,
-            version: msg.version,
-            capabilities: msg.capabilities,
-            sourceSystem: msg.sourceSystem,
-            local: isLoopbackExecutionPeer(peerAddress),
-          },
+        let identity: ExecutionRegistrationIdentity;
+        try {
+          identity = executionRegistrationIdentity(auth, msg.sourceSystem);
+        } catch (error) {
+          if (error instanceof ExecutionIdentityError) {
+            try {
+              appendEvidence({
+                kind: 'app_event',
+                actor_id: auth.systemId ? `execution-token:system:${auth.systemId}` : 'execution-token:legacy-root',
+                actor_type: 'system',
+                object_ref: 'hub://execution-agent/registration',
+                source_system: auth.systemId ?? 'legacy-root',
+                correlation_id: 'execution-register-rejected',
+                summary: 'execution agent registration rejected',
+                payload: {
+                  reason: error.code,
+                  authMode: auth.mode,
+                  authenticatedSystemId: auth.systemId,
+                  reportedSource: typeof msg.sourceSystem === 'string' ? msg.sourceSystem.slice(0, 160) : null,
+                },
+              });
+            } catch {
+              // 审计失败不改变拒绝结果。
+            }
+            send(ws, { type: 'error', code: error.code, message: error.message });
+            return;
+          }
+          throw error;
+        }
+        const requestedAgentId = typeof msg.agentId === 'string' ? msg.agentId.trim() : '';
+        if (!isExecutionAgentAllowed(identity.systemId, requestedAgentId)) {
+          try {
+            appendEvidence({
+              kind: 'app_event',
+              actor_id: auth.systemId ? `execution-token:system:${auth.systemId}` : 'execution-token:legacy-root',
+              actor_type: 'system',
+              object_ref: 'hub://execution-agent/registration',
+              source_system: auth.systemId ?? identity.sourceSystem,
+              correlation_id: 'execution-register-rejected',
+              summary: 'execution agent registration rejected',
+              payload: {
+                reason: 'AGENT_NOT_ALLOWED',
+                authMode: auth.mode,
+                authenticatedSystemId: auth.systemId,
+                agentId: requestedAgentId.slice(0, 160),
+                reportedSource: typeof msg.sourceSystem === 'string' ? msg.sourceSystem.slice(0, 160) : null,
+              },
+            });
+          } catch {
+            // 审计失败不改变拒绝结果。
+          }
+          send(ws, { type: 'error', code: 'AGENT_NOT_ALLOWED', message: '该执行面 Agent 未在允许列表中，禁止注册' });
+          return;
+        }
+        // 注册时按授权表校验自报能力：enforce 下只登记已授权能力；全部未授权则拒绝注册。
+        const declaredCapabilities = Array.isArray(msg.capabilities) ? msg.capabilities : [];
+        let acceptedCapabilities = declaredCapabilities;
+        if (identity.systemId && declaredCapabilities.length) {
+          const declaredNames = declaredCapabilities
+            .map((capability) => capability && typeof capability === 'object' ? (capability as Record<string, unknown>).name : null)
+            .filter((name): name is string => typeof name === 'string' && Boolean(name.trim()));
+          const capabilityFilter = filterRegistrationCapabilities(loadExecutionAgentPermissions(), {
+            systemId: identity.systemId,
+            agentId: requestedAgentId,
+            tenantId: resolveTenantId(identity.systemId, listSystems()),
+            capabilities: declaredNames,
+          });
+          if (capabilityFilter.denied.length) {
+            console.warn(`[execution-plane] 注册能力未授权：${requestedAgentId} -> ${capabilityFilter.denied.join(', ')}（${capabilityFilter.enforcement}）`);
+          }
+          if (capabilityFilter.enforcement === 'enforce') {
+            if (!capabilityFilter.allowed.length) {
+              try {
+                appendEvidence({
+                  kind: 'app_event',
+                  actor_id: `execution-token:system:${identity.systemId}`,
+                  actor_type: 'system',
+                  object_ref: 'hub://execution-agent/registration',
+                  source_system: identity.systemId,
+                  correlation_id: 'execution-register-rejected',
+                  summary: 'execution agent registration rejected',
+                  payload: {
+                    reason: 'CAPABILITY_FORBIDDEN',
+                    agentId: requestedAgentId.slice(0, 160),
+                    denied: capabilityFilter.denied,
+                  },
+                });
+              } catch {
+                // 审计失败不改变拒绝结果。
+              }
+              send(ws, { type: 'error', code: 'CAPABILITY_FORBIDDEN', message: '该 Agent 声明的能力均未获授权，禁止注册' });
+              return;
+            }
+            acceptedCapabilities = declaredCapabilities.filter((capability) => {
+              const name = capability && typeof capability === 'object' ? (capability as Record<string, unknown>).name : null;
+              return typeof name === 'string' && capabilityFilter.allowed.includes(name);
+            });
+            if (capabilityFilter.denied.length) {
+              try {
+                appendEvidence({
+                  kind: 'app_event',
+                  actor_id: `execution-token:system:${identity.systemId}`,
+                  actor_type: 'system',
+                  object_ref: 'hub://execution-agent/registration',
+                  source_system: identity.systemId,
+                  correlation_id: 'execution-register-filtered',
+                  summary: 'execution agent capabilities filtered by permission table',
+                  payload: {
+                    agentId: requestedAgentId.slice(0, 160),
+                    allowed: capabilityFilter.allowed,
+                    denied: capabilityFilter.denied,
+                  },
+                });
+              } catch {
+                // 审计失败不阻断注册。
+              }
+            }
+          }
+        }
+        const reply = executionPlane.onRegister({
+          agentId: msg.agentId,
+          name: msg.name,
+          version: msg.version,
+          capabilities: acceptedCapabilities,
+          sourceSystem: msg.sourceSystem,
+          local: isLoopbackExecutionPeer(peerAddress),
+          simulated: msg.simulated,
+          kind: msg.kind,
+          gatewayVersion: msg.gatewayVersion,
+        },
           (m) => send(ws, m),
+          identity,
         );
+        const registered = executionPlane.list().agents.find((agent) => agent.agentId === reply.agentId);
+        const gatewayEvidence = registered
+          ? gatewayRegistrationEvidence(registered, {
+            systemId: identity.systemId ?? registered.sourceSystem,
+            authMode: identity.authMode,
+          })
+          : null;
+        if (gatewayEvidence) {
+          try {
+            appendEvidence(gatewayEvidence);
+          } catch {
+            // 审计失败不阻断注册。
+          }
+        }
         executionWsAgent.set(ws, reply.agentId);
-        send(ws, { type: 'registered', ...reply });
+        send(ws, { type: 'registered', ...reply, authMode: identity.authMode });
+        if (identity.authMode === 'legacy-root') {
+          try {
+            appendEvidence({
+              kind: 'app_event',
+              actor_id: 'execution-token:legacy-root',
+              actor_type: 'system',
+              object_ref: `hub://execution-agent/${reply.agentId}`,
+              source_system: identity.systemId ?? identity.sourceSystem,
+              correlation_id: 'execution-register-legacy',
+              summary: 'legacy execution agent registered',
+              payload: {
+                agentId: reply.agentId,
+                authMode: identity.authMode,
+                reportedSource: typeof msg.sourceSystem === 'string' ? msg.sourceSystem.slice(0, 160) : null,
+                resolvedSystemId: identity.systemId,
+                unresolved: identity.legacyUnresolved,
+              },
+            });
+          } catch {
+            // 审计失败不影响注册。
+          }
+        }
       } else if (type === 'heartbeat') {
         const agentId = executionWsAgent.get(ws);
         if (agentId) executionPlane.onHeartbeat(agentId, { status: msg.status, currentRunId: msg.currentRunId });
       } else if (type === 'run_update') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunUpdate(agentId, { runId: msg.runId, state: msg.state });
+        if (agentId) {
+          executionPlane.onRunUpdate(agentId, { runId: msg.runId, state: msg.state });
+          if (msg.state === 'recalled' && typeof msg.runId === 'string' && msg.runId.trim()) {
+            writeRequestService.onRunFinished(msg.runId.trim(), { state: 'failed', error: { code: 'RECALLED', message: '写操作已召回' } });
+          }
+        }
       } else if (type === 'run_complete') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result });
+        if (agentId) {
+          executionPlane.onRunComplete(agentId, { runId: msg.runId, result: msg.result, usage: msg.usage });
+          if (typeof msg.runId === 'string' && msg.runId.trim()) {
+            writeRequestService.onRunFinished(msg.runId.trim(), { state: 'completed', result: msg.result });
+            const writeRecord = writeRequestStore.load().find((item) => item.runId === msg.runId);
+            if (writeRecord) notifyWriteRecord(writeRecord);
+          }
+        }
       } else if (type === 'run_failed') {
         const agentId = executionWsAgent.get(ws);
-        if (agentId) executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });
+        if (agentId) {
+          executionPlane.onRunFailed(agentId, { runId: msg.runId, error: msg.error });
+          if (typeof msg.runId === 'string' && msg.runId.trim()) {
+            writeRequestService.onRunFinished(msg.runId.trim(), {
+              state: 'failed',
+              error: isRecord(msg.error) && typeof msg.error.code === 'string' && typeof msg.error.message === 'string'
+                ? { code: msg.error.code, message: msg.error.message }
+                : null,
+            });
+            const writeRecord = writeRequestStore.load().find((item) => item.runId === msg.runId);
+            if (writeRecord) notifyWriteRecord(writeRecord);
+          }
+        }
+      } else if (type === 'run_event') {
+        // 执行步骤回执：校验归属、去重、限额后落库；失败只回 ack，不影响任务本身。
+        const agentId = executionWsAgent.get(ws);
+        if (!agentId) {
+          send(ws, { type: 'run_event_ack', runId: msg.runId ?? null, eventId: msg.eventId ?? null, accepted: false, reason: 'AGENT_NOT_REGISTERED' });
+          return;
+        }
+        const runId = typeof msg.runId === 'string' ? msg.runId.trim() : '';
+        const run = runId ? executionPlane.getRun(runId) : undefined;
+        const agentRecord = executionPlane.list().agents.find((agent) => agent.agentId === agentId);
+        const outcome = executionEventStore.record(msg, {
+          agentId,
+          sourceSystem: agentRecord?.sourceSystem ?? 'unknown',
+          runAgentId: run?.agentId ?? null,
+        });
+        send(ws, { type: 'run_event_ack', runId: msg.runId ?? null, eventId: msg.eventId ?? null, ...outcome });
       }
     } catch (error) {
       send(ws, { type: 'error', message: (error as Error).message });
@@ -2090,8 +3808,11 @@ wss.on('connection', (ws, request) => {
   allSockets.add(ws);
   viewOf.set(ws, null);
   actorOf.set(ws, actorId);
+  const actorContext = authGateway.actorFromCookie(request.headers.cookie);
+  if (actorContext) actorContextOf.set(ws, actorContext);
   sessionSockets.attach(sessionId, ws);
   send(ws, { type: 'hello', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), modelOptions: buildModelOptions(), dataDir, evidenceFile });
+  // 待确认写操作只推当前查看的会话（客户端收到 hello 后会立即发 view），避免把别的会话摘要发给每个连接。
 
   ws.on('message', async (raw) => {
     let msg: Record<string, unknown>;
@@ -2103,6 +3824,8 @@ wss.on('connection', (ws, request) => {
         viewOf.set(ws, convId || null);
         const conv = convId ? getConv(convId) : null;
         if (conv) send(ws, { type: 'conversation_transcript', convId, messages: await hydrateConversationTranscript(conv) });
+        const pendingWrite = pendingWriteByConversation.get(convId);
+        if (pendingWrite) send(ws, { type: 'write_pending', convId, requestId: pendingWrite.id, summary: pendingWrite.summary });
       }
       else if (type === 'new') {
         const requestedScope = msg.scope === 'agent' ? 'agent' : 'hub';
@@ -2163,32 +3886,36 @@ wss.on('connection', (ws, request) => {
           const agentId = msg.agentId.trim();
           const harborAgent = loadHarbor().agents.find((item) => item.id === agentId);
           const member = loadAgentSquad().members.find((item) => item.harborAgentId === agentId);
-          const isAllowed = taskType === 'order'
-            ? /订单交付风险/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-orders'
+          const domainId = taskType === 'production' ? 'production' : taskType === 'quality' ? 'quality' : taskType === 'kitting' ? 'kitting' : 'order';
+          const roleAllowed = taskType === 'order'
+            ? /订单交付风险/.test(harborAgent?.role || '')
             : taskType === 'kitting'
-              ? /物料齐套|缺料|供给/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-material-kitting'
+              ? /物料齐套|缺料|供给/.test(harborAgent?.role || '')
               : taskType === 'production'
-                ? /生产进度|生产关联|报工产能|生产证据/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-production'
-                : /质量异常|质量追溯|质量证据|责任部门|质量协同/.test(harborAgent?.role || '') && member?.squadId === 'business-squad-quality';
-          if (!harborAgent || !member || !isAllowed) {
+                ? /生产进度|生产关联|报工产能|生产证据/.test(harborAgent?.role || '')
+                : /质量异常|质量追溯|质量证据|责任部门|质量协同/.test(harborAgent?.role || '');
+          // 归属轴：服务业务域是派单的权威依据；小队外壳退役后不再依赖 squadId。
+          const domainAllowed = Boolean(harborAgent?.domainIds?.includes(domainId));
+          if (!harborAgent || !roleAllowed || !domainAllowed) {
             const message = taskType === 'kitting'
-              ? '只能向已绑定物料齐套 Agent 小队的专业 Agent 派发该任务'
+              ? '只能向服务域包含物料齐套的专业 Agent 派发该任务'
               : taskType === 'production'
-                ? '只能向已绑定生产协同 Agent 小队的专业 Agent 派发该任务'
+                ? '只能向服务域包含生产协同的专业 Agent 派发该任务'
                 : taskType === 'quality'
-                ? '只能向已绑定异常与质量 Agent 小队的专业 Agent 派发该任务'
-                : '只能向已加入订单 Agent 小队的风险交付 Agent 派发该任务';
+                ? '只能向服务域包含异常与质量的专业 Agent 派发该任务'
+                : '只能向服务域包含订单交付的风险交付 Agent 派发该任务';
             send(ws, { type: 'error', convId, message });
             return;
           }
-          dispatch = { agentId: member.id, orderNo, evidenceRef, taskType };
+          dispatch = { agentId: member?.id ?? harborAgent.id, orderNo, evidenceRef, taskType };
+          const dispatchedAgentId = dispatch.agentId;
           // A specialist dispatch is never a central conversation. Persist its
           // ownership defensively even if an older client created it as hub.
           const dispatchedConversation = getConv(convId);
-          if (dispatchedConversation && (dispatchedConversation.scope !== 'agent' || dispatchedConversation.agentId !== member.id)) {
+          if (dispatchedConversation && (dispatchedConversation.scope !== 'agent' || dispatchedConversation.agentId !== dispatchedAgentId)) {
             dispatchedConversation.scope = 'agent';
-            dispatchedConversation.agentId = member.id;
-            dispatchedConversation.squadId = member.squadId ?? undefined;
+            dispatchedConversation.agentId = dispatchedAgentId;
+            dispatchedConversation.squadId = undefined;
             touch(dispatchedConversation);
             broadcast({ type: 'conversations_updated', conversations: [...convCache.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
           }
@@ -2196,7 +3923,7 @@ wss.on('connection', (ws, request) => {
             : taskType === 'quality' ? 'quality issue task dispatched to specialist agent'
               : taskType === 'production' ? 'production coordination task dispatched to specialist agent'
               : 'order risk dispatched to risk delivery agent';
-          appendEvidence({ kind: 'app_event', summary, payload: { orderNo, evidenceRef, taskType, harborAgentId: agentId, squadAgentId: member.id } });
+          appendEvidence({ kind: 'app_event', summary, payload: { orderNo, evidenceRef, taskType, harborAgentId: agentId, squadAgentId: dispatchedAgentId } });
         }
         const requestedChoice = (msg.choice ?? {}) as { provider?: string; model?: string };
         const existingConversation = getConv(convId);
@@ -2208,7 +3935,21 @@ wss.on('connection', (ws, request) => {
           : requestedChoice;
         appendConversationMessage(convId, { id: `user-${randomUUID()}`, role: 'user', text });
         pushConv(convId, { type: 'user_message', convId, text });
+        const chatActor = actorContextOf.get(ws);
+        if (chatActor) conversationActorId.set(convId, chatActor.actorId);
+        if (await routeHubExecutionTurn(convId, text, chatActor)) return;
         await startTurn(convId, text, choice, dispatch);
+      } else if (type === 'write_decision') {
+        const convId = String(msg.conversationId ?? '').trim();
+        const requestId = String(msg.requestId ?? '').trim();
+        const actor = actorContextOf.get(ws);
+        const pending = convId ? pendingWriteByConversation.get(convId) : undefined;
+        const decision = msg.decision === 'reject' ? 'reject' : msg.decision === 'approve' ? 'approve' : null;
+        if (!actor || !convId || !requestId || !pending || pending.id !== requestId || !decision) {
+          send(ws, { type: 'error', convId: convId || null, message: '写操作确认已失效，请重新发起。' });
+          return;
+        }
+        decidePendingWrite(convId, pending, actor, decision);
       } else if (type === 'interrupt') {
         const convId = String(msg.conversationId ?? '');
         const conv = getConv(convId);
@@ -2260,8 +4001,6 @@ wss.on('connection', (ws, request) => {
         const hadThread = conv.threadId;
         convCache.delete(convId);
         if (hadThread) convByThread.delete(hadThread);
-        // 会话删除后清掉用量累计基线，避免同名新线程误记全量增量。
-        if (hadThread) { try { usageStore.forgetThread(hadThread); } catch { /* best-effort */ } }
         saveConversations([...convCache.values()]);
         appendEvidence({ kind: 'app_event', summary: 'conversation deleted', thread_id: hadThread ?? undefined, payload: { conversationId: convId, title: conv.title } });
         // 同步删除 codex 线程（best-effort，失败仅记录）
@@ -2294,6 +4033,30 @@ wss.on('connection', (ws, request) => {
         send(ws, { type: 'config_saved', message: '配置已保存，codex 运行时已用新配置重启' });
         broadcast({ type: 'model_options', modelOptions: buildModelOptions() });
         broadcast({ type: 'info', convId: null, text: '模型配置已更新' });
+      } else if (type === 'dispatch_policy:get') {
+        send(ws, { type: 'dispatch_policy:data', payload: loadConclusionDispatchPolicy() });
+      } else if (type === 'dispatch_policy:save') {
+        const policy = saveConclusionDispatchPolicy(msg.payload);
+        try {
+          appendEvidence({
+            kind: 'app_event',
+            actor_id: 'hub-config',
+            actor_type: 'system',
+            object_ref: 'hub://config/conclusion-dispatch',
+            source_system: 'aeos-hub',
+            correlation_id: 'conclusion-dispatch-policy-updated',
+            summary: 'conclusion dispatch policy updated',
+            payload: {
+              enabled: policy.enabled,
+              dispatchDomains: policy.dispatchDomains,
+              maxItemsPerAnalysis: policy.maxItemsPerAnalysis,
+              revision: policy.revision,
+            },
+          });
+        } catch {
+          // 审计失败不影响保存。
+        }
+        send(ws, { type: 'dispatch_policy_saved', message: '分发配置已保存（立即生效）', payload: policy });
       } else {
         send(ws, { type: 'error', convId: null, message: `不支持的 WebSocket 消息类型：${type || '缺失 type'}` });
       }
@@ -2307,6 +4070,7 @@ wss.on('connection', (ws, request) => {
     allSockets.delete(ws);
     viewOf.delete(ws);
     actorOf.delete(ws);
+    actorContextOf.delete(ws);
   });
 });
 

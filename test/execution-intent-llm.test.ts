@@ -19,7 +19,14 @@ const MOCK_INTENT: QueryIntent = {
   ],
 };
 
-const deps = { apiKey: 'test-key', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', intent: MOCK_INTENT };
+const deps = {
+  apiKey: 'test-key',
+  baseUrl: 'https://api.deepseek.com/v1',
+  model: 'deepseek-chat',
+  intent: MOCK_INTENT,
+  // 测试中不等待真实退避时间。
+  retry: { baseDelayMs: 0 },
+};
 
 test('query 意图：LLM 返回合法路径与参数', async () => {
   const fetchImpl = fetchReturning('{"kind":"query","path":"/external/orders/list","params":{"keyword":"HJY20260903-261"}}');
@@ -98,4 +105,101 @@ test('分页越界被钳制到安全范围', async () => {
   const fetchImpl = fetchReturning('{"kind":"query","path":"/external/suppliers/list","params":{"page":99999,"page_size":999}}');
   const result = await parseIntentWithLLM('查供应商', { ...deps, fetchImpl });
   assert.deepEqual(result, { kind: 'query', path: '/external/suppliers/list', params: { page: 1000, page_size: 100 } });
+});
+
+test('effort 透传为 reasoning_effort，并回传缓存命中 Token', async () => {
+  let sentBody: Record<string, unknown> = {};
+  const fetchImpl = (async (_url: unknown, init?: { body?: string }) => {
+    sentBody = JSON.parse(init?.body ?? '{}');
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"kind":"query","path":"/external/orders/list","params":{}}' } }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 60 },
+    }), { status: 200 });
+  }) as unknown as typeof fetch;
+  let usage: { tokensIn: number; cachedTokens: number; tokensOut: number } | undefined;
+  await parseIntentWithLLM('查订单', {
+    ...deps,
+    effort: 'low',
+    fetchImpl,
+    onUsage: (value) => { usage = value; },
+  });
+  assert.equal(sentBody.reasoning_effort, 'low');
+  assert.deepEqual(usage && { tokensIn: usage.tokensIn, cachedTokens: usage.cachedTokens, tokensOut: usage.tokensOut },
+    { tokensIn: 100, cachedTokens: 60, tokensOut: 20 });
+});
+
+test('未指定 effort 时不发送 reasoning_effort', async () => {
+  let sentBody: Record<string, unknown> = {};
+  const fetchImpl = (async (_url: unknown, init?: { body?: string }) => {
+    sentBody = JSON.parse(init?.body ?? '{}');
+    return new Response(JSON.stringify(deepSeekResponse('{"kind":"query","path":"/external/orders/list","params":{}}')), { status: 200 });
+  }) as unknown as typeof fetch;
+  await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal('reasoning_effort' in sentBody, false);
+});
+
+test('401 不重试，返回结构化鉴权错误', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => { calls += 1; return new Response('', { status: 401 }); }) as unknown as typeof fetch;
+  const result = await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal(calls, 1);
+  const failure = result as { code?: string; retryable?: boolean; attempts?: number };
+  assert.equal(failure.code, 'MODEL_AUTH');
+  assert.equal(failure.retryable, false);
+  assert.equal(failure.attempts, 1);
+});
+
+test('429 自动重试后成功', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    if (calls === 1) return new Response('', { status: 429 });
+    return new Response(JSON.stringify(deepSeekResponse('{"kind":"query","path":"/external/orders/list","params":{}}')), { status: 200 });
+  }) as unknown as typeof fetch;
+  const result = await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal(calls, 2);
+  assert.equal((result as { kind?: string }).kind, 'query');
+});
+
+test('5xx 重试耗尽后返回 MODEL_SERVER，共调用 3 次', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => { calls += 1; return new Response('', { status: 503 }); }) as unknown as typeof fetch;
+  const result = await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal(calls, 3);
+  const failure = result as { code?: string; attempts?: number };
+  assert.equal(failure.code, 'MODEL_SERVER');
+  assert.equal(failure.attempts, 3);
+});
+
+test('超时只重试 1 次', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    const error = new Error('aborted');
+    error.name = 'AbortError';
+    throw error;
+  }) as unknown as typeof fetch;
+  const result = await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal(calls, 2);
+  assert.equal((result as { code?: string }).code, 'MODEL_TIMEOUT');
+});
+
+test('网络错误重试后成功', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    if (calls === 1) throw new Error('ECONNRESET');
+    return new Response(JSON.stringify(deepSeekResponse('{"kind":"query","path":"/external/orders/list","params":{}}')), { status: 200 });
+  }) as unknown as typeof fetch;
+  const result = await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal(calls, 2);
+  assert.equal((result as { kind?: string }).kind, 'query');
+});
+
+test('400 不重试', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => { calls += 1; return new Response('', { status: 400 }); }) as unknown as typeof fetch;
+  const result = await parseIntentWithLLM('查订单', { ...deps, fetchImpl });
+  assert.equal(calls, 1);
+  assert.equal((result as { code?: string }).code, 'MODEL_BAD_REQUEST');
 });
