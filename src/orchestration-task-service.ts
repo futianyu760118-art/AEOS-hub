@@ -62,7 +62,14 @@ function canonicalSystemId(systemId: string): string {
   const value = systemId.trim();
   const system = listSystems().find((candidate) => candidate.systemId === value
     || candidate.sourceSystemAliases.includes(value));
-  return system?.systemId ?? value;
+  if (system) return system.systemId;
+  const builtInAliases: Record<string, string> = {
+    '公司中控平台': 'control-platform',
+    '公司中控平台（本机演示）': 'control-platform',
+    '公司中控平台（UAT）': 'control-platform',
+    '恒剑PLM': 'hengjian-plm',
+  };
+  return builtInAliases[value] ?? value;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

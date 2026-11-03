@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
@@ -39,15 +39,25 @@ import { McpReadinessError, waitForReadOnlyMcpTools } from './mcp-readiness.ts';
 import { loadMcpRegistry } from './mcp-registry.ts';
 import {
   loadHarbor,
+  saveHarbor,
   createHarborAgent,
   deleteHarborAgent,
   transitionHarborAgentLifecycle,
   createHarborRuntime,
   createHarborProject,
   recordHarborRuntimeVerification,
+  updateHarborAgentM01Registration,
   HarborStoreNotFoundError,
+  type HarborAgent,
   type HarborRuntimeVerificationStatus,
 } from './harbor-store.ts';
+import {
+  isM01AgentDispatchable,
+  loadM01AgentBridgeConfig,
+  registerAgentWithM01,
+  type M01AgentRegistrationResult,
+} from './m01-agent-bridge.ts';
+import { createPersonLifecycleService } from './person-lifecycle.ts';
 import {
   addAgentSquadActivity,
   addAgentSquadMemory,
@@ -58,6 +68,16 @@ import {
   sendAgentSquadMessage,
   setAgentSquadProject,
 } from './agent-squad-store.ts';
+import {
+  loadModelRegistry,
+  createModel,
+  updateModel,
+  deleteModel,
+  findModelPricing,
+  ModelRegistryNotFoundError,
+  ModelRegistryError,
+} from './model-registry.ts';
+import { UsageStore } from './usage-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
 import {
   BrowserSessionAuth,
@@ -200,6 +220,7 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // this policy boundary.  Chat-agent calls are constrained by the same registry
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
+const usageStore = new UsageStore({ pricingResolver: findModelPricing });
 const g0DecisionStore = new G0DecisionRegisterStore();
 const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence, resolveRuntime: (runtimeId) => {
   if (runtimeId === CODEX_RUNTIME_ID) return codexRuntime;
@@ -508,6 +529,62 @@ try {
   console.warn('[usage-ledger] 用量台账初始化失败:', (error as Error).message);
 }
 
+const m01AgentBridge = loadM01AgentBridgeConfig();
+const personLifecycleService = createPersonLifecycleService(join(root, 'data', 'person-lifecycle.json'));
+
+function applyHubPersonLifecycle(event: import('./person-lifecycle.ts').PersonLifecycleEvent): Record<string, unknown> {
+  const harbor = loadHarbor();
+  const result = personLifecycleService.apply(event, {
+    agents: harbor.agents,
+    ownerPersonId: m01AgentBridge.config?.ownerPersonId || process.env.AEOS_AGENT_OWNER_PERSON_ID || null,
+  });
+  const rawStatus = String(result.status || 'failed').toLowerCase();
+  const status = rawStatus === 'stale' ? 'skipped' : rawStatus === 'scheduled' ? 'pending_confirmation' : ['synced', 'skipped', 'pending_confirmation', 'retrying', 'failed'].includes(rawStatus) ? rawStatus : 'failed';
+  result.status = status;
+  result.target_system = 'M13_AEOS_HUB';
+  result.event_id = result.event_id || event.event_id;
+  result.changed = result.changed || { closed_items: Array.isArray(result.closed_items) ? result.closed_items.length : 0 };
+  result.received_at = result.received_at || new Date().toISOString();
+  const revoked = new Set(Array.isArray(result.revoked_agent_ids) ? result.revoked_agent_ids.map(String) : []);
+  if (revoked.size) {
+    for (const agent of harbor.agents) {
+      if (!revoked.has(agent.id)) continue;
+      agent.status = 'offline';
+      agent.m01Registration = {
+        ...agent.m01Registration,
+        state: 'revoked',
+        lastAttemptAt: new Date().toISOString(),
+        lastSuccessAt: null,
+        reason: '人员已离职，已停止 Agent 执行身份',
+      };
+    }
+    saveHarbor(harbor);
+  }
+  return result;
+}
+
+function registrationUpdate(result: M01AgentRegistrationResult, now = new Date().toISOString()) {
+  return {
+    state: result.state,
+    m01AgentId: result.state === 'not_configured' ? null : result.agentId,
+    eventId: result.eventId,
+    idempotencyKey: result.idempotencyKey ?? result.eventId,
+    tenantId: m01AgentBridge.config?.tenantId ?? null,
+    requestedScopes: result.requestedScopes,
+    effectiveScopes: result.effectiveScopes,
+    clampedScopes: result.clampedScopes,
+    lastAttemptAt: result.state === 'not_configured' ? null : now,
+    lastSuccessAt: result.state === 'active' ? now : null,
+    reason: result.reason,
+  };
+}
+
+async function registerHarborAgentToM01(agent: HarborAgent): Promise<{ item: HarborAgent; registration: M01AgentRegistrationResult }> {
+  const registration = await registerAgentWithM01(agent, m01AgentBridge.config);
+  const item = updateHarborAgentM01Registration(agent.id, registrationUpdate(registration));
+  return { item, registration };
+}
+
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
 // 会话发起人：把 Hub 内对话/分析产生的用量归属到具体 M01 用户（“按调用方”视图）。
@@ -538,7 +615,7 @@ const actorContextOf = new Map<WebSocket, { actorId: string; roles: string[]; te
 const pendingGuard = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 const pendingApprovals = new Map<string, RuntimeApprovalRequest>();
 const allSockets = new Set<WebSocket>();
-type AgentDispatchContext = { agentId: string; orderNo: string; evidenceRef: string; taskType: 'order' | 'kitting' | 'quality' | 'production' };
+type AgentDispatchContext = { agentId: string; harborAgentId: string; orderNo: string; evidenceRef: string; taskType: 'order' | 'kitting' | 'quality' | 'production' };
 type AgentRunCapture = AgentDispatchContext & { text: string; persisted: boolean };
 const agentRunCaptures = new Map<string, AgentRunCapture>();
 // Agent message deltas are transient; retain only a bounded final transcript
@@ -1179,6 +1256,19 @@ async function startTurnUnsafe(convId: string, text: string, choice?: { provider
 
 /** Serialize the complete setup/start lifecycle for one conversation. */
 async function startTurn(convId: string, text: string, choice?: { provider?: string; model?: string }, dispatch?: AgentDispatchContext): Promise<void> {
+  const conversation = getConv(convId);
+  const squadMember = conversation?.scope === 'agent' && conversation.agentId
+    ? loadAgentSquad().members.find((item) => item.id === conversation.agentId)
+    : undefined;
+  const executionAgentId = dispatch?.harborAgentId
+    || dispatch?.agentId
+    || squadMember?.harborAgentId
+    || (conversation?.scope === 'agent' ? conversation.agentId : undefined)
+    || 'agent-aeos-hub';
+  const executionAgent = loadHarbor().agents.find((item) => item.id === executionAgentId);
+  if (!executionAgent || !isM01AgentDispatchable(executionAgent)) {
+    throw new Error(`Agent ${executionAgent?.name || executionAgentId} 尚未完成 M01 注册或缺少 task:execute 权限，当前不可执行`);
+  }
   if (turnStartLocks.has(convId)) {
     throw new Error('该对话正在启动中，请稍候');
   }
@@ -2088,6 +2178,26 @@ async function verifyHarborRuntime(
   return { runtime: persisted, health, statusCode: verificationHttpStatus(verificationStatus(String(health.status))) };
 }
 
+async function readRawRequestBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let failed = false;
+    req.on('data', (chunk: Buffer) => {
+      if (failed) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        failed = true;
+        reject(new Error('请求体不能超过大小上限'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => { if (!failed) resolve(Buffer.concat(chunks)); });
+    req.on('error', (error) => { if (!failed) reject(error); });
+  });
+}
+
 async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Record<string, unknown>> {
   const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
   if (!contentType.includes('application/json')) throw new Error('请求 Content-Type 必须为 application/json');
@@ -2120,6 +2230,22 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promis
   });
 }
 
+function verifyPersonLifecycleSignature(req: IncomingMessage, raw: Buffer): boolean {
+  const keyId = String(req.headers['x-aeos-key-id'] ?? '');
+  const timestamp = String(req.headers['x-aeos-timestamp'] ?? '');
+  const supplied = String(req.headers['x-aeos-signature'] ?? '').replace(/^sha256=/, '');
+  const expectedKeyId = process.env.AEOS_PERSON_LIFECYCLE_KEY_ID || 'm01-kernel';
+  const secret = process.env.AEOS_PERSON_LIFECYCLE_SECRET || process.env.AEOS_HUB_PERSON_LIFECYCLE_SECRET || '';
+  const timestampMs = Number(timestamp);
+  if (!keyId || keyId !== expectedKeyId || !timestamp || !Number.isInteger(timestampMs) || !supplied || !secret) return false;
+  const maxSkew = Number(process.env.AEOS_PERSON_LIFECYCLE_MAX_SKEW_SECONDS || 300) * 1000;
+  if (Math.abs(Date.now() - timestampMs) > maxSkew) return false;
+  const expected = createHmac('sha256', secret).update(timestamp).update('.').update(raw).digest('hex');
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(supplied);
+  return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -2148,6 +2274,19 @@ const server = createServer(async (req, res) => {
     sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
+  if (url.pathname === '/internal/aeos/person-lifecycle') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const raw = await readRawRequestBody(req);
+      if (!verifyPersonLifecycleSignature(req, raw)) { sendJson(res, 401, { error: '人员同步签名无效' }); return; }
+      const parsed = JSON.parse(raw.toString('utf8')) as import('./person-lifecycle.ts').PersonLifecycleEvent;
+      const result = applyHubPersonLifecycle(parsed);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/auth/login') {
     if (AUTH_MODE === 'm01') {
       const outcome = await authGateway.login(req.method, req.headers.cookie, url.searchParams.get('retry') === '1');
@@ -2674,6 +2813,80 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+
+  const m01AgentRegisterMatch = url.pathname.match(/^\/api\/harbor\/agents\/([^/]+)\/m01\/register$/);
+  if (m01AgentRegisterMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const id = decodeURIComponent(m01AgentRegisterMatch[1] ?? '').trim();
+      const agent = loadHarbor().agents.find((item) => item.id === id);
+      if (!agent) throw new HarborStoreNotFoundError(`Agent 不存在: ${id}`);
+      const result = await registerHarborAgentToM01(agent);
+      const status = result.registration.state === 'active' ? 200 : 503;
+      sendJson(res, status, result);
+    } catch (error) {
+      const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
+      sendJson(res, status, { error: (error as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/api/models') {
+    if (req.method === 'GET') {
+      try { sendJson(res, 200, loadModelRegistry()); } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
+      return;
+    }
+    if (req.method === 'POST') {
+      try {
+        const item = createModel(await readJsonBody(req));
+        appendEvidence({ kind: 'app_event', summary: 'model registered', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 201, { item });
+      } catch (error) {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+      return;
+    }
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+  const modelMatch = url.pathname.match(/^\/api\/models\/([^/]+)$/);
+  if (modelMatch) {
+    let modelId = '';
+    try { modelId = decodeURIComponent(modelMatch[1] ?? '').trim(); } catch { modelId = ''; }
+    if (!modelId) { sendJson(res, 400, { error: '模型 id 无效' }); return; }
+    try {
+      if (req.method === 'PATCH') {
+        const item = updateModel(modelId, await readJsonBody(req));
+        appendEvidence({ kind: 'app_event', summary: 'model updated', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 200, { item });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        const item = deleteModel(modelId);
+        appendEvidence({ kind: 'app_event', summary: 'model removed', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 200, { item });
+        return;
+      }
+      sendJson(res, 405, { error: 'method not allowed' });
+    } catch (error) {
+      const status = error instanceof ModelRegistryNotFoundError ? 404 : error instanceof ModelRegistryError ? 400 : 500;
+      sendJson(res, status, { error: (error as Error).message, code: errorCode(error) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/usage/summary') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const summary = usageStore.summary({
+        from: url.searchParams.get('from') ?? undefined,
+        to: url.searchParams.get('to') ?? undefined,
+        agentId: url.searchParams.get('agentId') ?? undefined,
+        recentLimit: url.searchParams.get('recentLimit') ? Number(url.searchParams.get('recentLimit')) : undefined,
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/agent-squad') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
@@ -3079,8 +3292,14 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const input = await readJsonBody(req);
-      const item = creator(input);
-      sendJson(res, 201, { item });
+      let item = creator(input);
+      let registration: M01AgentRegistrationResult | undefined;
+      if (url.pathname === '/api/harbor/agents') {
+        const synced = await registerHarborAgentToM01(item as HarborAgent);
+        item = synced.item;
+        registration = synced.registration;
+      }
+      sendJson(res, 201, registration ? { item, registration } : { item });
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
@@ -3907,8 +4126,8 @@ wss.on('connection', (ws, request) => {
             send(ws, { type: 'error', convId, message });
             return;
           }
-          dispatch = { agentId: member?.id ?? harborAgent.id, orderNo, evidenceRef, taskType };
-          const dispatchedAgentId = dispatch.agentId;
+          dispatch = { agentId: member.id, harborAgentId: harborAgent.id, orderNo, evidenceRef, taskType };
+          const dispatchedAgentId = member.id;
           // A specialist dispatch is never a central conversation. Persist its
           // ownership defensively even if an older client created it as hub.
           const dispatchedConversation = getConv(convId);
