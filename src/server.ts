@@ -6,7 +6,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
@@ -31,6 +31,7 @@ import { McpAccessGateway } from './mcp-access-gateway.ts';
 import { loadMcpRegistry } from './mcp-registry.ts';
 import {
   loadHarbor,
+  saveHarbor,
   createHarborAgent,
   deleteHarborAgent,
   createHarborRuntime,
@@ -47,6 +48,7 @@ import {
   registerAgentWithM01,
   type M01AgentRegistrationResult,
 } from './m01-agent-bridge.ts';
+import { createPersonLifecycleService } from './person-lifecycle.ts';
 import {
   addAgentSquadActivity,
   addAgentSquadMemory,
@@ -138,6 +140,31 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
 const m01AgentBridge = loadM01AgentBridgeConfig();
+const personLifecycleService = createPersonLifecycleService(join(root, 'data', 'person-lifecycle.json'));
+
+function applyHubPersonLifecycle(event: import('./person-lifecycle.ts').PersonLifecycleEvent): Record<string, unknown> {
+  const harbor = loadHarbor();
+  const result = personLifecycleService.apply(event, {
+    agents: harbor.agents,
+    ownerPersonId: m01AgentBridge.config?.ownerPersonId || process.env.AEOS_AGENT_OWNER_PERSON_ID || null,
+  });
+  const revoked = new Set(Array.isArray(result.revoked_agent_ids) ? result.revoked_agent_ids.map(String) : []);
+  if (revoked.size) {
+    for (const agent of harbor.agents) {
+      if (!revoked.has(agent.id)) continue;
+      agent.status = 'offline';
+      agent.m01Registration = {
+        ...agent.m01Registration,
+        state: 'revoked',
+        lastAttemptAt: new Date().toISOString(),
+        lastSuccessAt: null,
+        reason: '人员已离职，已停止 Agent 执行身份',
+      };
+    }
+    saveHarbor(harbor);
+  }
+  return result;
+}
 
 function registrationUpdate(result: M01AgentRegistrationResult, now = new Date().toISOString()) {
   return {
@@ -1227,6 +1254,26 @@ async function verifyHarborRuntime(
   return { runtime: persisted, health, statusCode: verificationHttpStatus(verificationStatus(String(health.status))) };
 }
 
+async function readRawRequestBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let failed = false;
+    req.on('data', (chunk: Buffer) => {
+      if (failed) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        failed = true;
+        reject(new Error('请求体不能超过大小上限'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => { if (!failed) resolve(Buffer.concat(chunks)); });
+    req.on('error', (error) => { if (!failed) reject(error); });
+  });
+}
+
 async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Record<string, unknown>> {
   const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
   if (!contentType.includes('application/json')) throw new Error('请求 Content-Type 必须为 application/json');
@@ -1259,6 +1306,22 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promis
   });
 }
 
+function verifyPersonLifecycleSignature(req: IncomingMessage, raw: Buffer): boolean {
+  const keyId = String(req.headers['x-aeos-key-id'] ?? '');
+  const timestamp = String(req.headers['x-aeos-timestamp'] ?? '');
+  const supplied = String(req.headers['x-aeos-signature'] ?? '').replace(/^sha256=/, '');
+  const expectedKeyId = process.env.AEOS_PERSON_LIFECYCLE_KEY_ID || 'm01-kernel';
+  const secret = process.env.AEOS_PERSON_LIFECYCLE_SECRET || process.env.AEOS_HUB_PERSON_LIFECYCLE_SECRET || '';
+  const timestampMs = Number(timestamp);
+  if (!keyId || keyId !== expectedKeyId || !timestamp || !Number.isInteger(timestampMs) || !supplied || !secret) return false;
+  const maxSkew = Number(process.env.AEOS_PERSON_LIFECYCLE_MAX_SKEW_SECONDS || 300) * 1000;
+  if (Math.abs(Date.now() - timestampMs) > maxSkew) return false;
+  const expected = createHmac('sha256', secret).update(timestamp).update('.').update(raw).digest('hex');
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(supplied);
+  return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -1287,6 +1350,19 @@ const server = createServer(async (req, res) => {
     sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
+  if (url.pathname === '/internal/aeos/person-lifecycle') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const raw = await readRawRequestBody(req);
+      if (!verifyPersonLifecycleSignature(req, raw)) { sendJson(res, 401, { error: '人员同步签名无效' }); return; }
+      const parsed = JSON.parse(raw.toString('utf8')) as import('./person-lifecycle.ts').PersonLifecycleEvent;
+      const result = applyHubPersonLifecycle(parsed);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/auth/login') {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
