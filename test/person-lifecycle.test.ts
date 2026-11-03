@@ -33,7 +33,7 @@ test('离职撤销 Agent 负责人和执行身份，保留智能体历史', () =
     const result = service.apply(event(), { agents });
     assert.deepEqual(result.revoked_agent_ids, ['agent-1']);
     assert.deepEqual(result.closed_items, ['agent_owner', 'execution_identity']);
-    assert.equal(service.snapshot().people['person-1'].access, 'revoked');
+    assert.equal(service.snapshot().people['tenant-hengjian:person-1'].access, 'revoked');
     assert.equal(service.snapshot().checklists.length, 2);
   } finally { cleanup(); }
 });
@@ -45,8 +45,8 @@ test('复职只恢复基础访问，Agent 关系仍需管理员确认', () => {
     const result = service.apply(event({ id: 'evt-reinstate-1', type: 'person.reinstated', revision: 2 }), { agents });
     assert.equal(result.status, 'pending_confirmation');
     assert.deepEqual(result.pending_confirmation, { permissions: true, agents: true });
-    assert.equal(service.snapshot().people['person-1'].access, 'basic_pending_confirmation');
-    assert.equal(service.snapshot().people['person-1'].agent_ids.length, 1);
+    assert.equal(service.snapshot().people['tenant-hengjian:person-1'].access, 'basic_pending_confirmation');
+    assert.equal(service.snapshot().people['tenant-hengjian:person-1'].agent_ids.length, 1);
   } finally { cleanup(); }
 });
 

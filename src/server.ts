@@ -148,6 +148,13 @@ function applyHubPersonLifecycle(event: import('./person-lifecycle.ts').PersonLi
     agents: harbor.agents,
     ownerPersonId: m01AgentBridge.config?.ownerPersonId || process.env.AEOS_AGENT_OWNER_PERSON_ID || null,
   });
+  const rawStatus = String(result.status || 'failed').toLowerCase();
+  const status = rawStatus === 'stale' ? 'skipped' : rawStatus === 'scheduled' ? 'pending_confirmation' : ['synced', 'skipped', 'pending_confirmation', 'retrying', 'failed'].includes(rawStatus) ? rawStatus : 'failed';
+  result.status = status;
+  result.target_system = 'M13_AEOS_HUB';
+  result.event_id = result.event_id || event.event_id;
+  result.changed = result.changed || { closed_items: Array.isArray(result.closed_items) ? result.closed_items.length : 0 };
+  result.received_at = result.received_at || new Date().toISOString();
   const revoked = new Set(Array.isArray(result.revoked_agent_ids) ? result.revoked_agent_ids.map(String) : []);
   if (revoked.size) {
     for (const agent of harbor.agents) {

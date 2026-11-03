@@ -19,6 +19,7 @@ export type PersonLifecycleEvent = {
 
 export type LifecycleAgent = {
   id: string;
+  tenant_id?: string;
   status?: string;
   owner_person_id?: string | null;
   execution_identity_person_id?: string | null;
@@ -36,6 +37,10 @@ const defaultState = (): LifecycleState => ({ version: 1, events: [], people: {}
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function personKey(event: Pick<PersonLifecycleEvent, 'tenant_id' | 'object_id'>): string {
+  return `${event.tenant_id}:${event.object_id}`;
 }
 
 export class PersonLifecycleService {
@@ -64,6 +69,10 @@ export class PersonLifecycleService {
   }
 
   apply(event: PersonLifecycleEvent, options: { agents?: LifecycleAgent[]; ownerPersonId?: string | null } = {}): Record<string, unknown> {
+    const configuredTenant = String(process.env.AEOS_TENANT_ID || '').trim();
+    if (configuredTenant && event.tenant_id !== configuredTenant) {
+      return { event_id: event.event_id, target_system: 'M13_AEOS_HUB', status: 'failed', changed: {}, received_at: new Date().toISOString(), reason: 'tenant_mismatch' };
+    }
     const existing = this.state.events.find((item) => item.idempotency_key === event.idempotency_key);
     if (existing) return { ...clone(existing.result), duplicate: true };
     const current = this.state.events
@@ -73,7 +82,8 @@ export class PersonLifecycleService {
       return { status: 'stale', state: 'stale', event_id: event.event_id, duplicate: false };
     }
 
-    const person = this.state.people[event.object_id] ?? {
+    const key = personKey(event);
+    const person = this.state.people[key] ?? {
       tenant_id: event.tenant_id, status: 'active', access: 'active', agent_ids: [],
     };
     const result: Record<string, unknown> = {
@@ -114,7 +124,7 @@ export class PersonLifecycleService {
       throw new Error(`不支持的人员状态事件：${event.event_type}`);
     }
 
-    this.state.people[event.object_id] = person;
+    this.state.people[key] = person;
     const record = { ...event, result } as LifecycleState['events'][number];
     this.state.events.push(record);
     this.persist();
