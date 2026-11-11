@@ -136,6 +136,7 @@ import {
 import { BorrowOrderApi } from './borrow-order-api.ts';
 import { CapabilityInvocationApi } from './capability-invocation-api.ts';
 import { M13AgentChatApi, M13_AGENT_CHAT_PATH_PREFIX, type M13ChatRuntimePort } from './m13-agent-chat-api.ts';
+import { M13AgentApplicationApi, M13_AGENT_APPLICATION_PATH_PREFIX } from './m13-agent-application-api.ts';
 import { CapabilityInvocationError, CapabilityInvocationService } from './capability-invocation-service.ts';
 import { CapabilityQueryTemplateError } from './capability-query-template.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
@@ -402,6 +403,10 @@ const m13ChatRuntime: M13ChatRuntimePort = {
 const m13AgentChatApi = new M13AgentChatApi({
   apiKey: process.env.M13_AGENT_CHAT_API_KEY ?? '',
   runtime: m13ChatRuntime,
+  appendEvidence,
+});
+const m13AgentApplicationApi = new M13AgentApplicationApi({
+  apiKey: process.env.M13_AGENT_CHAT_API_KEY ?? '',
   appendEvidence,
 });
 const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
@@ -2387,6 +2392,34 @@ const server = createServer(async (req, res) => {
         query: url.searchParams,
       });
       if (!outcome) { sendJson(res, 404, { error: 'm13 agent endpoint not found' }); }
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 500, { code: 500, message: 'M13 内部错误', extra: { detail: (error as Error).message } });
+    }
+    return;
+  }
+  // ---------- M13 Agent 自助申请（提交/查询开放；台账列表需密钥） ----------
+  if (url.pathname.startsWith(M13_AGENT_APPLICATION_PATH_PREFIX)) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 64 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = await m13AgentApplicationApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        authorization: headerValue('authorization'),
+        apiKey: headerValue('x-api-key'),
+        body,
+        bodyParseFailed,
+        clientAddress: req.socket.remoteAddress ?? '',
+      });
+      if (!outcome) { sendJson(res, 404, { error: 'm13 application endpoint not found' }); }
       else sendJson(res, outcome.status, outcome.body);
     } catch (error) {
       sendJson(res, 500, { code: 500, message: 'M13 内部错误', extra: { detail: (error as Error).message } });
