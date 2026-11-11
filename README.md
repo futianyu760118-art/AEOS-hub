@@ -44,6 +44,7 @@ AEOS Hub 是 [AEOS（Autonomous Enterprise Operating System）](../../) 的第�
 - **Evidence 证据链**：每个 turn 的完整 item 流（消息、推理、工具调用、审批决策、结果）结构化落库，页面内可查看最近条目
 - **AI 港湾**：Agent / Runtime / Project 三类资源的登记与绑定，Runtime 健康验证走真实探针（`POST /api/harbor/runtimes/:id/verify`），不伪装成已连通
 - **任务与项目协同**：任务看板/列表、搜索筛选、普通协同任务、项目列表、项目内看板与自动派生进度；项目和任务写入均由服务端身份、租户范围与 Evidence 审计保护
+- **M01 Agent 治理**：AI 港湾 Agent 创建后自动通过签名 M13 事件注册到 M01；只有 M01 返回 `active` 的 Agent 才可执行。已有中枢 Agent 可在 AI 港湾点击“接入 M01”，或运行 `npm run register:m01-hub-agent` 重试。
 - **局域网共享**：`--lan` 一键开放给同事，服务端账号密码验证；关闭浏览器或重启服务后需要重新登录
 - **完全隔离**：与机器上其他 Codex 安装（桌面版等）零接触，详见下文
 
@@ -89,18 +90,13 @@ CODEX_HOME="$PWD/.codex-home" ./node_modules/.bin/codex login
 # 3) 离线自检（不消耗模型额度）
 npm run test:mcp        # MCP 链路
 npm test                # Harbor 存储 + Runtime 健康 + MCP 全量测试
-npm run check:types     # TypeScript 类型检查
-npm run check:contracts # OpenAPI / Task JSON Schema 契约检查
 
-# 3.1) 可选：M02/EDP 证据投递（未配置时 Evidence 保留在本地试点缓冲）
-#      set M02_ENDPOINT=https://m02.example/events
-#      set M02_TOKEN=<由 M02 管理员通过安全渠道提供>
+# 4) 设置 Web 登录账号和密码（与 M03 保持一致；不要提交或发送密码）
+#    PowerShell 示例：$env:AEOS_LOGIN_USERNAME = 'admin'
+#    PowerShell 示例：$env:AEOS_LOGIN_PASSWORD = '请替换为强密码'
 
-# 4) 启动 M01 身份栈（开发/测试）
-#    首次配置见 docs/auth/m01-local-startup.md；Windows 演示可用 scripts/start-m01-demo.ps1
-
-# 5) 启动 Web 控制台（M01 模式；Hub 不再支持 local-dev 账号密码登录）
-npm run web             # → http://127.0.0.1:8787   使用 M01/Keycloak 统一登录
+# 5) 启动 Web 控制台（默认仅本机）
+npm run web             # → http://127.0.0.1:8787   账号来自 AEOS_LOGIN_USERNAME；密码来自 AEOS_LOGIN_PASSWORD
 
 # 6) 局域网共享（同事仍需输入账号密码）
 npm run web:lan         # 首次不通请在管理员 PowerShell 放行端口：
@@ -117,7 +113,7 @@ npm run demo -- --auto-approve                  # 放行所有审批（仅演示
 
 ## M01 身份接入（本地开发/测试）
 
-Hub 当前只支持 M01 统一登录，不再接受 local-dev 固定账号密码。请使用独立的 [`deploy/m01/`](deploy/m01/) 栈：它会在 Docker 后续启动时自动创建私有 PostgreSQL 16 命名卷，并通过仅绑定本机回环地址的 Caddy HTTPS 入口暴露 Keycloak。完整的首次启动、开发 CA 信任、Realm/Client 手工配置、Hub M01 变量、轮换与验收要求见 [`docs/auth/m01-local-startup.md`](docs/auth/m01-local-startup.md) 和 [`docs/auth/m01-integration.md`](docs/auth/m01-integration.md)。网关守护、日常检查、故障处理与回滚见 [`docs/ops-runbook.md`](docs/ops-runbook.md)。
+现有根目录 Compose 保持 Hub 的 local-dev 用途；它不会因为复制 `.env` 而自动切换到 M01。需要 Keycloak 身份接入时，使用独立的 [`deploy/m01/`](deploy/m01/) 栈：它会在 Docker 后续启动时自动创建私有 PostgreSQL 16 命名卷，并通过仅绑定本机回环地址的 Caddy HTTPS 入口暴露 Keycloak。完整的首次启动、开发 CA 信任、Realm/Client 手工配置、Hub M01 变量、轮换与验收要求见 [`docs/auth/m01-integration.md`](docs/auth/m01-integration.md)。网关守护、日常检查、故障处理与回滚见 [`docs/ops-runbook.md`](docs/ops-runbook.md)。
 
 该栈仅用于开发/测试，使用 `start-dev` 和本地内部 CA；不要把它作为生产部署。M01 模式必须显式设置 `AEOS_M01_ALLOWED_ROLES`（例如 `manager,analyst`）：仅顶层 token roles 非空且与该列表相交的身份才会创建 Hub 会话。这是进入 Hub 的最小准入，不代替后续 Hub Guard 的细粒度业务授权。M01 client secret、Keycloak 管理员密码、PostgreSQL 密码与复制出的 `deploy/m01/.env` 都不得提交。部署环境同时兼容读取 `NODE_ENV` 与遗留 `AEOS_ENV`：仅两者都缺失，或每个已提供值均为 `development`、`test`、`local` 时才可使用 local-dev 或 loopback HTTP callback；任一值为生产/UAT/staging、空白、未知，或一方本地一方严格时，都必须使用 M01、`AEOS_COOKIE_SECURE=1` 与 HTTPS callback。生产必须使用正式 TLS/反向代理、受管密钥及独立备份恢复流程。
 
@@ -127,7 +123,7 @@ Hub 当前只支持 M01 统一登录，不再接受 local-dev 固定账号密码
 
 | 区域 | 说明 |
 |---|---|
-| 登录 / 引导 | M01/Keycloak 统一登录；登录会话只在当前浏览器会话有效，关闭浏览器或重启服务后需重新登录 |
+| 登录 / 引导 | 服务端验证部署环境中的账号与密码（本次与 M03 统一为 `admin` / M03 密码）；登录会话只在当前浏览器会话有效，关闭浏览器或重启服务后需重新登录 |
 | 管理者首页 | 目标条、经营指标、System Registry、Runtime 状态 |
 | 中枢 Agent | 会话列表（归档/删除/恢复）、流式对话、工具卡片、Guard 授权条、模型下拉 |
 | Attention 中心 | 需人关注事项（示例数据），一键生成决策材料 |
@@ -135,6 +131,30 @@ Hub 当前只支持 M01 统一登录，不再接受 local-dev 固定账号密码
 | Evidence 中心 | evidence.jsonl 事件流浏览与刷新 |
 | 系统配置 | 模型提供商 / 模型 / 密钥 / MCP 清单 / 证据速览 |
 | AI 港湾 | Agent、Runtime、Project 登记与绑定；**模型中心**（能力 + 单价登记）；**费用用量**（按智能体 / 模型 / 月份的 token 与费用报表）；Runtime 真实健康验证 |
+
+### M01 Agent 对接
+
+在 HUB 的部署环境中配置以下变量（密钥只放在未提交的 `.env`）：
+
+```dotenv
+M01_AGENT_REGISTRATION_URL=https://m01.internal.example/integrations/m13
+M01_AGENT_REGISTRATION_SECRET=<与 M01 的 M13_WEBHOOK_SECRET 相同>
+M01_AGENT_TENANT_ID=TENANT_A
+M01_AGENT_OWNER_PERSON_ID=P_OWNER
+M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP=false
+```
+
+本地 M01 DEMO 若只提供 HTTP，必须显式设置 `M01_AGENT_REGISTRATION_ALLOW_INSECURE_HTTP=true`；生产环境禁止使用 HTTP，必须配置 HTTPS。
+
+启动 HUB 后，进入“AI 港湾 → 智能体目录”，对 `AEOS 中枢 Agent` 点击“接入 M01”。新建智能体会自动执行同样的注册；网络错误或 M01 拒绝时会保留记录但显示“同步中/已拒绝”，可点击“重试 M01”。
+
+命令行方式只针对中枢 Agent：
+
+```bash
+npm run register:m01-hub-agent
+```
+
+注册 event_id 按租户、Agent ID 和事件类型稳定生成，重复执行不会在 M01 产生重复 Agent。M01 返回的 scope 收敛结果是最终生效范围，HUB 不会恢复被剔除的 scope。
 
 **模型切换说明**：新会话在创建线程时按所选模型生效；已有会话的模型版本保持不变（切换时提示新建会话，保证运行记录可追溯）。codex 0.153 起自定义提供商仅支持 `wire_api = "responses"`（DeepSeek 官方已支持 `/v1/responses`）。
 
@@ -149,7 +169,7 @@ hub/
 ├── public/                   # Web 前端（index.html / app.js / style.css，无构建）
 ├── src/
 │   ├── server.ts             # Web 控制台服务端（静态页 + WebSocket + Harbor API + 登录网关）
-│   ├── web-auth.ts           # M01 会话、浏览器 Cookie 与准入角色校验
+│   ├── web-auth.ts           # demo 账号、密码校验与浏览器会话 Cookie
 │   ├── codex-client.ts       # app-server JSON-RPC 客户端（initialize / thread / turn / 事件流 / 审批应答）
 │   ├── runtime/              # Runtime 中立契约 + Codex Adapter + Supervisor + 健康测试
 │   ├── harbor-store.ts       # AI 港湾快照、关联校验、锁、备份、Runtime 验证状态
@@ -184,7 +204,7 @@ hub/
 
 - 历史消息回放未实现：重启后会话保留在列表，完整消息流可在 Evidence 中追溯；
 - 同一会话同时只执行一个 Run，可点「停止」中断；
-- Hub 仅支持 M01 统一登录；缺少 `AEOS_AUTH_MODE=m01`、issuer/client/secret 或准入角色时启动会 fail-closed；
+- 登录账号由 `AEOS_LOGIN_USERNAME` / `AEOS_LOGIN_PASSWORD` 配置；本次部署与 M03 统一，未接企业身份源；
 - Windows 下 `.cmd` 启动器会触发 Node 的 `shell option` 弃用告警，不影响功能。
 
 ---

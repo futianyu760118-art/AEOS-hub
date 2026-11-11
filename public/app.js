@@ -226,7 +226,6 @@ let selectedInboxItemId = null;
 let editingDailyQuestionConfig = null;
 let latestDailyQuestionConflictConfig = null;
 const dailyQuestionGenerationKeys = new Set();
-const dailyQuestionGenerationWarnings = new Set();
 let loadedDailyQuestionAudienceKey = '';
 let dashboardLoading = false;
 let dashboardSnapshot = null;
@@ -320,18 +319,10 @@ const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects', 'bo
 const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本' };
 const SPLIT = '::';
 
-const LEGACY_ICON_ALIASES = { 'coin-off': 'coins' };
 function refreshIcons(root = document) {
   localizeDynamicCopy(root);
   applyDataStyles(root);
   if (!window.lucide?.createIcons) return;
-  // Older cached markup may still reference icons that were removed from the
-  // bundled Lucide set. Map known legacy names instead of logging errors.
-  root.querySelectorAll?.('[data-lucide]').forEach((node) => {
-    const name = node.getAttribute('data-lucide');
-    const alias = name ? LEGACY_ICON_ALIASES[name] : undefined;
-    if (alias) node.setAttribute('data-lucide', alias);
-  });
   window.lucide.createIcons({ root, attrs: { 'aria-hidden': 'true' } });
 }
 
@@ -3358,10 +3349,6 @@ async function ensureDailyQuestionGeneration(options = {}) {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    if (payload.warning && !options.silent && !dailyQuestionGenerationWarnings.has(key)) {
-      dailyQuestionGenerationWarnings.add(key);
-      toast(payload.warning, true);
-    }
     if (!dailyQuestionConfig || Number(payload.config?.revision) >= Number(dailyQuestionConfig.revision)) {
       dailyQuestionConfig = payload.config;
       setDailyQuestionRotation(0);
@@ -5327,7 +5314,7 @@ export function buildG0DecisionRequest(fields) {
   if (firstScenario) patch.firstScenario = firstScenario;
   if (businessOwnerActorId) patch.businessOwnerActorId = businessOwnerActorId;
   if (verifyActorId) patch.verifyActorId = verifyActorId;
-  if (businessOwnerActorId && verifyActorId && businessOwnerActorId === verifyActorId) throw new Error('首个闭环场景的 Owner 与 Verify 人必须不同。');
+  if (businessOwnerActorId && verifyActorId && businessOwnerActorId === verifyActorId) throw new Error('订单交付风险的 Owner 与 Verify 人必须不同。');
   if (demoTenantId || organizationScope) {
     if (!demoTenantId || !organizationScope) throw new Error('请同时填写试点租户范围与组织范围。');
     patch.scope = { demoTenantId, organizationScope };
@@ -5482,7 +5469,7 @@ async function submitOnboardingG0(event) {
   }
   try {
     const request = buildG0DecisionRequest({
-      firstScenario: String($('#ob-g0-first-scenario')?.value || 'order_delivery_risk'),
+      firstScenario: 'order_delivery_risk',
       businessOwnerActorId: businessOwner,
       verifyActorId: verify,
       demoTenantId: tenantId,
@@ -5977,7 +5964,7 @@ function g0TrimmedValue(field) { return String(field?.value || '').trim(); }
 function collectG0DecisionRequest() {
   const businessOwnerActorId = g0TrimmedValue(els.g0BusinessOwner);
   return buildG0DecisionRequest({
-    firstScenario: g0TrimmedValue(els.g0FirstScenario) || 'order_delivery_risk',
+    firstScenario: 'order_delivery_risk',
     businessOwnerActorId,
     verifyActorId: g0TrimmedValue(els.g0VerifyActor),
     demoTenantId: g0TrimmedValue(els.g0DemoTenant),
@@ -6053,11 +6040,7 @@ async function saveG0DecisionView(event) {
 async function taskRequest(path, method = 'GET', body) {
   const response = await fetch(path, {
     method,
-    headers: {
-      accept: 'application/json',
-      ...(body ? { 'content-type': 'application/json' } : {}),
-      ...(method !== 'GET' ? { 'idempotency-key': crypto.randomUUID() } : {}),
-    },
+    headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json().catch(() => ({}));
@@ -6400,9 +6383,6 @@ function renderTaskCenter() {
       capabilities.canStart ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
       capabilities.canSupplementEvidence ? `<button class="btn ghost compact" type="button" data-task-action="evidence" data-task-id="${esc(task.taskId)}"><i data-lucide="paperclip"></i>补充证据</button>` : '',
       capabilities.canSubmitPendingResult ? `<button class="btn secondary compact" type="button" data-task-action="result" data-task-id="${esc(task.taskId)}"><i data-lucide="file-check-2"></i>登记待核验结果</button>` : '',
-      capabilities.canEscalate ? `<button class="btn ghost compact" type="button" data-task-action="escalate" data-task-id="${esc(task.taskId)}"><i data-lucide="arrow-up-circle"></i>升级处理</button>` : '',
-      capabilities.canRemind ? `<button class="btn ghost compact" type="button" data-task-action="remind" data-task-id="${esc(task.taskId)}"><i data-lucide="bell"></i>催办</button>` : '',
-      capabilities.canWithdraw ? `<button class="btn ghost compact danger" type="button" data-task-action="withdraw" data-task-id="${esc(task.taskId)}"><i data-lucide="undo-2"></i>撤回任务</button>` : '',
       capabilities.canVerify ? `<button class="btn primary compact" type="button" data-task-action="verify" data-task-id="${esc(task.taskId)}"><i data-lucide="badge-check"></i>业务核验</button>` : '',
       capabilities.canDelete ? `<button class="btn ghost compact danger" type="button" data-task-action="delete" data-task-id="${esc(task.taskId)}"><i data-lucide="trash-2"></i>删除</button>` : '',
     ].filter(Boolean).join('');
@@ -6572,16 +6552,12 @@ async function performTaskAction(taskId, action) {
     if (!window.confirm('确认运行该任务分派的 Agent？运行期间会等待结果。')) return;
     toast('Agent 运行中，请稍候…');
     try {
-      const result = await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`, 'POST', {});
+      await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`, 'POST', {});
       taskDetails.delete(taskId);
       taskAgentCandidates.delete(taskId);
       projectTaskDetails.clear();
       await loadTasks({ silent: true });
-      if (result?.code === 'AGENT_INELIGIBLE' || result?.task?.status === 'AWAITING_DECISION') {
-        toast('Agent 当前不可用或结果置信度不足，任务已升级人工决策。', true);
-      } else {
-        toast('Agent 运行完成，结果已回写任务');
-      }
+      toast('Agent 运行完成，结果已回写任务');
     } catch (error) {
       const message = String(error?.message || '未知错误');
       if (message.includes('已有待核验或已核验结果')) {
@@ -6637,14 +6613,6 @@ async function performTaskAction(taskId, action) {
     const nextAction = window.prompt('明确下一步动作：', '由业务负责人确认处理优先级与时限。');
     if (!nextAction?.trim()) return;
     path += '/escalations'; body = { reason, nextAction };
-  } else if (action === 'remind') {
-    const reason = window.prompt('催办说明：', '请尽快处理并反馈当前进展。');
-    if (!reason?.trim()) return;
-    path += '/reminders'; body = { reason };
-  } else if (action === 'withdraw') {
-    const reason = window.prompt('撤回原因：', '任务不再需要继续处理。');
-    if (!reason?.trim()) return;
-    path += '/withdrawals'; body = { reason };
   } else if (action === 'result') {
     const resultType = window.prompt('结果类型：', 'risk_analysis');
     if (!resultType?.trim()) return;
@@ -7185,6 +7153,17 @@ function harborStatus(kind, value) {
   return maps[kind]?.[value] || [String(value || '未知'), 'neutral'];
 }
 
+function m01RegistrationStatus(value) {
+  const maps = {
+    not_configured: ['未接入 M01', 'neutral'],
+    pending: ['同步中', 'warn'],
+    active: ['M01 已接入', 'ok'],
+    rejected: ['M01 已拒绝', 'danger'],
+    revoked: ['M01 已撤销', 'danger'],
+  };
+  return maps[value] || ['M01 未知', 'neutral'];
+}
+
 function statusPill(kind, value) {
   const [label, tone] = harborStatus(kind, value);
   return `<b class="status-pill ${tone}">${esc(label)}</b>`;
@@ -7325,12 +7304,12 @@ function catalogAgentUsageDetail(agent, system) {
         ? '<div class="catalog-usage-note"><b>不把缺失当 0</b>：这些执行没有上报 Token，成本显示为 ¥0.00 并明确标注“未上报”；系统级助手用量汇总在系统节点，不摊到本 Agent。</div>'
         : '<div class="catalog-usage-note"><b>无模型调用</b>：该 Agent 只有查询接口，不产生模型 Token；执行次数来自 run_complete，成本为 ¥0.00 属正常。</div>') : ''}
     <div class="catalog-system-usage-line"><span>所属系统累计</span><strong>${system.usage ? `¥${formatUsageCost(system.usage.cost)} · ${formatTokenCount(system.usage.tokensIn + system.usage.tokensOut)} tokens · ${system.usage.events} 次` : '暂无记账'}</strong><span class="spacer"></span><button class="btn ghost compact" type="button" data-open-usage-detail>查看分析成本</button></div>
-  </div>`;
-}
-
 function renderCatalogAgentRow(agent, system) {
   const runtime = agent.runtimeId ? (harbor.runtimes || []).find((item) => item.id === agent.runtimeId) : null;
   const linkedMember = (squad.members || []).find((member) => member.harborAgentId === agent.id);
+  const m01 = agent.m01Registration || { state: 'not_configured', reason: '等待接入 M01' };
+  const [m01Label, m01Tone] = m01RegistrationStatus(m01.state);
+  const m01Action = m01.state === 'active' ? '' : `<button class="btn secondary compact harbor-m01-register" type="button" data-harbor-m01-register-id="${esc(agent.id)}">${m01.state === 'not_configured' ? '接入 M01' : '重试 M01'}</button>`;
   const isRoot = agent.type === 'hub';
   const serviceDomains = (agent.domainIds || []).map((id) => CATALOG_DOMAIN_LABELS[id] || id);
   const environment = agent.execution
@@ -7346,8 +7325,8 @@ function renderCatalogAgentRow(agent, system) {
     <span class="catalog-agent-skills">${harborTags(agent.skills, '尚未配置 Skill')}</span>
     <span class="catalog-agent-runtime"><strong>${esc(environment)}</strong><small>${esc(agent.modelProfileId || '未指定模型档')} · ${esc(updated)}</small></span>
     ${catalogUsageHtml(agent.usage, agent)}
-    <span class="catalog-agent-status">${statusPill('agent', agent.status)}</span>
-    <span class="catalog-agent-actions">${linkedMember
+    <span class="catalog-agent-status">${statusPill('agent', agent.status)}<small class="harbor-m01-state"><b class="status-pill ${m01Tone}">${esc(m01Label)}</b>${m01.reason ? `<span title="${esc(m01.reason)}">${esc(m01.reason)}</span>` : ''}</small></span>
+    <span class="catalog-agent-actions">${m01Action}${linkedMember
       ? `<button class="btn secondary compact harbor-open-conversation" type="button" data-harbor-open-conversation="${esc(agent.id)}"><i data-lucide="messages-square"></i>进入会话</button>`
       : ''}${agent.registeredInHarbor !== false && !isRoot
       ? `<button class="icon-btn harbor-delete-agent" type="button" title="删除 ${esc(agent.name)}" aria-label="删除 ${esc(agent.name)}" data-harbor-delete-agent-id="${esc(agent.id)}"><i data-lucide="trash-2"></i></button>`
@@ -7769,8 +7748,12 @@ async function submitHarborForm(event) {
     const completedType = harborModalType;
     closeHarborModal();
     await loadHarbor({ silent: true });
-    showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects' }[completedType]);
-    toast(labels[completedType]);
+    showHarborTab({ agent: 'agents', runtime: 'runtimes', project: 'projects', model: 'models' }[completedType]);
+    if (completedType === 'agent') {
+      toast(data.registration?.state === 'active' ? '智能体已创建并接入 M01' : '智能体已创建，等待 M01 接入');
+    } else {
+      toast(labels[completedType]);
+    }
   } catch (error) {
     els.harborFormStatus.textContent = error.message;
     els.harborFormSubmit.disabled = false;
@@ -7836,6 +7819,29 @@ async function deleteHarborAgent(agentId) {
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   await loadHarbor({ silent: true });
   toast(`已删除智能体“${agent.name}”`);
+}
+
+async function registerHarborAgentWithM01(agentId, button) {
+  const agent = (harbor.agents || []).find((item) => item.id === agentId);
+  if (!agent || button?.disabled) return;
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`/api/harbor/agents/${encodeURIComponent(agentId)}/m01/register`, {
+      method: 'POST', headers: { accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (data.item) {
+      const index = (harbor.agents || []).findIndex((item) => item.id === agentId);
+      if (index >= 0) harbor.agents[index] = data.item;
+      renderHarbor();
+    }
+    if (!response.ok) throw new Error(data.registration?.reason || data.error || `HTTP ${response.status}`);
+    toast(`智能体“${agent.name}”已接入 M01`);
+  } catch (error) {
+    toast(`接入 M01 失败：${error.message}`, true);
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+  }
 }
 
 function appendLocalUser(text) {
@@ -8491,6 +8497,11 @@ els.harborAgentList.addEventListener('click', async (event) => {
   const conversationButton = event.target.closest('[data-harbor-open-conversation]');
   if (conversationButton) {
     openHarborAgentConversationSpace(conversationButton.dataset.harborOpenConversation);
+    return;
+  }
+  const m01RegisterButton = event.target.closest('[data-harbor-m01-register-id]');
+  if (m01RegisterButton) {
+    await registerHarborAgentWithM01(m01RegisterButton.dataset.harborM01RegisterId, m01RegisterButton);
     return;
   }
   const deleteButton = event.target.closest('[data-harbor-delete-agent-id]');

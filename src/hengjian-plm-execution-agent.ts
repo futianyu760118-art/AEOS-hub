@@ -1,6 +1,6 @@
 // 把恒剑 PLM 真实执行面的只读 Agent 镜像登记到港湾目录。
 // 只补登记档案与 Runtime，不改变执行面连接、不向执行面派单。
-import { HarborSnapshotSchema, type HarborSnapshot } from './harbor-store.ts';
+import { HarborSnapshotSchema, defaultHarborM01Registration, type HarborSnapshot } from './harbor-store.ts';
 
 export interface PlmExecutionAgentDefinition {
   executionAgentId: string;
@@ -86,6 +86,7 @@ export function ensureHengjianPlmExecutionAgent(
       externalAgentId: definition.executionAgentId,
       parentAgentId: 'agent-aeos-hub',
       hierarchyLevel: 'L1',
+      m01Registration: defaultHarborM01Registration(),
       registration: {
         code: definition.registrationCode,
         type: 'master',

@@ -7,13 +7,12 @@ import { execFile } from 'node:child_process';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
 import { codexHome, configFile, readConfig, saveModelConfig, listEnvKeys, setEnvKey, loadModelPresets, saveModelPresets, ensureConfigFile } from './hub-config.ts';
 import { appendEvidence, evidenceFile, readRecentEvidence, evidenceHealth } from './evidence.ts';
-import { flushM02Outbox, m02OutboxHealth } from './m02-outbox.ts';
 import { appendAuthenticationAuditEvidence } from './authentication-audit.ts';
 import { collectMcpPages, payloadOf } from './mcp-pagination.ts';
 import { dashboardReadPlan, loadDashboardReadLimits } from './dashboard-read-plan.ts';
@@ -33,8 +32,6 @@ import { AttentionSearchRequestSchema, searchLiveDashboard } from './attention-s
 import { operatingCenter } from './operating-center.ts';
 import { taskCenter } from './task-center.ts';
 import { TaskApi } from './task-api.ts';
-import { IdempotencyStore } from './idempotency-store.ts';
-import { canManageHub, evidenceActorScope, isAgentSquadManagementRoute, isExecutionManagementRoute, isHarborManagementRoute } from './management-authorization.ts';
 import { G0DecisionApi } from './g0-decision-api.ts';
 import { G0DecisionRegisterStore } from './g0-decision-register.ts';
 import { McpAccessGateway } from './mcp-access-gateway.ts';
@@ -42,15 +39,25 @@ import { McpReadinessError, waitForReadOnlyMcpTools } from './mcp-readiness.ts';
 import { loadMcpRegistry } from './mcp-registry.ts';
 import {
   loadHarbor,
+  saveHarbor,
   createHarborAgent,
   deleteHarborAgent,
   transitionHarborAgentLifecycle,
   createHarborRuntime,
   createHarborProject,
   recordHarborRuntimeVerification,
+  updateHarborAgentM01Registration,
   HarborStoreNotFoundError,
+  type HarborAgent,
   type HarborRuntimeVerificationStatus,
 } from './harbor-store.ts';
+import {
+  isM01AgentDispatchable,
+  loadM01AgentBridgeConfig,
+  registerAgentWithM01,
+  type M01AgentRegistrationResult,
+} from './m01-agent-bridge.ts';
+import { createPersonLifecycleService } from './person-lifecycle.ts';
 import {
   addAgentSquadActivity,
   addAgentSquadMemory,
@@ -61,6 +68,16 @@ import {
   sendAgentSquadMessage,
   setAgentSquadProject,
 } from './agent-squad-store.ts';
+import {
+  loadModelRegistry,
+  createModel,
+  updateModel,
+  deleteModel,
+  findModelPricing,
+  ModelRegistryNotFoundError,
+  ModelRegistryError,
+} from './model-registry.ts';
+import { UsageStore } from './usage-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
 import {
   BrowserSessionAuth,
@@ -204,6 +221,7 @@ const runtimeSupervisor = new RuntimeSupervisor().register(codexRuntime);
 // this policy boundary.  Chat-agent calls are constrained by the same registry
 // through generated enabled_tools in Codex config.
 const mcpAccessGateway = new McpAccessGateway(codexRuntime, loadMcpRegistry());
+const usageStore = new UsageStore({ pricingResolver: findModelPricing });
 const g0DecisionStore = new G0DecisionRegisterStore();
 const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appendEvidence, resolveRuntime: (runtimeId) => {
   if (runtimeId === CODEX_RUNTIME_ID) return codexRuntime;
@@ -218,31 +236,6 @@ const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appe
   if (kind === 'reasoning') return capabilities.find((cap) => cap.name.startsWith('reason'))?.name;
   return undefined;
 } });
-// Overdue controlled/collaboration tasks are surfaced to the accountable role
-// without silently completing or reassigning them.
-const taskOverdueTimer = setInterval(() => {
-  try {
-    const overdue = taskCenter.escalateOverdue({ today: beijingDateString(), actor: 'system:hub-scheduler' });
-    for (const task of overdue) {
-      try {
-        appendEvidence({
-          kind: 'app_event', actor_id: 'system:hub-scheduler', actor_type: 'system', tenant_id: task.tenantId,
-          object_ref: task.businessObjectRef, correlation_id: task.correlationId,
-          evidence_refs: task.evidenceRefs, summary: 'task escalated as overdue',
-          payload: { taskId: task.taskId, status: task.status, dueAt: task.dueAt, nextAction: task.nextAction },
-        });
-      } catch { /* The task ledger already records the overdue escalation. */ }
-    }
-  } catch (error) {
-    console.warn('[tasks] 逾期扫描失败:', (error as Error).message);
-  }
-}, 60_000);
-taskOverdueTimer.unref();
-const m02FlushTimer = setInterval(() => {
-  flushM02Outbox().catch((error) => console.warn('[m02] Evidence 投递失败:', (error as Error).message));
-}, Math.max(5_000, Number(process.env.M02_FLUSH_INTERVAL_MS) || 30_000));
-m02FlushTimer.unref();
-const idempotencyStore = new IdempotencyStore();
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)
@@ -549,6 +542,62 @@ try {
   console.warn('[usage-ledger] 用量台账初始化失败:', (error as Error).message);
 }
 
+const m01AgentBridge = loadM01AgentBridgeConfig();
+const personLifecycleService = createPersonLifecycleService(join(root, 'data', 'person-lifecycle.json'));
+
+function applyHubPersonLifecycle(event: import('./person-lifecycle.ts').PersonLifecycleEvent): Record<string, unknown> {
+  const harbor = loadHarbor();
+  const result = personLifecycleService.apply(event, {
+    agents: harbor.agents,
+    ownerPersonId: m01AgentBridge.config?.ownerPersonId || process.env.AEOS_AGENT_OWNER_PERSON_ID || null,
+  });
+  const rawStatus = String(result.status || 'failed').toLowerCase();
+  const status = rawStatus === 'stale' ? 'skipped' : rawStatus === 'scheduled' ? 'pending_confirmation' : ['synced', 'skipped', 'pending_confirmation', 'retrying', 'failed'].includes(rawStatus) ? rawStatus : 'failed';
+  result.status = status;
+  result.target_system = 'M13_AEOS_HUB';
+  result.event_id = result.event_id || event.event_id;
+  result.changed = result.changed || { closed_items: Array.isArray(result.closed_items) ? result.closed_items.length : 0 };
+  result.received_at = result.received_at || new Date().toISOString();
+  const revoked = new Set(Array.isArray(result.revoked_agent_ids) ? result.revoked_agent_ids.map(String) : []);
+  if (revoked.size) {
+    for (const agent of harbor.agents) {
+      if (!revoked.has(agent.id)) continue;
+      agent.status = 'offline';
+      agent.m01Registration = {
+        ...agent.m01Registration,
+        state: 'revoked',
+        lastAttemptAt: new Date().toISOString(),
+        lastSuccessAt: null,
+        reason: '人员已离职，已停止 Agent 执行身份',
+      };
+    }
+    saveHarbor(harbor);
+  }
+  return result;
+}
+
+function registrationUpdate(result: M01AgentRegistrationResult, now = new Date().toISOString()) {
+  return {
+    state: result.state,
+    m01AgentId: result.state === 'not_configured' ? null : result.agentId,
+    eventId: result.eventId,
+    idempotencyKey: result.idempotencyKey ?? result.eventId,
+    tenantId: m01AgentBridge.config?.tenantId ?? null,
+    requestedScopes: result.requestedScopes,
+    effectiveScopes: result.effectiveScopes,
+    clampedScopes: result.clampedScopes,
+    lastAttemptAt: result.state === 'not_configured' ? null : now,
+    lastSuccessAt: result.state === 'active' ? now : null,
+    reason: result.reason,
+  };
+}
+
+async function registerHarborAgentToM01(agent: HarborAgent): Promise<{ item: HarborAgent; registration: M01AgentRegistrationResult }> {
+  const registration = await registerAgentWithM01(agent, m01AgentBridge.config);
+  const item = updateHarborAgentM01Registration(agent.id, registrationUpdate(registration));
+  return { item, registration };
+}
+
 // ---------- 状态 ----------
 const convCache = new Map<string, Conversation>(); // convId -> conv
 // 会话发起人：把 Hub 内对话/分析产生的用量归属到具体 M01 用户（“按调用方”视图）。
@@ -579,7 +628,7 @@ const actorContextOf = new Map<WebSocket, { actorId: string; roles: string[]; te
 const pendingGuard = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 const pendingApprovals = new Map<string, RuntimeApprovalRequest>();
 const allSockets = new Set<WebSocket>();
-type AgentDispatchContext = { agentId: string; orderNo: string; evidenceRef: string; taskType: 'order' | 'kitting' | 'quality' | 'production' };
+type AgentDispatchContext = { agentId: string; harborAgentId: string; orderNo: string; evidenceRef: string; taskType: 'order' | 'kitting' | 'quality' | 'production' };
 type AgentRunCapture = AgentDispatchContext & { text: string; persisted: boolean };
 const agentRunCaptures = new Map<string, AgentRunCapture>();
 // Agent message deltas are transient; retain only a bounded final transcript
@@ -1220,6 +1269,19 @@ async function startTurnUnsafe(convId: string, text: string, choice?: { provider
 
 /** Serialize the complete setup/start lifecycle for one conversation. */
 async function startTurn(convId: string, text: string, choice?: { provider?: string; model?: string }, dispatch?: AgentDispatchContext): Promise<void> {
+  const conversation = getConv(convId);
+  const squadMember = conversation?.scope === 'agent' && conversation.agentId
+    ? loadAgentSquad().members.find((item) => item.id === conversation.agentId)
+    : undefined;
+  const executionAgentId = dispatch?.harborAgentId
+    || dispatch?.agentId
+    || squadMember?.harborAgentId
+    || (conversation?.scope === 'agent' ? conversation.agentId : undefined)
+    || 'agent-aeos-hub';
+  const executionAgent = loadHarbor().agents.find((item) => item.id === executionAgentId);
+  if (!executionAgent || !isM01AgentDispatchable(executionAgent)) {
+    throw new Error(`Agent ${executionAgent?.name || executionAgentId} 尚未完成 M01 注册或缺少 task:execute 权限，当前不可执行`);
+  }
   if (turnStartLocks.has(convId)) {
     throw new Error('该对话正在启动中，请稍候');
   }
@@ -2129,6 +2191,26 @@ async function verifyHarborRuntime(
   return { runtime: persisted, health, statusCode: verificationHttpStatus(verificationStatus(String(health.status))) };
 }
 
+async function readRawRequestBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let failed = false;
+    req.on('data', (chunk: Buffer) => {
+      if (failed) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        failed = true;
+        reject(new Error('请求体不能超过大小上限'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => { if (!failed) resolve(Buffer.concat(chunks)); });
+    req.on('error', (error) => { if (!failed) reject(error); });
+  });
+}
+
 async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Record<string, unknown>> {
   const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
   if (!contentType.includes('application/json')) throw new Error('请求 Content-Type 必须为 application/json');
@@ -2161,6 +2243,22 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promis
   });
 }
 
+function verifyPersonLifecycleSignature(req: IncomingMessage, raw: Buffer): boolean {
+  const keyId = String(req.headers['x-aeos-key-id'] ?? '');
+  const timestamp = String(req.headers['x-aeos-timestamp'] ?? '');
+  const supplied = String(req.headers['x-aeos-signature'] ?? '').replace(/^sha256=/, '');
+  const expectedKeyId = process.env.AEOS_PERSON_LIFECYCLE_KEY_ID || 'm01-kernel';
+  const secret = process.env.AEOS_PERSON_LIFECYCLE_SECRET || process.env.AEOS_HUB_PERSON_LIFECYCLE_SECRET || '';
+  const timestampMs = Number(timestamp);
+  if (!keyId || keyId !== expectedKeyId || !timestamp || !Number.isInteger(timestampMs) || !supplied || !secret) return false;
+  const maxSkew = Number(process.env.AEOS_PERSON_LIFECYCLE_MAX_SKEW_SECONDS || 300) * 1000;
+  if (Math.abs(Date.now() - timestampMs) > maxSkew) return false;
+  const expected = createHmac('sha256', secret).update(timestamp).update('.').update(raw).digest('hex');
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(supplied);
+  return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -2186,22 +2284,22 @@ const server = createServer(async (req, res) => {
   res.setHeader('content-security-policy', "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:");
   if (url.pathname.startsWith('/api/')) res.setHeader('cache-control', 'no-store');
   if (url.pathname === '/healthz' && req.method === 'GET') {
-    const evidenceError = evidenceHealth();
-    const m02 = m02OutboxHealth();
-    const degraded = Boolean(evidenceError) || (m02.configured && Boolean(m02.lastError));
-    sendJson(res, degraded ? 503 : 200, {
-      status: degraded ? 'degraded' : 'ok',
-      evidence: evidenceError ? { status: 'degraded', error: evidenceError } : { status: 'ok' },
-      m02: {
-        status: m02.configured ? (m02.lastError ? 'degraded' : 'ok') : 'local-buffer',
-        configured: m02.configured,
-        pending: m02.pending,
-        lastError: m02.lastError,
-      },
-    });
-    return;
+    sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
+  if (url.pathname === '/internal/aeos/person-lifecycle') {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const raw = await readRawRequestBody(req);
+      if (!verifyPersonLifecycleSignature(req, raw)) { sendJson(res, 401, { error: '人员同步签名无效' }); return; }
+      const parsed = JSON.parse(raw.toString('utf8')) as import('./person-lifecycle.ts').PersonLifecycleEvent;
+      const result = applyHubPersonLifecycle(parsed);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/auth/login') {
     if (AUTH_MODE === 'm01') {
       const outcome = await authGateway.login(req.method, req.headers.cookie, url.searchParams.get('retry') === '1');
@@ -2578,76 +2676,6 @@ const server = createServer(async (req, res) => {
   const requestActor = publicAsset ? 'anonymous' : requestActorContext!.actorId;
   const actorTenant = requestActorContext?.tenantId?.trim();
   const requestTenantId = !actorTenant || actorTenant === 'local-dev' ? DEFAULT_TENANT_ID : actorTenant;
-  const requestRoles = requestActorContext?.roles ?? [];
-  const canManageHubRequest = canManageHub(requestRoles);
-  const denyManagementRoute = (action: string, objectRef: string): void => {
-    try {
-      appendEvidence({
-        kind: 'guard_decision',
-        actor_id: requestActorContext?.actorId,
-        actor_type: requestActorContext ? 'human' : 'system',
-        tenant_id: requestTenantId,
-        object_ref: objectRef,
-        correlation_id: `management-denied:${action}`,
-        summary: `management action denied: ${action}`,
-        payload: { action, outcome: 'denied', code: 'MANAGER_ROLE_REQUIRED', roles: requestRoles },
-      });
-    } catch {
-      // Denial still takes effect when the audit sink is unavailable.
-    }
-    sendJson(res, 403, { error: 'forbidden', code: 'MANAGER_ROLE_REQUIRED' });
-  };
-  const requireManagementRoute = (action: string, objectRef: string): boolean => {
-    if (canManageHubRequest) return true;
-    denyManagementRoute(action, objectRef);
-    return false;
-  };
-  const rawIdempotencyHeader = req.headers['idempotency-key'];
-  const requestIdempotencyKey = (Array.isArray(rawIdempotencyHeader) ? rawIdempotencyHeader[0] : rawIdempotencyHeader ?? '').trim();
-  const replayIdempotent = (pathname: string, body: Record<string, unknown>): boolean => {
-    if (!requestIdempotencyKey || !requestActorContext || req.method === 'GET') return false;
-    const outcome = idempotencyStore.lookup({
-      key: requestIdempotencyKey,
-      actorId: requestActorContext.actorId,
-      method: req.method ?? 'GET',
-      path: pathname,
-      request: body,
-    });
-    if (outcome.kind === 'replay') {
-      sendJson(res, outcome.status, outcome.body as Record<string, unknown>);
-      return true;
-    }
-    if (outcome.kind === 'conflict') {
-      sendJson(res, 409, { error: '同一 Idempotency-Key 已用于不同请求', code: 'IDEMPOTENCY_CONFLICT' });
-      return true;
-    }
-    return false;
-  };
-  const recordIdempotent = (pathname: string, body: Record<string, unknown>, response: { status: number; body: Record<string, unknown> }): void => {
-    if (!requestIdempotencyKey || !requestActorContext || req.method === 'GET' || response.status >= 300) return;
-    try {
-      idempotencyStore.record({
-        key: requestIdempotencyKey,
-        actorId: requestActorContext.actorId,
-        method: req.method ?? 'GET',
-        path: pathname,
-        request: body,
-        status: response.status,
-        body: response.body,
-      });
-    } catch (error) {
-      console.warn('[idempotency] 记录失败:', (error as Error).message);
-    }
-  };
-  if (isHarborManagementRoute(url.pathname)) {
-    if (!requireManagementRoute(`${req.method ?? 'GET'} ${url.pathname}`, 'hub://harbor')) return;
-  }
-  if (isAgentSquadManagementRoute(url.pathname)) {
-    if (!requireManagementRoute(`${req.method ?? 'GET'} ${url.pathname}`, 'hub://agent-squad')) return;
-  }
-  if (isExecutionManagementRoute(url.pathname)) {
-    if (!requireManagementRoute(`${req.method ?? 'POST'} ${url.pathname}`, 'hub://execution-management')) return;
-  }
   // ---------- 写操作审批（浏览器会话；创建与审批仅 manager / supervisor） ----------
   if (url.pathname.startsWith('/api/write-requests')) {
     try {
@@ -2826,6 +2854,80 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+
+  const m01AgentRegisterMatch = url.pathname.match(/^\/api\/harbor\/agents\/([^/]+)\/m01\/register$/);
+  if (m01AgentRegisterMatch) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const id = decodeURIComponent(m01AgentRegisterMatch[1] ?? '').trim();
+      const agent = loadHarbor().agents.find((item) => item.id === id);
+      if (!agent) throw new HarborStoreNotFoundError(`Agent 不存在: ${id}`);
+      const result = await registerHarborAgentToM01(agent);
+      const status = result.registration.state === 'active' ? 200 : 503;
+      sendJson(res, status, result);
+    } catch (error) {
+      const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
+      sendJson(res, status, { error: (error as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/api/models') {
+    if (req.method === 'GET') {
+      try { sendJson(res, 200, loadModelRegistry()); } catch (error) { sendJson(res, 500, { error: (error as Error).message }); }
+      return;
+    }
+    if (req.method === 'POST') {
+      try {
+        const item = createModel(await readJsonBody(req));
+        appendEvidence({ kind: 'app_event', summary: 'model registered', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 201, { item });
+      } catch (error) {
+        sendJson(res, 400, { error: (error as Error).message });
+      }
+      return;
+    }
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+  const modelMatch = url.pathname.match(/^\/api\/models\/([^/]+)$/);
+  if (modelMatch) {
+    let modelId = '';
+    try { modelId = decodeURIComponent(modelMatch[1] ?? '').trim(); } catch { modelId = ''; }
+    if (!modelId) { sendJson(res, 400, { error: '模型 id 无效' }); return; }
+    try {
+      if (req.method === 'PATCH') {
+        const item = updateModel(modelId, await readJsonBody(req));
+        appendEvidence({ kind: 'app_event', summary: 'model updated', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 200, { item });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        const item = deleteModel(modelId);
+        appendEvidence({ kind: 'app_event', summary: 'model removed', payload: { id: item.id, provider: item.provider, model: item.model } });
+        sendJson(res, 200, { item });
+        return;
+      }
+      sendJson(res, 405, { error: 'method not allowed' });
+    } catch (error) {
+      const status = error instanceof ModelRegistryNotFoundError ? 404 : error instanceof ModelRegistryError ? 400 : 500;
+      sendJson(res, status, { error: (error as Error).message, code: errorCode(error) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/usage/summary') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    try {
+      const summary = usageStore.summary({
+        from: url.searchParams.get('from') ?? undefined,
+        to: url.searchParams.get('to') ?? undefined,
+        agentId: url.searchParams.get('agentId') ?? undefined,
+        recentLimit: url.searchParams.get('recentLimit') ? Number(url.searchParams.get('recentLimit')) : undefined,
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/api/agent-squad') {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
@@ -2909,7 +3011,6 @@ const server = createServer(async (req, res) => {
   if (/^\/api\/tasks\/[^/]+\/agent-runs$/.test(url.pathname)) {
     try {
       const body = req.method === 'GET' ? {} : await readJsonBody(req);
-      if (replayIdempotent(url.pathname, body)) return;
       const taskResponse = await taskApi.handleAgentRun({
         method: req.method,
         pathname: url.pathname,
@@ -2923,17 +3024,13 @@ const server = createServer(async (req, res) => {
         body,
       });
       if (!taskResponse) { sendJson(res, 404, { error: 'task endpoint not found' }); }
-      else {
-        sendJson(res, taskResponse.status, taskResponse.body);
-        recordIdempotent(url.pathname, body, taskResponse);
-      }
+      else sendJson(res, taskResponse.status, taskResponse.body);
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
   if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/') || url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/') || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(url.pathname)) {
     try {
       const body = req.method === 'GET' ? {} : await readJsonBody(req);
-      if (replayIdempotent(url.pathname, body)) return;
       const taskResponse = taskApi.handle({
         method: req.method,
         pathname: url.pathname,
@@ -2947,10 +3044,7 @@ const server = createServer(async (req, res) => {
         body,
       });
       if (!taskResponse) { sendJson(res, 404, { error: 'task endpoint not found' }); }
-      else {
-        sendJson(res, taskResponse.status, taskResponse.body);
-        recordIdempotent(url.pathname, body, taskResponse);
-      }
+      else sendJson(res, taskResponse.status, taskResponse.body);
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
@@ -3147,25 +3241,8 @@ const server = createServer(async (req, res) => {
       const result = await ensureDailyQuestionsGenerated(dateKey, role);
       sendJson(res, 200, result);
     } catch (error) {
-      const message = (error as Error).message;
-      if (error instanceof ZodError || /^(生成参数|dateKey|只能生成当天|role)/.test(message)) {
-        sendJson(res, 400, { error: message });
-      } else {
-        // The daily-question panel already has a deterministic manual pool. A
-        // missing model credential / temporarily unavailable Runtime must not
-        // turn that fallback into a browser-console 503 on every page load.
-        try {
-          const config = loadDailyQuestionConfig();
-          sendJson(res, 200, {
-            config,
-            cached: false,
-            degraded: true,
-            warning: `AI 每日问题生成暂不可用，已使用人工问题池：${message}`,
-          });
-        } catch {
-          sendJson(res, 503, { error: message });
-        }
-      }
+      const status = error instanceof ZodError || /^(生成参数|dateKey|只能生成当天|role)/.test((error as Error).message) ? 400 : 503;
+      sendJson(res, status, { error: (error as Error).message });
     }
     return;
   }
@@ -3220,17 +3297,7 @@ const server = createServer(async (req, res) => {
       const agentId = decodeURIComponent(harborLifecycleMatch[1] ?? '').trim();
       if (!agentId) throw new Error('Agent id 无效');
       const input = await readJsonBody(req);
-      const actor = requestActorContext?.actorId ?? 'unknown-actor';
-      const item = transitionHarborAgentLifecycle({ agentId, to: input.to, reason: input.reason, actor });
-      try {
-        appendEvidence({
-          kind: 'app_event', actor_id: actor, actor_type: 'human', tenant_id: requestTenantId,
-          object_ref: `hub://harbor/agents/${encodeURIComponent(agentId)}`,
-          correlation_id: `harbor-lifecycle:${item.id}`,
-          summary: `agent lifecycle ${item.registration.lifecycle}`,
-          payload: { agentId: item.id, to: item.registration.lifecycle, reason: input.reason },
-        });
-      } catch { /* Store-level lifecycle audit remains available. */ }
+      const item = transitionHarborAgentLifecycle({ agentId, to: input.to, reason: input.reason, actor: typeof input.actor === 'string' && input.actor.trim() ? input.actor.trim() : 'local-operator' });
       sendJson(res, 200, { item });
     } catch (error) {
       const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
@@ -3248,13 +3315,6 @@ const server = createServer(async (req, res) => {
       if (squad.lead.harborAgentId === id) throw new Error('该 Agent 是当前主 Agent，请先更换主 Agent 关联');
       if (squad.members.some((member) => member.harborAgentId === id)) throw new Error('该 Agent 仍在协作成员中，请先将其移出');
       const item = deleteHarborAgent({ id });
-      try {
-        appendEvidence({
-          kind: 'app_event', actor_id: requestActorContext?.actorId, actor_type: 'human', tenant_id: requestTenantId,
-          object_ref: `hub://harbor/agents/${encodeURIComponent(id)}`, correlation_id: `harbor-agent-deleted:${id}`,
-          summary: 'harbor agent deleted', payload: { agentId: id, code: item.registration.code },
-        });
-      } catch { /* Deletion already committed. */ }
       sendJson(res, 200, { item });
     } catch (error) {
       const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
@@ -3273,19 +3333,14 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const input = await readJsonBody(req);
-      const item = creator(input);
-      try {
-        const itemRecord = item as Record<string, unknown>;
-        const itemId = typeof itemRecord.id === 'string' ? itemRecord.id : url.pathname;
-        appendEvidence({
-          kind: 'app_event', actor_id: requestActorContext?.actorId, actor_type: 'human', tenant_id: requestTenantId,
-          object_ref: `hub://harbor${url.pathname.replace(/^\/api\/harbor/, '')}/${encodeURIComponent(itemId)}`,
-          correlation_id: `harbor-created:${url.pathname}:${itemId}`,
-          summary: 'harbor resource created',
-          payload: { path: url.pathname, id: itemId },
-        });
-      } catch { /* Creation already committed. */ }
-      sendJson(res, 201, { item });
+      let item = creator(input);
+      let registration: M01AgentRegistrationResult | undefined;
+      if (url.pathname === '/api/harbor/agents') {
+        const synced = await registerHarborAgentToM01(item as HarborAgent);
+        item = synced.item;
+        registration = synced.registration;
+      }
+      sendJson(res, 201, registration ? { item, registration } : { item });
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
     }
@@ -3529,7 +3584,6 @@ const server = createServer(async (req, res) => {
       alerts: alertCenter.list(limit),
       alertCounts: alertCenter.counts(),
       channels: { log: true, wecom: alertCenter.channelEnabled('wecom') },
-      m02: m02OutboxHealth(),
     });
     return;
   }
@@ -3634,20 +3688,12 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const limit = boundedLimit(url.searchParams.get('limit'));
-      const requestedActorId = url.searchParams.get('actor_id')?.trim();
+      const actorId = url.searchParams.get('actor_id')?.trim();
       const requestedActorType = url.searchParams.get('actor_type')?.trim();
-      if ((requestedActorId !== undefined && (!requestedActorId || requestedActorId.length > 200))
+      if ((actorId !== undefined && (!actorId || actorId.length > 200))
         || (requestedActorType !== undefined && !['human', 'service', 'agent', 'system'].includes(requestedActorType))) {
         throw new Error('invalid actor filter');
       }
-      // Managers and supervisors may browse the tenant's evidence; every other
-      // authenticated actor only sees evidence attributed to their own identity.
-      const scope = evidenceActorScope(requestRoles, requestActorContext?.actorId ?? null, requestedActorId);
-      if (!scope.ok) {
-        sendJson(res, 403, { error: 'forbidden', code: 'EVIDENCE_SCOPE_DENIED' });
-        return;
-      }
-      const actorId = scope.actorId;
       sendJson(res, 200, await readRecentEvidence(limit, evidenceFile, {
         tenantId: requestTenantId,
         ...(actorId ? { actorId } : {}),
@@ -4121,8 +4167,8 @@ wss.on('connection', (ws, request) => {
             send(ws, { type: 'error', convId, message });
             return;
           }
-          dispatch = { agentId: member?.id ?? harborAgent.id, orderNo, evidenceRef, taskType };
-          const dispatchedAgentId = dispatch.agentId;
+          dispatch = { agentId: member.id, harborAgentId: harborAgent.id, orderNo, evidenceRef, taskType };
+          const dispatchedAgentId = member.id;
           // A specialist dispatch is never a central conversation. Persist its
           // ownership defensively even if an older client created it as hub.
           const dispatchedConversation = getConv(convId);

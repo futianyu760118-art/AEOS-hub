@@ -186,7 +186,14 @@ function canonicalSystemId(systemId: string): string {
   const value = systemId.trim();
   const system = listSystems().find((candidate) => candidate.systemId === value
     || candidate.sourceSystemAliases.includes(value));
-  return system?.systemId ?? value;
+  if (system) return system.systemId;
+  const builtInAliases: Record<string, string> = {
+    '公司中控平台': 'control-platform',
+    '公司中控平台（本机演示）': 'control-platform',
+    '公司中控平台（UAT）': 'control-platform',
+    '恒剑PLM': 'hengjian-plm',
+  };
+  return builtInAliases[value] ?? value;
 }
 
 function compareCandidates(a: ExecutionAgentRecord, b: ExecutionAgentRecord): number {
@@ -347,7 +354,7 @@ export class BorrowOrderService {
     if (!agent) {
       throw new BorrowOrderServiceError('TARGET_NOT_ELIGIBLE', 409, '提供方 Agent 已不在执行面', { reasons: ['agent_not_found'] });
     }
-    return { agent, providerSystem: chosen.providerSystemId };
+    return { agent, providerSystem: canonicalSystemId(chosen.providerSystemId) };
   }
 
   create(input: {
@@ -506,7 +513,7 @@ export class BorrowOrderService {
       if (capability.source !== 'execution'
         || !capability.readOnly
         || capability.status === 'disabled'
-        || capability.providerSystemId === scope
+         || canonicalSystemId(capability.providerSystemId) === scope
         || !isBorrowCapabilityAllowed(capability.providerSystemId, capability.name)) continue;
       const agent = agentById.get(capability.providerAgentId);
       if (!agent) continue;
@@ -517,7 +524,7 @@ export class BorrowOrderService {
         providers: [],
       };
       entry.providers.push({
-        systemId: capability.providerSystemId,
+        systemId: canonicalSystemId(capability.providerSystemId),
         agentId: agent.agentId,
         agentName: agent.name,
         online: capability.status === 'available',
