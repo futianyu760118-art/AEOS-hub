@@ -6,6 +6,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateEvidenceEntry, type EvidenceEntryContract } from './evidence-contract.ts';
+import { enqueueM02Evidence } from './m02-outbox.ts';
 import { DEFAULT_TENANT_ID } from './tenant-registry.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -96,6 +97,14 @@ export function appendEvidence(partial: EvidenceInput, file = evidenceFile): Evi
       renameSync(file, join(archive, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.jsonl`));
     }
     appendFileSync(file, JSON.stringify(entry) + '\n', { mode: 0o600 });
+    if (file === evidenceFile) {
+      try {
+        enqueueM02Evidence(entry);
+      } catch {
+        // The JSONL pilot buffer remains authoritative when the M02 outbox is
+        // temporarily unwritable; the next successful Evidence write retries.
+      }
+    }
     writeFailure = null;
   } catch (error) {
     writeFailure = (error as Error).message;

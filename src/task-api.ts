@@ -1,4 +1,5 @@
 import type { EvidenceInput } from './evidence.ts';
+import { digestAgentResult } from './agent-result.ts';
 import { controlledTaskTypeForM04Task, evaluateAgentTaskEligibility } from './agent-task-eligibility.ts';
 import { recommendTaskAssignees, validateAgentAssignment } from './task-dispatch.ts';
 import { startAgentTaskRun, type AgentTaskRunDeps } from './agent-task-runner.ts';
@@ -320,9 +321,47 @@ export class TaskApi {
     const escalationMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/escalations$/);
     if (escalationMatch) {
       this.method(method, 'POST');
-      if (!this.requireG1Scope(actor)) return this.denied(actor, 'escalate', 'G0_SCOPE_REQUIRED');
       const task = this.requireMutationTask(decoded(escalationMatch[1] ?? ''), actor, 'escalate');
-      return this.denied(actor, 'escalate', 'UNSUPPORTED_G1_ACTION', task);
+      const denied = this.authorizeLifecycle('escalate', actor, task);
+      if (denied) return denied;
+      const updated = this.dependencies.taskCenter.escalate({
+        taskId: task.taskId,
+        reason: bodyValue(body, 'reason'),
+        nextAction: bodyValue(body, 'nextAction'),
+        actor: actor.actorId,
+      });
+      const auditStatus = this.audit(updated, actor, 'task_escalated');
+      return { status: 200, body: { task: updated, committed: true, auditStatus } };
+    }
+
+    const reminderMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/reminders$/);
+    if (reminderMatch) {
+      this.method(method, 'POST');
+      const task = this.requireMutationTask(decoded(reminderMatch[1] ?? ''), actor, 'remind');
+      const denied = this.authorizeLifecycle('remind', actor, task);
+      if (denied) return denied;
+      const updated = this.dependencies.taskCenter.remind({
+        taskId: task.taskId,
+        reason: bodyValue(body, 'reason'),
+        actor: actor.actorId,
+      });
+      const auditStatus = this.audit(updated, actor, 'task_reminded');
+      return { status: 200, body: { task: updated, committed: true, auditStatus } };
+    }
+
+    const withdrawalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/withdrawals$/);
+    if (withdrawalMatch) {
+      this.method(method, 'POST');
+      const task = this.requireMutationTask(decoded(withdrawalMatch[1] ?? ''), actor, 'withdraw');
+      const denied = this.authorizeLifecycle('withdraw', actor, task);
+      if (denied) return denied;
+      const updated = this.dependencies.taskCenter.withdraw({
+        taskId: task.taskId,
+        reason: bodyValue(body, 'reason'),
+        actor: actor.actorId,
+      });
+      const auditStatus = this.audit(updated, actor, 'task_withdrawn');
+      return { status: 200, body: { task: updated, committed: true, auditStatus } };
     }
 
     const resultMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/results$/);
@@ -408,7 +447,21 @@ export class TaskApi {
     const taskType = controlledTaskTypeForM04Task(task);
     const harborRuntime = harbor.runtimes.find((candidate) => candidate.id === runtimeId) ?? null;
     const eligibility = evaluateAgentTaskEligibility({ taskId: task.taskId, tenantId: task.tenantId, taskType, agent, runtime: harborRuntime, evaluatedAt });
-    if (!eligibility.eligible) return this.denied(actor, 'agent_run', 'AGENT_INELIGIBLE', task);
+    if (!eligibility.eligible) {
+      const reason = `Agent「${agent.name}」当前不可接单：${eligibility.reasons.join('；')}`;
+      const updated = this.dependencies.taskCenter.escalateUnavailableAgent({
+        taskId: task.taskId,
+        agentId: agent.id,
+        actor: actor.actorId,
+        reason,
+        nextAction: 'Agent 不可用，请管理者改派责任角色或恢复 Agent 后重试',
+      });
+      const auditStatus = this.audit(updated, actor, 'agent_unavailable_escalated');
+      return {
+        status: 200,
+        body: { task: updated, committed: true, auditStatus, code: 'AGENT_INELIGIBLE', reasons: eligibility.reasons },
+      };
+    }
 
     const executionCapability = runtime.runtimeKind === 'remote-execution-agent'
       ? (this.dependencies.findExecutionCapability?.(runtimeId, 'query') ?? agent.registration.allowedRuntimeCapabilities.find((capability) => hasExecutionCapability(capability)))
@@ -441,33 +494,45 @@ export class TaskApi {
       { runtime, now: this.dependencies.now },
     );
 
-    const outcome = run.outcome;
+    const executionRun = this.dependencies.findExecutionRun?.(run.runtimeRunId);
+    const digest = digestAgentResult(executionRun?.result);
+    const requiresHumanDecision = run.outcome.state === 'completed' && digest.lowConfidence;
+    const governedOutcome = requiresHumanDecision ? 'awaiting_decision' : run.outcome.state;
     let resultId: string | undefined;
-    let evidenceRefs: string[] = task.evidenceRefs;
-    if (outcome.state === 'completed') {
+    let evidenceRefs = [...new Set([...task.evidenceRefs, ...digest.evidenceRefs])].slice(0, 200);
+    if (governedOutcome === 'completed') {
       const operatingCase = this.requireCase(task.caseId);
       const result = this.dependencies.operatingCenter.createPendingResult({
         caseId: operatingCase.id,
         resultType: 'agent_analysis',
-        summary: `Agent「${agent.name}」完成分析：${task.title}`,
+        summary: digest.summary,
+        evidenceRefs: digest.evidenceRefs,
         actor: actor.actorId,
         tenantId: actor.tenantId,
       });
       resultId = result.result_id;
       evidenceRefs = result.evidence_refs;
     }
-    const reason = outcome.state === 'completed'
+    const reason = governedOutcome === 'completed'
       ? 'Agent 运行完成，等待业务 Owner 核验'
-      : outcome.state === 'failed' ? `Agent 运行失败：${outcome.reason}` : `Agent 运行需人工决策：${outcome.reason}`;
-    const nextAction = outcome.state === 'completed'
+      : governedOutcome === 'failed'
+        ? `Agent 运行失败：${run.outcome.state === 'failed' ? run.outcome.reason : '运行异常'}`
+        : requiresHumanDecision
+          ? `Agent 结果置信度不足，已升级人工决策：${digest.validationNote ?? digest.summary}`
+          : `Agent 运行需人工决策：${run.outcome.state === 'awaiting_decision' ? run.outcome.reason : '运行被中断'}`;
+    const nextAction = governedOutcome === 'completed'
       ? '等待业务 Owner 核验结果'
-      : outcome.state === 'failed' ? '请人工接管或重新派单' : outcome.reason;
+      : governedOutcome === 'failed'
+        ? '请人工接管或重新派单'
+        : requiresHumanDecision
+          ? '结果置信度不足，请人工确认、补充证据或重新派单'
+          : run.outcome.state === 'awaiting_decision' ? run.outcome.reason : '请人工确认下一步动作';
     const updated = this.dependencies.taskCenter.recordAgentRunOutcome({
       taskId: task.taskId,
       agentId: agent.id,
       actor: actor.actorId,
       reason,
-      outcome: outcome.state,
+      outcome: governedOutcome,
       resultId,
       evidenceRefs,
       nextAction,
@@ -479,7 +544,12 @@ export class TaskApi {
         endedAt: run.endedAt,
       },
     });
-    const auditStatus = this.audit(updated, actor, 'agent_task_run_recorded', resultId);
+    const auditStatus = this.audit(updated, actor, 'agent_task_run_recorded', resultId, {
+      agentRunId: run.runtimeRunId,
+      governedOutcome,
+      dataConfidence: digest.dataConfidence,
+      executionResult: executionRun?.result ?? null,
+    });
     return { status: 200, body: { task: updated, run, resultId, committed: true, auditStatus } };
   }
 
@@ -495,6 +565,14 @@ export class TaskApi {
       ...(action === 'verify' || action === 'reject' ? { registeredOwnerActorId: registeredOwnerActorId ?? null } : {}),
     });
     return decision.allowed ? null : this.denied(actor, action, decision.code, task);
+  }
+
+  private authorizeLifecycle(action: 'withdraw' | 'remind' | 'escalate', actor: TaskApiActor, task: TaskRecord): TaskApiResponse | null {
+    if (task.source === 'collaboration') {
+      return this.authorizeCollaboration('task_update_manual', actor, task);
+    }
+    if (!this.requireG1Scope(actor)) return this.denied(actor, action, 'G0_SCOPE_REQUIRED', task);
+    return this.authorize(action, actor, task);
   }
 
   private authorizeCollaboration(action: CollaborationAction, actor: TaskApiActor, task?: TaskRecord, project?: ProjectRecord): TaskApiResponse | null {
@@ -526,8 +604,9 @@ export class TaskApi {
       const snapshot = this.dependencies.g0DecisionStore?.load();
       const scope = snapshot?.decisions.scope?.value;
       const registeredOwnerActorId = snapshot?.decisions.businessOwnerActor?.value.actorId?.trim();
+      const firstScenario = snapshot?.decisions.firstScenario?.value;
       if (!snapshot?.readyForG1
-        || snapshot.decisions.firstScenario?.value !== 'order_delivery_risk'
+        || (firstScenario !== 'order_delivery_risk' && firstScenario !== 'material_kitting_shortage')
         || !scope
         || scope.demoTenantId !== actor.tenantId
         || !actor.organizationId
@@ -623,7 +702,7 @@ export class TaskApi {
     }
   }
 
-  private audit(task: TaskRecord, actor: TaskApiActor, action: string, resultId?: string): 'recorded' | 'failed' {
+  private audit(task: TaskRecord, actor: TaskApiActor, action: string, resultId?: string, extra?: Record<string, unknown>): 'recorded' | 'failed' {
     try {
       this.dependencies.appendEvidence({
         kind: 'app_event',
@@ -640,6 +719,7 @@ export class TaskApi {
           caseId: task.caseId,
           status: task.status,
           ...(resultId ? { resultId } : {}),
+          ...(extra ?? {}),
         },
       });
       return 'recorded';

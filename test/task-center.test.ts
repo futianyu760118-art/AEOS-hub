@@ -302,16 +302,43 @@ test('blocks every non-human identity format from human task execution and verif
   }
 });
 
-test('deleteTask 删除任务及其历史记录', (t) => {
+test('deleteTask 从台账移除任务但保留历史审计记录', (t) => {
   const store = fixture(t);
   const task = createTask(store);
   assert.deepEqual(store.deleteTask({ taskId: task.taskId }), { deleted: true });
   const snapshot = store.load();
   assert.equal(snapshot.tasks.some((candidate) => candidate.taskId === task.taskId), false);
-  assert.equal(snapshot.history.some((entry) => entry.taskId === task.taskId), false);
+  assert.equal(snapshot.history.some((entry) => entry.taskId === task.taskId), true);
 });
 
 test('deleteTask 删除不存在的任务返回 deleted:false', (t) => {
   const store = fixture(t);
   assert.deepEqual(store.deleteTask({ taskId: 'task-none' }), { deleted: false });
+});
+
+
+test('escalateOverdue marks overdue open tasks once and keeps the task open', (t) => {
+  const store = fixture(t);
+  const task = createTask(store);
+  const overdue = store.escalateOverdue({ today: '2026-10-16', actor: 'system:hub-scheduler' });
+  assert.equal(overdue.length, 1);
+  const updated = store.load().tasks.find((candidate) => candidate.taskId === task.taskId);
+  assert.equal(updated?.status, 'DRAFT');
+  assert.match(updated?.nextAction ?? '', /已逾期/);
+  assert.equal(store.escalateOverdue({ today: '2026-10-16', actor: 'system:hub-scheduler' }).length, 0);
+  assert.ok(store.load().history.some((entry) => entry.taskId === task.taskId && entry.eventType === 'escalated'));
+});
+
+
+test('escalateUnavailableAgent moves an Agent-assigned task to human decision', (t) => {
+  const store = fixture(t);
+  const task = createTask(store);
+  store.assign({ taskId: task.taskId, assigneeKind: 'agent', agentId: 'agent-1', actor: 'user:manager-01', reason: 'assign to agent' });
+  const escalated = store.escalateUnavailableAgent({
+    taskId: task.taskId, agentId: 'agent-1', actor: 'user:manager-01',
+    reason: 'Runtime health is stale', nextAction: 'Reassign to a responsible role',
+  });
+  assert.equal(escalated.status, 'AWAITING_DECISION');
+  assert.match(escalated.nextAction, /Reassign/);
+  assert.ok(store.load().history.some((entry) => entry.taskId === task.taskId && entry.eventType === 'escalated'));
 });

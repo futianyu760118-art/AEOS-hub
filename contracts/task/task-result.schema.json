@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AEOS Task Result Submission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resultType", "summary", "reason"],
+  "properties": {
+    "resultType": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "evidenceRefs": {
+      "type": "array", "maxItems": 200, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    }
+  }
+}

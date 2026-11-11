@@ -268,3 +268,25 @@ test('reports committed mutations when post-commit Evidence appends fail', (t) =
   assert.equal(verified?.body.committed, true);
   assert.equal(verified?.body.auditStatus, 'failed');
 });
+
+test('supports reminders, escalation and withdrawal through guarded task endpoints', (t) => {
+  const { api, operatingCase } = fixture(t);
+  const created = post(api, `/api/operating-cases/${operatingCase.id}/tasks`, manager, { priority: 'high', reason: '建立闭环' });
+  const taskId = (created?.body as { task: { taskId: string } }).task.taskId;
+  assert.equal(post(api, `/api/tasks/${taskId}/assignments`, manager, { assigneeRole: '订单交付经办人', assigneeActorId: operator.actorId, reason: '分派' })?.status, 200);
+  assert.equal(post(api, `/api/tasks/${taskId}/transitions`, operator, { toStatus: 'ACCEPTED', reason: '接受' })?.status, 200);
+  assert.equal(post(api, `/api/tasks/${taskId}/transitions`, operator, { toStatus: 'IN_PROGRESS', reason: '开始' })?.status, 200);
+
+  assert.equal(post(api, `/api/tasks/${taskId}/reminders`, operator, { reason: '越权催办' })?.status, 403);
+  const reminded = post(api, `/api/tasks/${taskId}/reminders`, manager, { reason: '请尽快反馈进展' });
+  assert.equal(reminded?.status, 200);
+  assert.equal((reminded?.body as { task: { status: string } }).task.status, 'IN_PROGRESS');
+
+  const escalated = post(api, `/api/tasks/${taskId}/escalations`, manager, { reason: '需要管理层协调', nextAction: '由经理确认优先级' });
+  assert.equal(escalated?.status, 200);
+  assert.equal((escalated?.body as { task: { status: string } }).task.status, 'AWAITING_DECISION');
+
+  const withdrawn = post(api, `/api/tasks/${taskId}/withdrawals`, manager, { reason: '任务不再需要处理' });
+  assert.equal(withdrawn?.status, 200);
+  assert.equal((withdrawn?.body as { task: { status: string } }).task.status, 'CANCELLED');
+});

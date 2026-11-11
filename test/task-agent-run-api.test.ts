@@ -20,7 +20,12 @@ const risk: DashboardRisk = {
   prompt: '核查订单交付风险。', kitRateByItem: null, shortageItemCount: null, shortageQty: null, estimatedFullKitDate: '', occurredAt: '2026-10-10T09:00:00+08:00',
 };
 
-function fixture(t: TestContext, runOutcome: { state: string; failure?: { message?: string; code?: string } | null } = { state: 'completed' }, assignAgent = true) {
+function fixture(
+  t: TestContext,
+  runOutcome: { state: string; failure?: { message?: string; code?: string } | null } = { state: 'completed' },
+  assignAgent = true,
+  executionResult: unknown = { conclusion: '存在物料齐套风险', evidence_refs: ['control-platform://orders/SO-ELIGIBILITY-01@2026-10-10'] },
+) {
   const dir = mkdtempSync(join(tmpdir(), 'aeos-task-agent-run-'));
   const clock = () => new Date(NOW);
   const operatingCenter = new OperatingCenterStore(join(dir, 'operating-center.json'), clock);
@@ -48,7 +53,7 @@ function fixture(t: TestContext, runOutcome: { state: string; failure?: { messag
   };
   const api = new TaskApi({
     operatingCenter, taskCenter, g0DecisionStore, appendEvidence: (entry) => { evidence.push(entry); }, loadHarbor: () => harbor.load(), resolveRuntime: () => runtime, now: clock,
-    findExecutionRun: (runId) => runId === 'run-1' ? { runId, agentId: 'agent-aeos-hub', capability: 'query.read', input: {}, state: 'completed', startedAt: NOW, endedAt: NOW, result: { conclusion: '存在物料齐套风险', evidence_refs: ['control-platform://orders/SO-ELIGIBILITY-01@2026-10-10'] } } : undefined,
+    findExecutionRun: (runId) => runId === 'run-1' ? { runId, agentId: 'agent-aeos-hub', capability: 'query.read', input: {}, state: 'completed', startedAt: NOW, endedAt: NOW, result: executionResult } : undefined,
   });
   const operatingCase = operatingCenter.upsertDashboardRisks([risk], 'dashboard', 1).created[0]!;
   const created = api.handle({ method: 'POST', pathname: `/api/operating-cases/${operatingCase.id}/tasks`, actor: manager, body: { priority: 'high', reason: '建立任务' } });
@@ -74,7 +79,10 @@ test('completes a governed Agent run and records an AWAITING_VERIFY result', asy
   assert.equal(task?.status, 'AWAITING_VERIFY');
   assert.equal(task?.resultId, body.resultId);
   assert.equal(task?.agentRun?.runtimeRunId, 'run-1');
-  assert.ok(operatingCenter.load().results.some((result) => result.result_id === body.resultId));
+  const pendingResult = operatingCenter.load().results.find((result) => result.result_id === body.resultId);
+  assert.equal(pendingResult?.status, 'PENDING');
+  assert.match(pendingResult?.summary ?? '', /存在物料齐套风险/);
+  assert.ok(pendingResult?.evidence_refs.includes('control-platform://orders/SO-ELIGIBILITY-01@2026-10-10'));
   const detail = api.handle({ method: 'GET', pathname: `/api/tasks/${taskId}`, actor: manager });
   const detailTask = detail?.body.task as { agentRun?: { execution?: { state?: string; result?: { conclusion?: string } } } };
   assert.equal(detailTask.agentRun?.execution?.state, 'completed');
@@ -88,6 +96,22 @@ test('completes a governed Agent run and records an AWAITING_VERIFY result', asy
   const projectTask = projectTasks[0];
   assert.equal(projectTask?.taskId, taskId);
   assert.equal(projectTask?.agentRun?.execution?.result?.conclusion, '存在物料齐套风险');
+});
+
+test('escalates low-confidence Agent output to human decision without creating a business result', async (t) => {
+  const { api, taskCenter, operatingCenter, taskId } = fixture(t, { state: 'completed' }, true, {
+    summary: '中台推理接口未接通',
+    conclusions: [{ matter: '未接通', evidence_refs: ['control-platform://reasoning/not-connected'] }],
+    data_confidence: 'low',
+  });
+  const response = await api.handleAgentRun({ method: 'POST', pathname: `/api/tasks/${taskId}/agent-runs`, actor: manager, body: {} });
+  assert.equal(response?.status, 200);
+  const body = response?.body as { task: { status: string; nextAction?: string }; resultId?: string };
+  assert.equal(body.task.status, 'AWAITING_DECISION');
+  assert.equal(body.resultId, undefined);
+  assert.match(body.task.nextAction ?? '', /置信度不足/);
+  assert.equal(operatingCenter.load().results.length, 0);
+  assert.equal(taskCenter.load().tasks.find((task) => task.taskId === taskId)?.status, 'AWAITING_DECISION');
 });
 
 test('records FAILED and AWAITING_DECISION outcomes without creating a result', async (t) => {

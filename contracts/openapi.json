@@ -1,0 +1,423 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AEOS Hub API",
+    "version": "1.0.0",
+    "description": "Hub 统一入口、受治理任务协同、Agent 运行与证据查询 API。所有写/变更接口接受 Idempotency-Key；Task、Assignment、TaskUpdate、TaskResult、Verify 的权威 JSON Schema 位于 contracts/task/。"
+  },
+  "servers": [{ "url": "/" }],
+  "security": [{ "hubSession": [] }],
+  "tags": [
+    { "name": "Auth" },
+    { "name": "Tasks" },
+    { "name": "Projects" },
+    { "name": "Harbor" },
+    { "name": "Execution" },
+    { "name": "Evidence" },
+    { "name": "Ops" }
+  ],
+  "paths": {
+    "/api/auth/session": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "读取当前服务端会话身份",
+        "responses": { "200": { "description": "身份摘要" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      }
+    },
+    "/api/tasks": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "按租户列出任务",
+        "responses": { "200": { "description": "任务列表" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      }
+    },
+    "/api/tasks/manual": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "创建普通协同任务",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "$ref": "#/components/requestBodies/TaskCreate" },
+        "responses": {
+          "201": { "description": "任务已创建" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/api/operating-cases/{caseId}/tasks": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "从经营事项创建受控任务",
+        "parameters": [
+          { "name": "caseId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "201": { "description": "任务已创建" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/api/tasks/{taskId}": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "读取任务与责任历史",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": { "200": { "description": "任务与历史" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "delete": {
+        "tags": ["Tasks"],
+        "summary": "删除任务台账记录（历史保留用于审计）",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "description": "已删除" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/assignments": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "分派或改派责任角色/Agent",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskAssignment" } } }
+        },
+        "responses": { "200": { "description": "已分派" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/transitions": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "人工接受/开始任务",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["toStatus", "reason"],
+                "properties": {
+                  "toStatus": { "enum": ["ACCEPTED", "IN_PROGRESS"] },
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "状态已更新" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/evidence": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "补充证据",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["evidenceRefs", "reason"],
+                "properties": {
+                  "evidenceRefs": { "type": "array", "minItems": 1, "maxItems": 40, "items": { "type": "string" } },
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "证据已补充" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/escalations": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "升级任务至人工决策",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["reason", "nextAction"],
+                "properties": {
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                  "nextAction": { "type": "string", "minLength": 1, "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "任务已升级" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/reminders": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "催办任务",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 1000 } } } } }
+        },
+        "responses": { "200": { "description": "已催办" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/withdrawals": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "撤回任务",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 1000 } } } } }
+        },
+        "responses": { "200": { "description": "任务已撤回" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/results": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "登记待核验结果",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskResult" } } }
+        },
+        "responses": { "201": { "description": "Result 已登记为 PENDING" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/results/{resultId}/verify": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "业务 Owner 核验或退回 Result",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "name": "resultId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 160 } },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Verify" } } }
+        },
+        "responses": { "200": { "description": "核验已留痕" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/agent-candidates": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "读取 Agent 接单资格（只读建议）",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": { "200": { "description": "候选与阻断原因" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/tasks/{taskId}/agent-runs": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "运行已分派的 Agent 并回写治理状态",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "description": "运行结果与任务状态" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/projects": {
+      "get": { "tags": ["Projects"], "summary": "列出项目", "responses": { "200": { "description": "项目列表" } } },
+      "post": {
+        "tags": ["Projects"],
+        "summary": "创建项目",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "description": "项目已创建" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/harbor": {
+      "get": { "tags": ["Harbor"], "summary": "读取 AI 港湾资源（manager/supervisor）", "responses": { "200": { "description": "港湾快照" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/api/harbor/agents": {
+      "post": {
+        "tags": ["Harbor"],
+        "summary": "登记 Agent（manager/supervisor）",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "description": "Agent 已登记" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/harbor/agents/{agentId}/lifecycle": {
+      "post": {
+        "tags": ["Harbor"],
+        "summary": "Agent 生命周期流转（manager/supervisor）",
+        "parameters": [
+          { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "description": "生命周期已更新" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/execution/agents": {
+      "get": { "tags": ["Execution"], "summary": "列出执行面 Agent", "responses": { "200": { "description": "执行面列表" } } }
+    },
+    "/api/execution/agents/{agentId}/dispatch": {
+      "post": {
+        "tags": ["Execution"],
+        "summary": "向执行面派单（manager/supervisor）",
+        "parameters": [
+          { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "description": "已派单" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/execution/agents/{agentId}/recall": {
+      "post": {
+        "tags": ["Execution"],
+        "summary": "召回执行面当前任务（manager/supervisor）",
+        "parameters": [
+          { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "description": "已召回" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/evidence": {
+      "get": {
+        "tags": ["Evidence"],
+        "summary": "按租户读取 Evidence；普通用户仅能读取本人证据",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200 } },
+          { "name": "actor_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "actor_type", "in": "query", "schema": { "enum": ["human", "service", "agent", "system"] } }
+        ],
+        "responses": { "200": { "description": "Evidence 列表" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/ops/status": {
+      "get": { "tags": ["Ops"], "summary": "运行监控与告警快照（manager/supervisor）", "responses": { "200": { "description": "监控快照" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/api/trace/{traceId}": {
+      "get": {
+        "tags": ["Ops"],
+        "summary": "按 traceId 读取统一链路",
+        "parameters": [{ "name": "traceId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "链路" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": ["Ops"],
+        "summary": "存活/证据/M02 投递健康",
+        "security": [],
+        "responses": { "200": { "description": "ok" }, "503": { "description": "degraded" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "hubSession": { "type": "apiKey", "in": "cookie", "name": "aeos_auth" }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "description": "创建/变更类请求的幂等键；同一键重放返回首次响应，不同内容返回 409。",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 200 }
+      },
+      "TaskId": {
+        "name": "taskId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "responses": {
+      "Unauthorized": { "description": "未认证" },
+      "Forbidden": { "description": "无权限或不在 G0/G1 范围" },
+      "NotFound": { "description": "对象不存在或不可见" },
+      "BadRequest": { "description": "参数错误" },
+      "Conflict": { "description": "状态冲突或幂等键冲突" }
+    },
+    "requestBodies": {
+      "TaskCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": ["title", "dueAt", "assigneeRole", "assigneeActorId", "reason"],
+              "properties": {
+                "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+                "priority": { "enum": ["urgent", "high", "medium", "low"] },
+                "dueAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+                "assigneeRole": { "type": "string", "minLength": 1, "maxLength": 160 },
+                "assigneeActorId": { "type": "string", "minLength": 1, "maxLength": 160 },
+                "projectId": { "type": ["string", "null"] },
+                "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "TaskAssignment": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "assigneeKind": { "enum": ["responsibility_role", "agent"] },
+          "assigneeRole": { "type": "string" },
+          "assigneeActorId": { "type": "string" },
+          "agentId": { "type": "string" },
+          "recommendedReasons": { "type": "array", "items": { "type": "string" } },
+          "reason": { "type": "string" }
+        }
+      },
+      "TaskResult": {
+        "type": "object",
+        "required": ["resultType", "summary", "reason"],
+        "properties": {
+          "resultType": { "type": "string" },
+          "summary": { "type": "string" },
+          "reason": { "type": "string" },
+          "evidenceRefs": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Verify": {
+        "type": "object",
+        "required": ["outcome", "reason"],
+        "properties": {
+          "outcome": { "enum": ["VERIFIED", "REJECTED"] },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

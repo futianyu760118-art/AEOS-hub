@@ -141,11 +141,8 @@ export const TaskCenterSnapshotSchema = z.object({
       ctx.addIssue({ code: 'custom', path: ['tasks', index, 'updatedAt'], message: 'updatedAt 不能早于 createdAt' });
     }
   });
-  snapshot.history.forEach((entry, index) => {
-    if (!taskIds.has(entry.taskId)) {
-      ctx.addIssue({ code: 'custom', path: ['history', index, 'taskId'], message: '历史记录引用的任务不存在' });
-    }
-  });
+  // Deleted tasks intentionally retain their history so responsibility and
+  // audit chains cannot be erased by a task deletion.
   snapshot.projectHistory.forEach((entry, index) => {
     if (!projects.has(entry.projectId)) ctx.addIssue({ code: 'custom', path: ['projectHistory', index, 'projectId'], message: '项目历史记录引用的项目不存在' });
   });
@@ -584,6 +581,40 @@ export class TaskCenterStore {
     });
   }
 
+  /**
+   * Marks open, overdue tasks for human handling. It does not claim the work is
+   * complete and does not silently reassign it; an accountable role remains
+   * visible through the task's current assignee and nextAction.
+   */
+  escalateOverdue(input: { today: string; actor: string; reason?: string }): TaskRecord[] {
+    const today = dueDate.parse(input.today);
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const reason = typeof input.reason === 'string' && input.reason.trim()
+      ? input.reason.trim().slice(0, 1_000)
+      : '任务已超过截止日期，请责任角色处理或由管理者升级';
+    const snapshot = this.load();
+    const overdue = snapshot.tasks.filter((task) => !TERMINAL_STATUSES.has(task.status)
+      && task.status !== 'AWAITING_VERIFY'
+      && task.dueAt < today
+      && task.nextAction !== '任务已逾期，请责任角色处理或由管理者升级');
+    if (!overdue.length) return [];
+    return this.mutate((current, occurredAt) => current.tasks
+      .filter((task) => overdue.some((candidate) => candidate.taskId === task.taskId))
+      .map((task) => {
+        task.nextAction = '任务已逾期，请责任角色处理或由管理者升级';
+        task.updatedAt = occurredAt;
+        this.appendHistory(current, task, {
+          eventType: 'escalated',
+          fromStatus: task.status,
+          toStatus: task.status,
+          actor,
+          reason,
+          evidenceRefs: task.evidenceRefs,
+        }, occurredAt);
+        return task;
+      }));
+  }
+
   remind(input: Record<string, unknown>): TaskRecord {
     const taskId = requiredString(input, 'taskId', 'taskId', 160);
     const actor = requiredString(input, 'actor', 'actor', 160);
@@ -612,7 +643,8 @@ export class TaskCenterStore {
       const index = snapshot.tasks.findIndex((candidate) => candidate.taskId === taskId);
       if (index < 0) return { deleted: false };
       snapshot.tasks.splice(index, 1);
-      snapshot.history = snapshot.history.filter((entry) => entry.taskId !== taskId);
+      // Keep the immutable history record for audit; the task itself is removed
+      // from the active ledger.
       return { deleted: true };
     });
   }
@@ -669,6 +701,30 @@ export class TaskCenterStore {
       this.appendHistory(snapshot, task, {
         eventType: outcome === 'completed' ? 'result_submitted' : outcome === 'failed' ? 'failed' : 'escalated',
         fromStatus, toStatus, actor, reason, evidenceRefs: refs,
+      }, occurredAt);
+      return task;
+    });
+  }
+
+  /** Escalates an open task when its assigned Agent cannot safely take the run. */
+  escalateUnavailableAgent(input: Record<string, unknown>): TaskRecord {
+    const taskId = requiredString(input, 'taskId', 'taskId', 160);
+    const agentId = requiredString(input, 'agentId', 'agentId', 160);
+    const actor = requiredString(input, 'actor', 'actor', 160);
+    const reason = requiredString(input, 'reason', 'reason', 1_000);
+    const nextAction = requiredString(input, 'nextAction', '下一步动作', 500);
+    return this.mutate((snapshot, occurredAt) => {
+      const task = this.findOpenTask(snapshot, taskId);
+      if (task.currentAssignee?.kind !== 'agent' || task.currentAssignee.agentId !== agentId) {
+        throw new Error('任务未分派给该 Agent');
+      }
+      if (task.resultId) throw new Error('任务已有待核验或已核验结果，不能升级为 Agent 不可用');
+      const fromStatus = task.status;
+      task.status = 'AWAITING_DECISION';
+      task.nextAction = nextAction;
+      task.updatedAt = occurredAt;
+      this.appendHistory(snapshot, task, {
+        eventType: 'escalated', fromStatus, toStatus: task.status, actor, reason, evidenceRefs: task.evidenceRefs,
       }, occurredAt);
       return task;
     });

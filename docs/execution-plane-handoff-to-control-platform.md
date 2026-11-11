@@ -26,7 +26,7 @@ EXECUTION_WS_URL=ws://<HUB_内网_DNS或IP>:8788/execution-agent
 EXECUTION_PLANE_TOKEN=<单独下发的接入令牌>
 
 # 本试点与 Hub 已预置 Runtime 的固定桥接标识，不要自行改名
-EXECUTION_AGENT_ID=runtime-execution-query
+EXECUTION_AGENT_ID=runtime-control-platform-agent
 
 # 在 Hub 执行面仪表盘中展示的来源系统名称
 EXECUTION_SOURCE_SYSTEM=公司中控平台（UAT）
@@ -54,7 +54,7 @@ x-aeos-execution-token: <EXECUTION_PLANE_TOKEN>
 ```json
 {
   "type": "register",
-  "agentId": "runtime-execution-query",
+  "agentId": "runtime-control-platform-agent",
   "name": "中控平台查询智能体",
   "version": "<中控平台发布版本>",
   "sourceSystem": "公司中控平台（UAT）",
@@ -72,7 +72,7 @@ x-aeos-execution-token: <EXECUTION_PLANE_TOKEN>
 ```json
 {
   "type": "registered",
-  "agentId": "runtime-execution-query",
+  "agentId": "runtime-control-platform-agent",
   "heartbeatIntervalMs": 5000
 }
 ```
@@ -145,7 +145,7 @@ Hub 会下发：
 中控平台部署完成后，请双方按顺序验收：
 
 - [ ] 中控平台进程/容器启动后能连通 Hub 控制通道。
-- [ ] Hub 执行面仪表盘出现 `runtime-execution-query`，状态为“在线/远程”，来源显示“公司中控平台（UAT）”。
+- [ ] Hub 执行面仪表盘出现 `runtime-control-platform-agent`，状态为“在线/远程”，来源显示“公司中控平台（UAT）”。
 - [ ] Hub 收到心跳，5 秒内更新最后心跳时间。
 - [ ] Hub 下发一次物料齐套或订单查询，智能体收到 `dispatch` 并回传 `run_complete`。
 - [ ] AEOS 任务页“查看运行与历史”可看到该 run 的结构化回传；项目工作区可看到关联任务的同一回传。

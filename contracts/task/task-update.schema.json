@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AEOS Collaboration Task Update",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reason"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "priority": { "enum": ["urgent", "high", "medium", "low"] },
+    "dueAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "nextAction": { "type": "string", "maxLength": 500 },
+    "projectId": { "type": ["string", "null"], "maxLength": 160 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}

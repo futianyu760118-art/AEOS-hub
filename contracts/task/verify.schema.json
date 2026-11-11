@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AEOS Result Verification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outcome", "reason"],
+  "properties": {
+    "outcome": { "enum": ["VERIFIED", "REJECTED"] },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}

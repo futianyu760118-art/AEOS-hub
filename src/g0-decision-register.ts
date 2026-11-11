@@ -28,7 +28,9 @@ function decisionRecordSchema<T extends z.ZodType>(value: T) {
   }).strict();
 }
 
-const FirstScenarioDecisionSchema = decisionRecordSchema(z.literal('order_delivery_risk'));
+export const G0_FIRST_SCENARIOS = ['order_delivery_risk', 'material_kitting_shortage'] as const;
+export type G0FirstScenario = (typeof G0_FIRST_SCENARIOS)[number];
+const FirstScenarioDecisionSchema = decisionRecordSchema(z.enum(G0_FIRST_SCENARIOS));
 const ActorDecisionSchema = decisionRecordSchema(z.object({ actorId }).strict());
 const ScopeDecisionSchema = decisionRecordSchema(z.object({
   demoTenantId: text(160, 1),
@@ -85,7 +87,7 @@ export const G0DecisionSnapshotSchema = z.object({
 export type G0DecisionSnapshot = z.infer<typeof G0DecisionSnapshotSchema>;
 
 export const G0DecisionPatchSchema = z.object({
-  firstScenario: z.literal('order_delivery_risk').optional(),
+  firstScenario: z.enum(G0_FIRST_SCENARIOS).optional(),
   businessOwnerActorId: actorId.optional(),
   verifyActorId: actorId.optional(),
   scope: z.object({ demoTenantId: text(160, 1), organizationScope: text(300, 1) }).strict().optional(),
@@ -169,8 +171,8 @@ function safeRead(file: string): G0DecisionSnapshot | null {
 function assertOwnerVerifierAreDistinct(decisions: G0DecisionSet): void {
   const owner = decisions.businessOwnerActor?.value.actorId;
   const verifier = decisions.verifyActor?.value.actorId;
-  if (decisions.firstScenario?.value === 'order_delivery_risk' && owner && verifier && owner === verifier) {
-    throw new Error('订单交付风险的 Owner 与 Verify 必须为不同的 actorId');
+  if (decisions.firstScenario && owner && verifier && owner === verifier) {
+    throw new Error('首个闭环场景的 Owner 与 Verify 必须为不同的 actorId');
   }
 }
 

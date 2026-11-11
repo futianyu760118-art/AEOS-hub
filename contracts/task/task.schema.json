@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AEOS Task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId", "tenantId", "businessObjectRef", "caseId", "source", "title",
+    "evidenceRefs", "priority", "dueAt", "initiatedBy", "currentAssignee",
+    "dispatchHistory", "status", "correlationId", "projectId", "nextAction",
+    "resultId", "createdAt", "updatedAt"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "tenantId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "businessObjectRef": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "caseId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "source": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "evidenceRefs": {
+      "type": "array", "minItems": 1, "maxItems": 40, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
+    "priority": { "enum": ["urgent", "high", "medium", "low"] },
+    "dueAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "initiatedBy": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "currentAssignee": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "role", "actorId", "assignedAt"],
+          "properties": {
+            "kind": { "const": "responsibility_role" },
+            "role": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "actorId": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "assignedAt": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "agentId", "assignedAt"],
+          "properties": {
+            "kind": { "const": "agent" },
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "assignedAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "dispatchHistory": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["agentId", "recommendedReasons", "confirmedBy", "confirmedAt", "reason"],
+        "properties": {
+          "agentId": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "recommendedReasons": {
+            "type": "array", "maxItems": 32,
+            "items": { "type": "string", "maxLength": 500 }
+          },
+          "confirmedBy": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "confirmedAt": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "DRAFT", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "AWAITING_DECISION",
+        "AWAITING_VERIFY", "COMPLETED", "REJECTED", "FAILED", "CANCELLED"
+      ]
+    },
+    "correlationId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "projectId": { "type": ["string", "null"], "maxLength": 160 },
+    "nextAction": { "type": "string", "maxLength": 500 },
+    "resultId": { "type": ["string", "null"], "maxLength": 160 },
+    "agentRun": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runtimeRunId", "runtimeSessionId", "agentId", "startedAt", "endedAt"],
+      "properties": {
+        "runtimeRunId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "runtimeSessionId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "agentId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

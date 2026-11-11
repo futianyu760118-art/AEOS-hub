@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AEOS Task Assignment Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reason"],
+  "properties": {
+    "assigneeKind": { "enum": ["responsibility_role", "agent"] },
+    "assigneeRole": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "assigneeActorId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "agentId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "recommendedReasons": {
+      "type": "array", "maxItems": 32,
+      "items": { "type": "string", "maxLength": 500 }
+    },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  },
+  "oneOf": [
+    {
+      "required": ["assigneeKind", "agentId"],
+      "properties": { "assigneeKind": { "const": "agent" } }
+    },
+    {
+      "required": ["assigneeKind", "assigneeRole", "assigneeActorId"],
+      "properties": {
+        "assigneeKind": { "const": "responsibility_role" },
+        "assigneeRole": { "type": "string", "minLength": 1 },
+        "assigneeActorId": { "type": "string", "pattern": "^(m01|local-dev):user:" }
+      }
+    }
+  ]
+}

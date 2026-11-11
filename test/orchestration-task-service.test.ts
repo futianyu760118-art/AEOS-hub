@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import type { ExecutionAgentRecord, ExecutionPlaneRegistry } from '../src/execution-plane.ts';
 import { OrchestrationTaskService, OrchestrationTaskServiceError } from '../src/orchestration-task-service.ts';
 import { OrchestrationTaskStore } from '../src/orchestration-task-store.ts';
+import { ensureSystems } from '../src/system-registry.ts';
+
+ensureSystems();
 
 function fixture(t: { after: (fn: () => void) => void }, options: { agents?: ExecutionAgentRecord[]; openTaskLimit?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'aeos-orchestration-service-'));

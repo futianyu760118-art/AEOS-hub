@@ -8,7 +8,9 @@ import { BorrowOrderStore } from '../src/borrow-order-store.ts';
 import { BorrowOrderService } from '../src/borrow-order-service.ts';
 import { BorrowOrderApi } from '../src/borrow-order-api.ts';
 import { deriveSystemToken } from '../src/system-token.ts';
+import { ensureSystems } from '../src/system-registry.ts';
 
+ensureSystems();
 const ROOT_SECRET = 'test-root-secret';
 
 function agent(overrides: Partial<ExecutionAgentRecord> = {}): ExecutionAgentRecord {

@@ -9,11 +9,12 @@ import { createCompanyControlQueryAdapter, COMPANY_CONTROL_PATHS, COMPANY_CONTRO
 import { createReasoningAdapter } from '../src/adapters/reasoning-adapter.js';
 
 test('能力插件化注册并返回处理器与自描述定义', () => {
-  registerCapability({ name: 'query_x', description: '查询 X', inputSchema: { type: 'object' }, constraints: { readOnly: true }, handler: async () => ({}) });
+  const intent = { paths: [{ path: '/external/x', label: 'X' }] };
+  registerCapability({ name: 'query_x', description: '查询 X', inputSchema: { type: 'object' }, constraints: { readOnly: true }, intent, handler: async () => ({}) });
   const handlers = capabilityHandlers();
   assert.equal(typeof handlers.query_x, 'function');
   const definitions = capabilityDefinitions();
-  assert.ok(definitions.some((c) => c.name === 'query_x' && c.description === '查询 X' && c.inputSchema?.type === 'object' && c.constraints?.readOnly === true));
+  assert.ok(definitions.some((c) => c.name === 'query_x' && c.description === '查询 X' && c.inputSchema?.type === 'object' && c.constraints?.readOnly === true && c.intent?.paths?.[0]?.path === '/external/x'));
 });
 
 test('能力注册缺 handler 抛错', () => {

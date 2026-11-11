@@ -1,5 +1,6 @@
 export const TASK_ACTIONS = [
   'create', 'assign', 'reassign', 'project_link', 'accept', 'start', 'supplement_evidence', 'submit_result', 'verify', 'reject',
+  'withdraw', 'remind', 'escalate',
 ] as const;
 
 export type TaskAction = typeof TASK_ACTIONS[number];
@@ -32,7 +33,7 @@ export type CollaborationAuthorizationInput = {
   project?: CollaborationProject | null;
 };
 
-const MANAGER_ACTIONS = new Set<TaskAction>(['create', 'assign', 'reassign', 'project_link']);
+const MANAGER_ACTIONS = new Set<TaskAction>(['create', 'assign', 'reassign', 'project_link', 'withdraw', 'remind']);
 const OPERATOR_ACTIONS = new Set<TaskAction>(['accept', 'start', 'supplement_evidence', 'submit_result']);
 const OWNER_ACTIONS = new Set<TaskAction>(['verify', 'reject']);
 
@@ -56,6 +57,16 @@ export function authorizeTaskAction(input: TaskAuthorizationInput): Authorizatio
       : { allowed: false, code: 'MANAGER_ROLE_REQUIRED' };
   }
   if (!task) return { allowed: false, code: 'TASK_REQUIRED' };
+
+  if (action === 'escalate') {
+    if (canManageBusiness(actor.roles)) return { allowed: true, code: 'ALLOWED' };
+    if (!actor.roles.includes('operator')) return { allowed: false, code: 'OPERATOR_ROLE_REQUIRED' };
+    if (!task.currentAssignee) return { allowed: false, code: 'ASSIGNMENT_REQUIRED' };
+    if (task.currentAssignee.kind !== 'responsibility_role' || task.currentAssignee.actorId !== actor.actorId) {
+      return { allowed: false, code: 'ASSIGNEE_MISMATCH' };
+    }
+    return { allowed: true, code: 'ALLOWED' };
+  }
 
   if (OPERATOR_ACTIONS.has(action)) {
     if (!actor.roles.includes('operator')) return { allowed: false, code: 'OPERATOR_ROLE_REQUIRED' };

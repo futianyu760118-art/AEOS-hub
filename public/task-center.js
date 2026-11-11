@@ -96,7 +96,10 @@ export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g
     canSubmitPendingResult: operator && policy.canSubmitPendingResult,
     canVerify: verifier && policy.canVerify,
     canReject: verifier && policy.canVerify,
-    canDelete: gate.allowed && human && (hasRole(session, 'manager') || hasRole(session, 'owner')),
+    canEscalate: (manager || operator) && policy.canEscalate,
+    canRemind: manager && !TERMINAL.has(task?.status) && task?.status !== 'AWAITING_VERIFY',
+    canWithdraw: manager && !TERMINAL.has(task?.status) && task?.status !== 'AWAITING_VERIFY',
+    canDelete: manager,
     isReadOnly: !gate.allowed || (!manager && !operator && !verifier),
     mutationGate: gate.code,
   };
@@ -105,7 +108,7 @@ export function taskUiCapabilities(task, session, registeredOwnerActorId = '', g
 export function canCreateTaskFromCase(session, operatingCase, g0Snapshot = null) {
   return g1TaskUiMutationGate(session, g0Snapshot).allowed
     && (hasRole(session, 'manager') || hasRole(session, 'supervisor'))
-    && operatingCase?.source === 'order'
+    && ['order', 'kitting'].includes(operatingCase?.source)
     && Array.isArray(operatingCase.evidenceRefs)
     && operatingCase.evidenceRefs.length > 0;
 }

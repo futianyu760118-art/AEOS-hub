@@ -226,6 +226,7 @@ let selectedInboxItemId = null;
 let editingDailyQuestionConfig = null;
 let latestDailyQuestionConflictConfig = null;
 const dailyQuestionGenerationKeys = new Set();
+const dailyQuestionGenerationWarnings = new Set();
 let loadedDailyQuestionAudienceKey = '';
 let dashboardLoading = false;
 let dashboardSnapshot = null;
@@ -319,10 +320,18 @@ const LOCALLY_HIDDEN_VIEWS = new Set(['cases', 'inbox', 'tasks', 'projects', 'bo
 const VIEW_TITLES = { ...Object.fromEntries(commands.map((item) => [item.view, item.label])), 'g0-governance': 'G0 决策登记', 'personnel-admin': '用户管理', 'role-admin': '角色管理', 'permission-admin': '权限管理', 'personnel-onboarding': '首次人员开通', 'execution': '分析工作台', 'usage': '分析成本' };
 const SPLIT = '::';
 
+const LEGACY_ICON_ALIASES = { 'coin-off': 'coins' };
 function refreshIcons(root = document) {
   localizeDynamicCopy(root);
   applyDataStyles(root);
   if (!window.lucide?.createIcons) return;
+  // Older cached markup may still reference icons that were removed from the
+  // bundled Lucide set. Map known legacy names instead of logging errors.
+  root.querySelectorAll?.('[data-lucide]').forEach((node) => {
+    const name = node.getAttribute('data-lucide');
+    const alias = name ? LEGACY_ICON_ALIASES[name] : undefined;
+    if (alias) node.setAttribute('data-lucide', alias);
+  });
   window.lucide.createIcons({ root, attrs: { 'aria-hidden': 'true' } });
 }
 
@@ -3349,6 +3358,10 @@ async function ensureDailyQuestionGeneration(options = {}) {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (payload.warning && !options.silent && !dailyQuestionGenerationWarnings.has(key)) {
+      dailyQuestionGenerationWarnings.add(key);
+      toast(payload.warning, true);
+    }
     if (!dailyQuestionConfig || Number(payload.config?.revision) >= Number(dailyQuestionConfig.revision)) {
       dailyQuestionConfig = payload.config;
       setDailyQuestionRotation(0);
@@ -5314,7 +5327,7 @@ export function buildG0DecisionRequest(fields) {
   if (firstScenario) patch.firstScenario = firstScenario;
   if (businessOwnerActorId) patch.businessOwnerActorId = businessOwnerActorId;
   if (verifyActorId) patch.verifyActorId = verifyActorId;
-  if (businessOwnerActorId && verifyActorId && businessOwnerActorId === verifyActorId) throw new Error('订单交付风险的 Owner 与 Verify 人必须不同。');
+  if (businessOwnerActorId && verifyActorId && businessOwnerActorId === verifyActorId) throw new Error('首个闭环场景的 Owner 与 Verify 人必须不同。');
   if (demoTenantId || organizationScope) {
     if (!demoTenantId || !organizationScope) throw new Error('请同时填写试点租户范围与组织范围。');
     patch.scope = { demoTenantId, organizationScope };
@@ -5469,7 +5482,7 @@ async function submitOnboardingG0(event) {
   }
   try {
     const request = buildG0DecisionRequest({
-      firstScenario: 'order_delivery_risk',
+      firstScenario: String($('#ob-g0-first-scenario')?.value || 'order_delivery_risk'),
       businessOwnerActorId: businessOwner,
       verifyActorId: verify,
       demoTenantId: tenantId,
@@ -5964,7 +5977,7 @@ function g0TrimmedValue(field) { return String(field?.value || '').trim(); }
 function collectG0DecisionRequest() {
   const businessOwnerActorId = g0TrimmedValue(els.g0BusinessOwner);
   return buildG0DecisionRequest({
-    firstScenario: 'order_delivery_risk',
+    firstScenario: g0TrimmedValue(els.g0FirstScenario) || 'order_delivery_risk',
     businessOwnerActorId,
     verifyActorId: g0TrimmedValue(els.g0VerifyActor),
     demoTenantId: g0TrimmedValue(els.g0DemoTenant),
@@ -6040,7 +6053,11 @@ async function saveG0DecisionView(event) {
 async function taskRequest(path, method = 'GET', body) {
   const response = await fetch(path, {
     method,
-    headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: {
+      accept: 'application/json',
+      ...(body ? { 'content-type': 'application/json' } : {}),
+      ...(method !== 'GET' ? { 'idempotency-key': crypto.randomUUID() } : {}),
+    },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json().catch(() => ({}));
@@ -6383,6 +6400,9 @@ function renderTaskCenter() {
       capabilities.canStart ? `<button class="btn secondary compact" type="button" data-task-action="start" data-task-id="${esc(task.taskId)}"><i data-lucide="play"></i>记录处理</button>` : '',
       capabilities.canSupplementEvidence ? `<button class="btn ghost compact" type="button" data-task-action="evidence" data-task-id="${esc(task.taskId)}"><i data-lucide="paperclip"></i>补充证据</button>` : '',
       capabilities.canSubmitPendingResult ? `<button class="btn secondary compact" type="button" data-task-action="result" data-task-id="${esc(task.taskId)}"><i data-lucide="file-check-2"></i>登记待核验结果</button>` : '',
+      capabilities.canEscalate ? `<button class="btn ghost compact" type="button" data-task-action="escalate" data-task-id="${esc(task.taskId)}"><i data-lucide="arrow-up-circle"></i>升级处理</button>` : '',
+      capabilities.canRemind ? `<button class="btn ghost compact" type="button" data-task-action="remind" data-task-id="${esc(task.taskId)}"><i data-lucide="bell"></i>催办</button>` : '',
+      capabilities.canWithdraw ? `<button class="btn ghost compact danger" type="button" data-task-action="withdraw" data-task-id="${esc(task.taskId)}"><i data-lucide="undo-2"></i>撤回任务</button>` : '',
       capabilities.canVerify ? `<button class="btn primary compact" type="button" data-task-action="verify" data-task-id="${esc(task.taskId)}"><i data-lucide="badge-check"></i>业务核验</button>` : '',
       capabilities.canDelete ? `<button class="btn ghost compact danger" type="button" data-task-action="delete" data-task-id="${esc(task.taskId)}"><i data-lucide="trash-2"></i>删除</button>` : '',
     ].filter(Boolean).join('');
@@ -6552,12 +6572,16 @@ async function performTaskAction(taskId, action) {
     if (!window.confirm('确认运行该任务分派的 Agent？运行期间会等待结果。')) return;
     toast('Agent 运行中，请稍候…');
     try {
-      await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`, 'POST', {});
+      const result = await taskRequest(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`, 'POST', {});
       taskDetails.delete(taskId);
       taskAgentCandidates.delete(taskId);
       projectTaskDetails.clear();
       await loadTasks({ silent: true });
-      toast('Agent 运行完成，结果已回写任务');
+      if (result?.code === 'AGENT_INELIGIBLE' || result?.task?.status === 'AWAITING_DECISION') {
+        toast('Agent 当前不可用或结果置信度不足，任务已升级人工决策。', true);
+      } else {
+        toast('Agent 运行完成，结果已回写任务');
+      }
     } catch (error) {
       const message = String(error?.message || '未知错误');
       if (message.includes('已有待核验或已核验结果')) {
@@ -6613,6 +6637,14 @@ async function performTaskAction(taskId, action) {
     const nextAction = window.prompt('明确下一步动作：', '由业务负责人确认处理优先级与时限。');
     if (!nextAction?.trim()) return;
     path += '/escalations'; body = { reason, nextAction };
+  } else if (action === 'remind') {
+    const reason = window.prompt('催办说明：', '请尽快处理并反馈当前进展。');
+    if (!reason?.trim()) return;
+    path += '/reminders'; body = { reason };
+  } else if (action === 'withdraw') {
+    const reason = window.prompt('撤回原因：', '任务不再需要继续处理。');
+    if (!reason?.trim()) return;
+    path += '/withdrawals'; body = { reason };
   } else if (action === 'result') {
     const resultType = window.prompt('结果类型：', 'risk_analysis');
     if (!resultType?.trim()) return;

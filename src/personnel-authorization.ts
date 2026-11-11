@@ -76,7 +76,7 @@ function isHubRoleCode(role: string): boolean {
 }
 
 function scopeMatchesActor(actor: PersonnelAuthorizationActor, scope: PersonnelAuthorizationScope | null): boolean {
-  if (!scope || scope.readyForG1 !== true || scope.firstScenario !== 'order_delivery_risk') return false;
+  if (!scope || scope.readyForG1 !== true || !['order_delivery_risk', 'material_kitting_shortage'].includes(scope.firstScenario ?? '')) return false;
   if (typeof scope.demoTenantId !== 'string' || !scope.demoTenantId) return false;
   if (typeof scope.organizationScope !== 'string' || !scope.organizationScope) return false;
   if (typeof actor.organizationId !== 'string' || !actor.organizationId) return false;

@@ -112,6 +112,9 @@ export class OperatingCenterStore {
     const tenantId = typeof input.tenantId === 'string' ? input.tenantId.trim() : '';
     const createdBy = typeof input.actor === 'string' ? input.actor.trim()
       : typeof input.createdBy === 'string' ? input.createdBy.trim() : '';
+    const extraEvidenceRefs = Array.isArray(input.evidenceRefs)
+      ? input.evidenceRefs.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
     if (!caseId || !resultType || !summary || !createdBy) {
       throw new Error('创建 Result 需要 caseId、resultType、summary 和 actor');
     }
@@ -131,7 +134,7 @@ export class OperatingCenterStore {
         source_system: 'aeos-hub',
         correlation_id: item.id,
         version: '1.0',
-        evidence_refs: item.evidenceRefs,
+        evidence_refs: [...new Set([...extraEvidenceRefs, ...item.evidenceRefs])].slice(0, 200),
         summary,
         created_at: createdAt,
         verified_by: null,

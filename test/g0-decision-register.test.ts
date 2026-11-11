@@ -160,3 +160,15 @@ test('refuses a mutation that would make the stored snapshot too large to read b
   );
   assert.equal(store.load().revision, 1);
 });
+
+
+test('accepts either supported first-scenario choice', (t) => {
+  const store = fixture(t);
+  const snapshot = store.record({
+    actor,
+    patch: { firstScenario: 'material_kitting_shortage' },
+    note: '????????????',
+  });
+  assert.equal(snapshot.decisions.firstScenario?.value, 'material_kitting_shortage');
+  assert.equal(snapshot.history.at(-1)?.value, 'material_kitting_shortage');
+});

@@ -3,10 +3,10 @@
 // 注册时原样上报给管理面，由管理面做通用校验。
 const capabilities = new Map();
 
-export function registerCapability({ name, description, version, inputSchema, outputSchema, constraints, handler }) {
+export function registerCapability({ name, description, version, inputSchema, outputSchema, constraints, intent, handler }) {
   if (!name || typeof name !== 'string') throw new Error('能力注册需要 name');
   if (typeof handler !== 'function') throw new Error(`能力 ${name} 需要 handler 函数`);
-  capabilities.set(name, { name, description: description || '', version, inputSchema, outputSchema, constraints, handler });
+  capabilities.set(name, { name, description: description || '', version, inputSchema, outputSchema, constraints, intent, handler });
 }
 
 export function capabilityHandlers() {
@@ -22,6 +22,7 @@ export function capabilityDefinitions() {
     if (cap.inputSchema) definition.inputSchema = cap.inputSchema;
     if (cap.outputSchema) definition.outputSchema = cap.outputSchema;
     if (cap.constraints) definition.constraints = cap.constraints;
+    if (cap.intent) definition.intent = cap.intent;
     return definition;
   });
 }

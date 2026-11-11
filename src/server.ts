@@ -13,6 +13,7 @@ import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
 import { codexHome, configFile, readConfig, saveModelConfig, listEnvKeys, setEnvKey, loadModelPresets, saveModelPresets, ensureConfigFile } from './hub-config.ts';
 import { appendEvidence, evidenceFile, readRecentEvidence, evidenceHealth } from './evidence.ts';
+import { flushM02Outbox, m02OutboxHealth } from './m02-outbox.ts';
 import { appendAuthenticationAuditEvidence } from './authentication-audit.ts';
 import { collectMcpPages, payloadOf } from './mcp-pagination.ts';
 import { dashboardReadPlan, loadDashboardReadLimits } from './dashboard-read-plan.ts';
@@ -32,6 +33,8 @@ import { AttentionSearchRequestSchema, searchLiveDashboard } from './attention-s
 import { operatingCenter } from './operating-center.ts';
 import { taskCenter } from './task-center.ts';
 import { TaskApi } from './task-api.ts';
+import { IdempotencyStore } from './idempotency-store.ts';
+import { canManageHub, evidenceActorScope, isAgentSquadManagementRoute, isExecutionManagementRoute, isHarborManagementRoute } from './management-authorization.ts';
 import { G0DecisionApi } from './g0-decision-api.ts';
 import { G0DecisionRegisterStore } from './g0-decision-register.ts';
 import { McpAccessGateway } from './mcp-access-gateway.ts';
@@ -115,6 +118,7 @@ import {
 } from './execution-identity.ts';
 import { BorrowOrderApi } from './borrow-order-api.ts';
 import { CapabilityInvocationApi } from './capability-invocation-api.ts';
+import { M13AgentChatApi, M13_AGENT_CHAT_PATH_PREFIX, type M13ChatRuntimePort } from './m13-agent-chat-api.ts';
 import { CapabilityInvocationError, CapabilityInvocationService } from './capability-invocation-service.ts';
 import { CapabilityQueryTemplateError } from './capability-query-template.ts';
 import { AlertCenter, LogAlertChannel, WeComAlertChannel } from './alert-center.ts';
@@ -214,6 +218,31 @@ const taskApi = new TaskApi({ operatingCenter, taskCenter, g0DecisionStore, appe
   if (kind === 'reasoning') return capabilities.find((cap) => cap.name.startsWith('reason'))?.name;
   return undefined;
 } });
+// Overdue controlled/collaboration tasks are surfaced to the accountable role
+// without silently completing or reassigning them.
+const taskOverdueTimer = setInterval(() => {
+  try {
+    const overdue = taskCenter.escalateOverdue({ today: beijingDateString(), actor: 'system:hub-scheduler' });
+    for (const task of overdue) {
+      try {
+        appendEvidence({
+          kind: 'app_event', actor_id: 'system:hub-scheduler', actor_type: 'system', tenant_id: task.tenantId,
+          object_ref: task.businessObjectRef, correlation_id: task.correlationId,
+          evidence_refs: task.evidenceRefs, summary: 'task escalated as overdue',
+          payload: { taskId: task.taskId, status: task.status, dueAt: task.dueAt, nextAction: task.nextAction },
+        });
+      } catch { /* The task ledger already records the overdue escalation. */ }
+    }
+  } catch (error) {
+    console.warn('[tasks] 逾期扫描失败:', (error as Error).message);
+  }
+}, 60_000);
+taskOverdueTimer.unref();
+const m02FlushTimer = setInterval(() => {
+  flushM02Outbox().catch((error) => console.warn('[m02] Evidence 投递失败:', (error as Error).message));
+}, Math.max(5_000, Number(process.env.M02_FLUSH_INTERVAL_MS) || 30_000));
+m02FlushTimer.unref();
+const idempotencyStore = new IdempotencyStore();
 const g0DecisionApi = new G0DecisionApi({ store: g0DecisionStore, appendEvidence });
 const personnelAdminConfig = AUTH_MODE === 'm01'
   ? readPersonnelAdminConfig(process.env, (m01Config as { issuer: string }).issuer)
@@ -368,6 +397,18 @@ const capabilityInvocationService = new CapabilityInvocationService({
 const capabilityInvocationApi = new CapabilityInvocationApi({
   rootSecret: EXECUTION_PLANE_TOKEN,
   service: capabilityInvocationService,
+  appendEvidence,
+});
+const m13ChatRuntime: M13ChatRuntimePort = {
+  createSession: (request) => runtimeSupervisor.createSession(CODEX_RUNTIME_ID, request),
+  resumeSession: (sessionId, request) => runtimeSupervisor.resumeSession(CODEX_RUNTIME_ID, sessionId, request),
+  startRun: (sessionId, request) => runtimeSupervisor.startRun(CODEX_RUNTIME_ID, sessionId, request),
+  waitForRun: (runId, timeoutMs) => runtimeSupervisor.waitForRun(CODEX_RUNTIME_ID, runId, timeoutMs),
+  onEvent: (listener) => runtimeSupervisor.onEvent(listener, CODEX_RUNTIME_ID),
+};
+const m13AgentChatApi = new M13AgentChatApi({
+  apiKey: process.env.M13_AGENT_CHAT_API_KEY ?? '',
+  runtime: m13ChatRuntime,
   appendEvidence,
 });
 const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
@@ -2145,7 +2186,20 @@ const server = createServer(async (req, res) => {
   res.setHeader('content-security-policy', "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:");
   if (url.pathname.startsWith('/api/')) res.setHeader('cache-control', 'no-store');
   if (url.pathname === '/healthz' && req.method === 'GET') {
-    sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
+    const evidenceError = evidenceHealth();
+    const m02 = m02OutboxHealth();
+    const degraded = Boolean(evidenceError) || (m02.configured && Boolean(m02.lastError));
+    sendJson(res, degraded ? 503 : 200, {
+      status: degraded ? 'degraded' : 'ok',
+      evidence: evidenceError ? { status: 'degraded', error: evidenceError } : { status: 'ok' },
+      m02: {
+        status: m02.configured ? (m02.lastError ? 'degraded' : 'ok') : 'local-buffer',
+        configured: m02.configured,
+        pending: m02.pending,
+        lastError: m02.lastError,
+      },
+    });
+    return;
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
   if (url.pathname === '/api/auth/login') {
@@ -2210,6 +2264,34 @@ const server = createServer(async (req, res) => {
       else sendJson(res, outcome.status, outcome.body);
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
+    }
+    return;
+  }
+  // ---------- M13 Agent Workforce 会话接口（X-API-Key / Bearer 鉴权，供 M05 等外部系统调用） ----------
+  if (url.pathname.startsWith(M13_AGENT_CHAT_PATH_PREFIX)) {
+    try {
+      let body: Record<string, unknown> = {};
+      let bodyParseFailed = false;
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req, 64 * 1024); } catch { bodyParseFailed = true; }
+      }
+      const headerValue = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+      };
+      const outcome = await m13AgentChatApi.handle({
+        method: req.method,
+        pathname: url.pathname,
+        authorization: headerValue('authorization'),
+        apiKey: headerValue('x-api-key'),
+        body,
+        bodyParseFailed,
+        query: url.searchParams,
+      });
+      if (!outcome) { sendJson(res, 404, { error: 'm13 agent endpoint not found' }); }
+      else sendJson(res, outcome.status, outcome.body);
+    } catch (error) {
+      sendJson(res, 500, { code: 500, message: 'M13 内部错误', extra: { detail: (error as Error).message } });
     }
     return;
   }
@@ -2496,6 +2578,76 @@ const server = createServer(async (req, res) => {
   const requestActor = publicAsset ? 'anonymous' : requestActorContext!.actorId;
   const actorTenant = requestActorContext?.tenantId?.trim();
   const requestTenantId = !actorTenant || actorTenant === 'local-dev' ? DEFAULT_TENANT_ID : actorTenant;
+  const requestRoles = requestActorContext?.roles ?? [];
+  const canManageHubRequest = canManageHub(requestRoles);
+  const denyManagementRoute = (action: string, objectRef: string): void => {
+    try {
+      appendEvidence({
+        kind: 'guard_decision',
+        actor_id: requestActorContext?.actorId,
+        actor_type: requestActorContext ? 'human' : 'system',
+        tenant_id: requestTenantId,
+        object_ref: objectRef,
+        correlation_id: `management-denied:${action}`,
+        summary: `management action denied: ${action}`,
+        payload: { action, outcome: 'denied', code: 'MANAGER_ROLE_REQUIRED', roles: requestRoles },
+      });
+    } catch {
+      // Denial still takes effect when the audit sink is unavailable.
+    }
+    sendJson(res, 403, { error: 'forbidden', code: 'MANAGER_ROLE_REQUIRED' });
+  };
+  const requireManagementRoute = (action: string, objectRef: string): boolean => {
+    if (canManageHubRequest) return true;
+    denyManagementRoute(action, objectRef);
+    return false;
+  };
+  const rawIdempotencyHeader = req.headers['idempotency-key'];
+  const requestIdempotencyKey = (Array.isArray(rawIdempotencyHeader) ? rawIdempotencyHeader[0] : rawIdempotencyHeader ?? '').trim();
+  const replayIdempotent = (pathname: string, body: Record<string, unknown>): boolean => {
+    if (!requestIdempotencyKey || !requestActorContext || req.method === 'GET') return false;
+    const outcome = idempotencyStore.lookup({
+      key: requestIdempotencyKey,
+      actorId: requestActorContext.actorId,
+      method: req.method ?? 'GET',
+      path: pathname,
+      request: body,
+    });
+    if (outcome.kind === 'replay') {
+      sendJson(res, outcome.status, outcome.body as Record<string, unknown>);
+      return true;
+    }
+    if (outcome.kind === 'conflict') {
+      sendJson(res, 409, { error: '同一 Idempotency-Key 已用于不同请求', code: 'IDEMPOTENCY_CONFLICT' });
+      return true;
+    }
+    return false;
+  };
+  const recordIdempotent = (pathname: string, body: Record<string, unknown>, response: { status: number; body: Record<string, unknown> }): void => {
+    if (!requestIdempotencyKey || !requestActorContext || req.method === 'GET' || response.status >= 300) return;
+    try {
+      idempotencyStore.record({
+        key: requestIdempotencyKey,
+        actorId: requestActorContext.actorId,
+        method: req.method ?? 'GET',
+        path: pathname,
+        request: body,
+        status: response.status,
+        body: response.body,
+      });
+    } catch (error) {
+      console.warn('[idempotency] 记录失败:', (error as Error).message);
+    }
+  };
+  if (isHarborManagementRoute(url.pathname)) {
+    if (!requireManagementRoute(`${req.method ?? 'GET'} ${url.pathname}`, 'hub://harbor')) return;
+  }
+  if (isAgentSquadManagementRoute(url.pathname)) {
+    if (!requireManagementRoute(`${req.method ?? 'GET'} ${url.pathname}`, 'hub://agent-squad')) return;
+  }
+  if (isExecutionManagementRoute(url.pathname)) {
+    if (!requireManagementRoute(`${req.method ?? 'POST'} ${url.pathname}`, 'hub://execution-management')) return;
+  }
   // ---------- 写操作审批（浏览器会话；创建与审批仅 manager / supervisor） ----------
   if (url.pathname.startsWith('/api/write-requests')) {
     try {
@@ -2757,6 +2909,7 @@ const server = createServer(async (req, res) => {
   if (/^\/api\/tasks\/[^/]+\/agent-runs$/.test(url.pathname)) {
     try {
       const body = req.method === 'GET' ? {} : await readJsonBody(req);
+      if (replayIdempotent(url.pathname, body)) return;
       const taskResponse = await taskApi.handleAgentRun({
         method: req.method,
         pathname: url.pathname,
@@ -2770,13 +2923,17 @@ const server = createServer(async (req, res) => {
         body,
       });
       if (!taskResponse) { sendJson(res, 404, { error: 'task endpoint not found' }); }
-      else sendJson(res, taskResponse.status, taskResponse.body);
+      else {
+        sendJson(res, taskResponse.status, taskResponse.body);
+        recordIdempotent(url.pathname, body, taskResponse);
+      }
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
   if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/') || url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/') || /^\/api\/operating-cases\/[^/]+\/tasks$/.test(url.pathname)) {
     try {
       const body = req.method === 'GET' ? {} : await readJsonBody(req);
+      if (replayIdempotent(url.pathname, body)) return;
       const taskResponse = taskApi.handle({
         method: req.method,
         pathname: url.pathname,
@@ -2790,7 +2947,10 @@ const server = createServer(async (req, res) => {
         body,
       });
       if (!taskResponse) { sendJson(res, 404, { error: 'task endpoint not found' }); }
-      else sendJson(res, taskResponse.status, taskResponse.body);
+      else {
+        sendJson(res, taskResponse.status, taskResponse.body);
+        recordIdempotent(url.pathname, body, taskResponse);
+      }
     } catch (error) { sendJson(res, 400, { error: (error as Error).message }); }
     return;
   }
@@ -2987,8 +3147,25 @@ const server = createServer(async (req, res) => {
       const result = await ensureDailyQuestionsGenerated(dateKey, role);
       sendJson(res, 200, result);
     } catch (error) {
-      const status = error instanceof ZodError || /^(生成参数|dateKey|只能生成当天|role)/.test((error as Error).message) ? 400 : 503;
-      sendJson(res, status, { error: (error as Error).message });
+      const message = (error as Error).message;
+      if (error instanceof ZodError || /^(生成参数|dateKey|只能生成当天|role)/.test(message)) {
+        sendJson(res, 400, { error: message });
+      } else {
+        // The daily-question panel already has a deterministic manual pool. A
+        // missing model credential / temporarily unavailable Runtime must not
+        // turn that fallback into a browser-console 503 on every page load.
+        try {
+          const config = loadDailyQuestionConfig();
+          sendJson(res, 200, {
+            config,
+            cached: false,
+            degraded: true,
+            warning: `AI 每日问题生成暂不可用，已使用人工问题池：${message}`,
+          });
+        } catch {
+          sendJson(res, 503, { error: message });
+        }
+      }
     }
     return;
   }
@@ -3043,7 +3220,17 @@ const server = createServer(async (req, res) => {
       const agentId = decodeURIComponent(harborLifecycleMatch[1] ?? '').trim();
       if (!agentId) throw new Error('Agent id 无效');
       const input = await readJsonBody(req);
-      const item = transitionHarborAgentLifecycle({ agentId, to: input.to, reason: input.reason, actor: typeof input.actor === 'string' && input.actor.trim() ? input.actor.trim() : 'local-operator' });
+      const actor = requestActorContext?.actorId ?? 'unknown-actor';
+      const item = transitionHarborAgentLifecycle({ agentId, to: input.to, reason: input.reason, actor });
+      try {
+        appendEvidence({
+          kind: 'app_event', actor_id: actor, actor_type: 'human', tenant_id: requestTenantId,
+          object_ref: `hub://harbor/agents/${encodeURIComponent(agentId)}`,
+          correlation_id: `harbor-lifecycle:${item.id}`,
+          summary: `agent lifecycle ${item.registration.lifecycle}`,
+          payload: { agentId: item.id, to: item.registration.lifecycle, reason: input.reason },
+        });
+      } catch { /* Store-level lifecycle audit remains available. */ }
       sendJson(res, 200, { item });
     } catch (error) {
       const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
@@ -3061,6 +3248,13 @@ const server = createServer(async (req, res) => {
       if (squad.lead.harborAgentId === id) throw new Error('该 Agent 是当前主 Agent，请先更换主 Agent 关联');
       if (squad.members.some((member) => member.harborAgentId === id)) throw new Error('该 Agent 仍在协作成员中，请先将其移出');
       const item = deleteHarborAgent({ id });
+      try {
+        appendEvidence({
+          kind: 'app_event', actor_id: requestActorContext?.actorId, actor_type: 'human', tenant_id: requestTenantId,
+          object_ref: `hub://harbor/agents/${encodeURIComponent(id)}`, correlation_id: `harbor-agent-deleted:${id}`,
+          summary: 'harbor agent deleted', payload: { agentId: id, code: item.registration.code },
+        });
+      } catch { /* Deletion already committed. */ }
       sendJson(res, 200, { item });
     } catch (error) {
       const status = error instanceof HarborStoreNotFoundError ? 404 : 400;
@@ -3080,6 +3274,17 @@ const server = createServer(async (req, res) => {
     try {
       const input = await readJsonBody(req);
       const item = creator(input);
+      try {
+        const itemRecord = item as Record<string, unknown>;
+        const itemId = typeof itemRecord.id === 'string' ? itemRecord.id : url.pathname;
+        appendEvidence({
+          kind: 'app_event', actor_id: requestActorContext?.actorId, actor_type: 'human', tenant_id: requestTenantId,
+          object_ref: `hub://harbor${url.pathname.replace(/^\/api\/harbor/, '')}/${encodeURIComponent(itemId)}`,
+          correlation_id: `harbor-created:${url.pathname}:${itemId}`,
+          summary: 'harbor resource created',
+          payload: { path: url.pathname, id: itemId },
+        });
+      } catch { /* Creation already committed. */ }
       sendJson(res, 201, { item });
     } catch (error) {
       sendJson(res, 400, { error: (error as Error).message });
@@ -3324,6 +3529,7 @@ const server = createServer(async (req, res) => {
       alerts: alertCenter.list(limit),
       alertCounts: alertCenter.counts(),
       channels: { log: true, wecom: alertCenter.channelEnabled('wecom') },
+      m02: m02OutboxHealth(),
     });
     return;
   }
@@ -3428,12 +3634,20 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
       const limit = boundedLimit(url.searchParams.get('limit'));
-      const actorId = url.searchParams.get('actor_id')?.trim();
+      const requestedActorId = url.searchParams.get('actor_id')?.trim();
       const requestedActorType = url.searchParams.get('actor_type')?.trim();
-      if ((actorId !== undefined && (!actorId || actorId.length > 200))
+      if ((requestedActorId !== undefined && (!requestedActorId || requestedActorId.length > 200))
         || (requestedActorType !== undefined && !['human', 'service', 'agent', 'system'].includes(requestedActorType))) {
         throw new Error('invalid actor filter');
       }
+      // Managers and supervisors may browse the tenant's evidence; every other
+      // authenticated actor only sees evidence attributed to their own identity.
+      const scope = evidenceActorScope(requestRoles, requestActorContext?.actorId ?? null, requestedActorId);
+      if (!scope.ok) {
+        sendJson(res, 403, { error: 'forbidden', code: 'EVIDENCE_SCOPE_DENIED' });
+        return;
+      }
+      const actorId = scope.actorId;
       sendJson(res, 200, await readRecentEvidence(limit, evidenceFile, {
         tenantId: requestTenantId,
         ...(actorId ? { actorId } : {}),
