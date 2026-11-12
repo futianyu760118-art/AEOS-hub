@@ -148,3 +148,13 @@ test('重复审核返回 409', async () => {
   const again = await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, apiKey: API_KEY, body: { status: 'rejected' } });
   assert.equal(again?.status, 409);
 });
+
+test('Idempotency-Key 头幂等：重复提交返回同一申请', async () => {
+  const { api } = fixture({ after: () => {} });
+  const first = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', idempotencyKey: 'hdr-1', body: submitBody() });
+  const second = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', idempotencyKey: 'hdr-1', body: submitBody() });
+  const id1 = (first!.body as { application_id: string }).application_id;
+  const id2 = (second!.body as { application_id: string }).application_id;
+  assert.equal(id1, id2);
+  assert.equal(second?.status, 200);
+});

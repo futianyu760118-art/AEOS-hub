@@ -50,6 +50,7 @@ export type M13ApplicationRequest = {
   pathname: string;
   authorization?: string;
   apiKey?: string;
+  idempotencyKey?: string;
   body?: Record<string, unknown>;
   bodyParseFailed?: boolean;
   clientAddress?: string;
@@ -121,7 +122,7 @@ export class M13AgentApplicationApi {
     const requestType = readString(body.request_type, 80) || 'agent_access';
     const notes = readString(body.notes, MAX_NOTES_CHARS);
     const agentIds = readAgentIds(body.agent_ids);
-    const idempotencyKey = readString(body.idempotency_key, 200) || null;
+    const idempotencyKey = readString(request.idempotencyKey ?? body.idempotency_key, 200) || null;
 
     const store = this.loadStore();
     if (idempotencyKey) {

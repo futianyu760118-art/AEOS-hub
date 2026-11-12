@@ -2416,6 +2416,7 @@ const server = createServer(async (req, res) => {
         pathname: url.pathname,
         authorization: headerValue('authorization'),
         apiKey: headerValue('x-api-key'),
+        idempotencyKey: headerValue('idempotency-key'),
         body,
         bodyParseFailed,
         clientAddress: req.socket.remoteAddress ?? '',
