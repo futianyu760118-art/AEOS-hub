@@ -180,3 +180,17 @@ test('未配置密钥时返回 503', async () => {
   const res = await api.handle({ method: 'GET', pathname: '/poms/v1/agents/health', apiKey: API_KEY });
   assert.equal(res?.status, 503);
 });
+
+test('verifyKey 回调可放行已签发密钥', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aeos-m13-chat-cb-'));
+  const { runtime } = fakeRuntime();
+  const api = new M13AgentChatApi({
+    apiKey: API_KEY,
+    runtime,
+    appendEvidence: () => undefined,
+    storeFile: join(dir, 'sessions.json'),
+    verifyKey: (key) => key === 'issued-key-123',
+  });
+  const res = await api.handle({ method: 'GET', pathname: '/poms/v1/agents/health', apiKey: 'issued-key-123' });
+  assert.equal(res?.status, 200);
+});

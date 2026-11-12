@@ -126,6 +126,8 @@ export interface M13ChatApiOptions {
   storeFile?: string;
   runTimeoutMs?: number;
   rateLimitPerMinute?: number;
+  /** 额外的密钥校验（如已签发的每申请密钥）。返回 true 视为通过。 */
+  verifyKey?: (key: string) => boolean;
 }
 
 const OBJECT_REF = 'hub://m13/agent-workforce';
@@ -134,6 +136,7 @@ export class M13AgentChatApi {
   private readonly apiKey: string;
   private readonly runtime: M13ChatRuntimePort;
   private readonly appendEvidence: (input: EvidenceInput) => unknown;
+  private readonly verifyKeyCallback: ((key: string) => boolean) | undefined;
   private readonly enabled: boolean;
   private readonly storeFile: string;
   private readonly runTimeoutMs: number;
@@ -145,6 +148,7 @@ export class M13AgentChatApi {
     this.apiKey = options.apiKey.trim();
     this.runtime = options.runtime;
     this.appendEvidence = options.appendEvidence;
+    this.verifyKeyCallback = options.verifyKey;
     this.enabled = options.enabled !== false;
     this.storeFile = options.storeFile ?? join(dataDir, 'm13-agent-chat-sessions.json');
     this.runTimeoutMs = options.runTimeoutMs && Number.isFinite(options.runTimeoutMs) && options.runTimeoutMs > 0
@@ -396,10 +400,20 @@ export class M13AgentChatApi {
 
   private verifyKey(request: M13ChatRequest): boolean {
     const header = request.apiKey?.trim() || extractBearer(request.authorization) || '';
-    if (!header || !this.apiKey) return false;
-    const expected = Buffer.from(this.apiKey);
-    const actual = Buffer.from(header);
-    return expected.length === actual.length && timingSafeEqual(expected, actual);
+    if (!header) return false;
+    if (this.apiKey) {
+      const expected = Buffer.from(this.apiKey);
+      const actual = Buffer.from(header);
+      if (expected.length === actual.length && timingSafeEqual(expected, actual)) return true;
+    }
+    if (this.verifyKeyCallback) {
+      try {
+        if (this.verifyKeyCallback(header)) return true;
+      } catch {
+        // 回调异常按未通过处理。
+      }
+    }
+    return false;
   }
 
   private allowRate(request: M13ChatRequest): boolean {

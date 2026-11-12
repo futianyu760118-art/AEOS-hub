@@ -94,3 +94,57 @@ test('提交路径不在前缀内返回 null', async () => {
   const res = await api.handle({ method: 'GET', pathname: '/poms/v1/agents/health' });
   assert.equal(res, null);
 });
+
+test('审核通过签发凭据，GET /{id} 返回 credential 与 activation', async () => {
+  const { api } = fixture({ after: () => {} });
+  const created = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', body: submitBody() });
+  const id = (created!.body as { application_id: string }).application_id;
+
+  const review = await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, apiKey: API_KEY, body: { status: 'approved' } });
+  assert.equal(review?.status, 200);
+  const reviewed = review!.body as { status: string; credential: { api_key: string; issued_at: string } | null; activation: unknown };
+  assert.equal(reviewed.status, 'approved');
+  assert.match(reviewed.credential!.api_key, /^m13_/);
+  assert.ok(reviewed.activation);
+
+  const got = await api.handle({ method: 'GET', pathname: `/poms/v1/agent-applications/${id}` });
+  const body = got!.body as { credential: { api_key: string } | null };
+  assert.ok(body.credential);
+});
+
+test('审核签发密钥可被 verifyCredential 接受', async () => {
+  const { api } = fixture({ after: () => {} });
+  const created = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', body: submitBody() });
+  const id = (created!.body as { application_id: string }).application_id;
+  const review = await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, apiKey: API_KEY, body: { status: 'approved' } });
+  const issued = (review!.body as { credential: { api_key: string } }).credential.api_key;
+  assert.equal(api.verifyCredential(issued), true);
+  assert.equal(api.verifyCredential(API_KEY), true);
+  assert.equal(api.verifyCredential('not-a-key'), false);
+});
+
+test('审核拒绝返回 rejected', async () => {
+  const { api } = fixture({ after: () => {} });
+  const created = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', body: submitBody() });
+  const id = (created!.body as { application_id: string }).application_id;
+  const review = await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, apiKey: API_KEY, body: { status: 'rejected', reviewer_note: '资料不全' } });
+  assert.equal(review?.status, 200);
+  assert.equal((review!.body as { status: string }).status, 'rejected');
+});
+
+test('审核无密钥返回 401', async () => {
+  const { api } = fixture({ after: () => {} });
+  const created = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', body: submitBody() });
+  const id = (created!.body as { application_id: string }).application_id;
+  const review = await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, body: { status: 'approved' } });
+  assert.equal(review?.status, 401);
+});
+
+test('重复审核返回 409', async () => {
+  const { api } = fixture({ after: () => {} });
+  const created = await api.handle({ method: 'POST', pathname: '/poms/v1/agent-applications', body: submitBody() });
+  const id = (created!.body as { application_id: string }).application_id;
+  await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, apiKey: API_KEY, body: { status: 'approved' } });
+  const again = await api.handle({ method: 'PATCH', pathname: `/poms/v1/agent-applications/${id}`, apiKey: API_KEY, body: { status: 'rejected' } });
+  assert.equal(again?.status, 409);
+});

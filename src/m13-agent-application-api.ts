@@ -1,9 +1,11 @@
 // M13 Agent 自助申请接口：让外部系统（如 M05 CRM）无需指定对接人，即可自助提交接入申请。
 // 端点（挂在 /poms/v1/agent-applications）：
-//   POST /poms/v1/agent-applications           提交申请（开放，限流 + Idempotency-Key 幂等）
-//   GET  /poms/v1/agent-applications/{id}      查询申请状态（开放，按随机 id 定位）
-//   GET  /poms/v1/agent-applications           申请台账（需 M13_AGENT_CHAT_API_KEY，供 M13 管理面）
+//   POST  /poms/v1/agent-applications           提交申请（开放，限流 + Idempotency-Key 幂等）
+//   GET   /poms/v1/agent-applications/{id}      查询申请状态（开放，按随机 id 定位）；审核通过后返回凭据/开通结果
+//   PATCH /poms/v1/agent-applications/{id}      审核（需 M13_AGENT_CHAT_API_KEY，供 M13 管理面）
+//   GET   /poms/v1/agent-applications           申请台账（需 M13_AGENT_CHAT_API_KEY，供 M13 管理面）
 // 申请落 data/m13-agent-applications.json，状态流转 submitted → reviewing → approved / rejected。
+// 审核通过时签发每申请独立的 API Key（credential），并在 GET /{id} 中返回凭据与开通结果。
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +31,9 @@ export interface M13AgentApplication {
   submittedAt: string;
   reviewedAt: string | null;
   reviewerNote: string | null;
+  credentialApiKey: string | null;
+  credentialIssuedAt: string | null;
+  activation: Record<string, unknown> | null;
 }
 
 interface M13ApplicationStore {
@@ -84,15 +89,16 @@ export class M13AgentApplicationApi {
     const method = request.method ?? 'GET';
     const relative = pathname.slice(M13_AGENT_APPLICATION_PATH_PREFIX.length);
 
-    // 提交与按 id 查询是「首次接触」，不要求预配密钥；台账列表属于 M13 管理面，要求密钥。
+    // 提交与按 id 查询是「首次接触」，不要求预配密钥；台账列表与审核属于 M13 管理面，要求密钥。
     if (relative === '' || relative === '/') {
       if (method === 'POST') return this.submit(request);
       if (method === 'GET') return this.list(request);
       return { status: 405, body: { code: 405, message: 'method not allowed' } };
     }
-    const getMatch = relative.match(/^\/([^/]+)$/);
-    if (getMatch && method === 'GET') {
-      return this.get(decodeURIComponent(getMatch[1] ?? ''));
+    const idMatch = relative.match(/^\/([^/]+)$/);
+    if (idMatch) {
+      if (method === 'GET') return this.get(decodeURIComponent(idMatch[1] ?? ''));
+      if (method === 'PATCH') return this.review(decodeURIComponent(idMatch[1] ?? ''), request);
     }
     return { status: 404, body: { code: 404, message: 'endpoint not found' } };
   }
@@ -142,6 +148,9 @@ export class M13AgentApplicationApi {
       submittedAt: now,
       reviewedAt: null,
       reviewerNote: null,
+      credentialApiKey: null,
+      credentialIssuedAt: null,
+      activation: null,
     };
 
     store.applications.unshift(application);
@@ -170,8 +179,67 @@ export class M13AgentApplicationApi {
     return { status: 200, body: { applications: store.applications.map((item) => this.publicView(item, true)) } };
   }
 
+  /** 审核：仅 M13 管理面（共享密钥）。approved 时签发每申请独立的 API Key 并记录开通结果。 */
+  private review(id: string, request: M13ApplicationRequest): M13ApplicationResponse {
+    if (request.bodyParseFailed) return { status: 400, body: { code: 400, message: '请求体非法' } };
+    if (!this.apiKey || !this.verifyKey(request)) {
+      return { status: 401, body: { code: 401, message: '凭据无效' } };
+    }
+
+    const store = this.loadStore();
+    const application = store.applications.find((item) => item.id === id);
+    if (!application) return { status: 404, body: { code: 404, message: '申请不存在' } };
+    if (application.status === 'approved' || application.status === 'rejected') {
+      return { status: 409, body: { code: 409, message: '该申请已审核，不可重复审核' } };
+    }
+
+    const body = request.body ?? {};
+    const decision = readString(body.status, 20);
+    if (decision !== 'approved' && decision !== 'rejected') {
+      return { status: 400, body: { code: 400, message: 'status 必须为 approved 或 rejected' } };
+    }
+    const reviewerNote = readString(body.reviewer_note, 2000);
+    const now = new Date().toISOString();
+
+    application.status = decision;
+    application.reviewedAt = now;
+    application.reviewerNote = reviewerNote || null;
+    if (decision === 'approved') {
+      application.credentialApiKey = `m13_${randomUUID().replace(/-/g, '')}`;
+      application.credentialIssuedAt = now;
+      application.activation = {
+        granted: true,
+        agents: application.agentIds,
+        chat_path: `/poms/v1/agents/{agent_id}/chat`,
+        auth: 'X-API-Key 或 Authorization: Bearer',
+      };
+    }
+    this.saveStore(store);
+    this.audit(decision, { id: application.id, sourceSystem: application.sourceSystem, reviewerNote });
+
+    return { status: 200, body: this.publicView(application, true) };
+  }
+
+  /** 会话接口鉴权：接受共享密钥或任一已签发（已批准）的每申请密钥。 */
+  verifyCredential(key: string): boolean {
+    const candidate = key?.trim() || '';
+    if (!candidate) return false;
+    if (this.apiKey) {
+      const expected = Buffer.from(this.apiKey);
+      const actual = Buffer.from(candidate);
+      if (expected.length === actual.length && timingSafeEqual(expected, actual)) return true;
+    }
+    for (const item of this.loadStore().applications) {
+      if (item.status !== 'approved' || !item.credentialApiKey) continue;
+      const expected = Buffer.from(item.credentialApiKey);
+      const actual = Buffer.from(candidate);
+      if (expected.length === actual.length && timingSafeEqual(expected, actual)) return true;
+    }
+    return false;
+  }
+
   private publicView(application: M13AgentApplication, _mask: boolean): Record<string, unknown> {
-    return {
+    const view: Record<string, unknown> = {
       application_id: application.id,
       source_system: application.sourceSystem,
       applicant: application.applicant,
@@ -184,6 +252,14 @@ export class M13AgentApplicationApi {
       reviewed_at: application.reviewedAt,
       reviewer_note: application.reviewerNote,
     };
+    // 审核通过后，凭据/开通结果对查询方可见（供申请人取走密钥完成对接）。
+    if (application.status === 'approved') {
+      view.credential = application.credentialApiKey
+        ? { api_key: application.credentialApiKey, issued_at: application.credentialIssuedAt }
+        : null;
+      view.activation = application.activation;
+    }
+    return view;
   }
 
   private verifyKey(request: M13ApplicationRequest): boolean {

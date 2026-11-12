@@ -400,14 +400,15 @@ const m13ChatRuntime: M13ChatRuntimePort = {
   waitForRun: (runId, timeoutMs) => runtimeSupervisor.waitForRun(CODEX_RUNTIME_ID, runId, timeoutMs),
   onEvent: (listener) => runtimeSupervisor.onEvent(listener, CODEX_RUNTIME_ID),
 };
+const m13AgentApplicationApi = new M13AgentApplicationApi({
+  apiKey: process.env.M13_AGENT_CHAT_API_KEY ?? '',
+  appendEvidence,
+});
 const m13AgentChatApi = new M13AgentChatApi({
   apiKey: process.env.M13_AGENT_CHAT_API_KEY ?? '',
   runtime: m13ChatRuntime,
   appendEvidence,
-});
-const m13AgentApplicationApi = new M13AgentApplicationApi({
-  apiKey: process.env.M13_AGENT_CHAT_API_KEY ?? '',
-  appendEvidence,
+  verifyKey: (key) => m13AgentApplicationApi.verifyCredential(key),
 });
 const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
 const orchestrationTaskService = new OrchestrationTaskService({
@@ -2403,7 +2404,7 @@ const server = createServer(async (req, res) => {
     try {
       let body: Record<string, unknown> = {};
       let bodyParseFailed = false;
-      if (req.method === 'POST') {
+      if (req.method === 'POST' || req.method === 'PATCH') {
         try { body = await readJsonBody(req, 64 * 1024); } catch { bodyParseFailed = true; }
       }
       const headerValue = (name: string): string => {
