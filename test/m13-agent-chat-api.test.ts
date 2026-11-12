@@ -46,6 +46,8 @@ function fakeRuntime(replyText = '这是 Agent 的回复。') {
       const now = new Date().toISOString();
       emit({ sequence: 1, runtimeInstanceId: 'test-runtime', kind: 'notification', name: 'item/agentMessage/delta', occurredAt: now, sessionId, runId, data: { delta: replyText } });
       emit({ sequence: 2, runtimeInstanceId: 'test-runtime', kind: 'notification', name: 'item/completed', occurredAt: now, sessionId, runId, data: { item: { type: 'agentMessage', text: replyText } } });
+      // 真实序列里 item/completed 之后紧跟 tokenUsage 事件；它不得覆盖已捕获的回复文本。
+      emit({ sequence: 3, runtimeInstanceId: 'test-runtime', kind: 'notification', name: 'thread/tokenUsage/updated', occurredAt: now, sessionId, runId, data: { threadId: sessionId, tokenUsage: { total: { outputTokens: 42 } } } });
       const run: RuntimeRun = { id: runId, runtimeInstanceId: 'test-runtime', sessionId, state: 'running', createdAt: now };
       return run;
     },

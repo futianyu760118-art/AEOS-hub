@@ -292,12 +292,8 @@ export class M13AgentChatApi {
       : await this.runtime.createSession({ developerInstructions: agent.developerInstructions });
     session.threadId = runtimeSession.id;
 
-    let capturedText = '';
-    let capturedOutputTokens = 0;
-    const off = this.runtime.onEvent((event) => this.captureEvent(event, runtimeSession.id, (text, tokens) => {
-      capturedText = text;
-      capturedOutputTokens = tokens;
-    }));
+    const captured = { text: '', tokens: 0 };
+    const off = this.runtime.onEvent((event) => this.captureEvent(event, runtimeSession.id, captured));
 
     let run: RuntimeRun;
     try {
@@ -327,7 +323,7 @@ export class M13AgentChatApi {
       return { status: 502, body: { code: 502, message: 'Agent 运行未完成', extra: { detail } } };
     }
 
-    const reply = capturedText.trim();
+    const reply = captured.text.trim();
     if (!reply) {
       return { status: 502, body: { code: 502, message: 'Agent 未产出回复', extra: { finish_reason: 'empty' } } };
     }
@@ -351,7 +347,7 @@ export class M13AgentChatApi {
         reply,
         agent_id: agent.id,
         finish_reason: 'stop',
-        usage: { tokens: capturedOutputTokens },
+        usage: { tokens: captured.tokens },
       },
     };
   }
@@ -359,7 +355,7 @@ export class M13AgentChatApi {
   private captureEvent(
     event: RuntimeEvent,
     threadId: string,
-    sink: (text: string, tokens: number) => void,
+    state: { text: string; tokens: number },
   ): void {
     if (event.kind !== 'notification') return;
     if (event.sessionId !== threadId) return;
@@ -368,18 +364,19 @@ export class M13AgentChatApi {
       const params = isRecord(event.data) ? event.data : {};
       const total = isRecord(params.tokenUsage) ? isRecord(params.tokenUsage.total) ? params.tokenUsage.total : {} : {};
       const outputTokens = typeof total.outputTokens === 'number' ? Math.trunc(total.outputTokens) : 0;
-      if (outputTokens > 0) sink('', outputTokens);
+      // 只更新用量，绝不覆盖已捕获的回复文本。
+      if (outputTokens > 0) state.tokens = outputTokens;
       return;
     }
     if (event.name === 'item/agentMessage/delta') {
       const delta = isRecord(event.data) ? event.data.delta : undefined;
-      if (typeof delta === 'string' && delta) sink(delta, 0);
+      if (typeof delta === 'string' && delta) state.text = `${state.text}${delta}`.slice(-20000);
       return;
     }
     if (event.name === 'item/completed') {
       const data = isRecord(event.data) ? event.data : {};
       const item = isRecord(data.item) ? data.item : {};
-      if (item.type === 'agentMessage' && typeof item.text === 'string') sink(item.text, 0);
+      if (item.type === 'agentMessage' && typeof item.text === 'string') state.text = item.text;
     }
   }
 

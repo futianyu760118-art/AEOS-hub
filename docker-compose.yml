@@ -73,6 +73,11 @@ services:
       - /tmp:rw,noexec,nosuid,size=64m
     security_opt:
       - no-new-privileges:true
+      # Codex 的只读沙箱（bwrap）需要创建用户命名空间；默认 seccomp 会拦截 unshare，
+      # 导致 "read-only sandbox failed to start (bwrap namespace error)"、Agent 命令被拒、
+      # 会话无输出。放开 seccomp 仅用于允许 unshare；cap_drop ALL / no-new-privileges /
+      # read_only 仍保留，bwrap 仍在其内部提供只读沙箱。
+      - seccomp=unconfined
     cap_drop:
       - ALL
 
