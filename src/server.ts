@@ -409,6 +409,7 @@ const m13AgentChatApi = new M13AgentChatApi({
   runtime: m13ChatRuntime,
   appendEvidence,
   verifyKey: (key) => m13AgentApplicationApi.verifyCredential(key),
+  runTimeoutMs: Number(process.env.M13_CHAT_RUN_TIMEOUT_MS) || 300000,
 });
 const orchestrationTaskStore = new OrchestrationTaskStore({ file: join(dataDir, 'orchestration-tasks.json') });
 const orchestrationTaskService = new OrchestrationTaskService({
