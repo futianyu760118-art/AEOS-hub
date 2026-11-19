@@ -55,3 +55,35 @@ test('registry prefix filter returns only matching agents', (t) => {
   });
   assert.deepEqual(snapshot.items, []);
 });
+
+
+test('businessAgentId is the stable cross-system registry key', (t) => {
+  const store = fixture(t);
+  const snapshot = store.load();
+  const runtimeId = snapshot.runtimes[0]!.id;
+  const created = store.createAgent({
+    businessAgentId: 'AG-FAC-001',
+    name: '财务总监智能体',
+    role: '综合财经',
+    provider: 'openai',
+    runtimeId,
+    skills: ['finance_review_pack'],
+  });
+  store.updateAgentM01Registration(created.id, {
+    state: 'active',
+    m01AgentId: created.id,
+    tenantId: 'HENGJIAN',
+    requestedScopes: ['task:execute'],
+    effectiveScopes: ['task:execute'],
+    clampedScopes: [],
+    lastAttemptAt: '2026-11-19T01:00:00.000Z',
+    lastSuccessAt: '2026-11-19T01:00:00.000Z',
+    reason: null,
+  });
+
+  const registry = buildAgentRegistrySnapshot(store.load(), { prefix: 'AG-FAC-' });
+  assert.equal(registry.items.length, 1);
+  assert.equal(registry.items[0]!.agentId, 'AG-FAC-001');
+  assert.equal(registry.items[0]!.harborAgentId, created.id);
+  assert.equal(registry.items[0]!.dispatchable, true);
+});
