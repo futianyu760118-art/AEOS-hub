@@ -1,0 +1,30 @@
+name: M13 Agent Registry CI
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/m13-agent-registry-ci.yml"
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npm run check:types
+      - name: Registry tests
+        run: >-
+          node --experimental-strip-types --test
+          test/aeos-internal-auth.test.ts
+          test/agent-registry-api.test.ts
+          test/m01-agent-bridge.test.ts
