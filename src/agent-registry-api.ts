@@ -3,6 +3,7 @@ import { isM01AgentDispatchable } from './m01-agent-bridge.ts';
 
 export interface AgentRegistryItem {
   agentId: string;
+  harborAgentId: string;
   name: string;
   role: string;
   skills: string[];
@@ -30,11 +31,15 @@ export function buildAgentRegistrySnapshot(
   const prefix = (options.prefix ?? '').trim();
   const runtimeById = new Map(harbor.runtimes.map((runtime) => [runtime.id, runtime]));
   const items = harbor.agents
-    .filter((agent) => !prefix || agent.id.startsWith(prefix))
+    .filter((agent) => {
+      const externalId = agent.businessAgentId || agent.id;
+      return !prefix || externalId.startsWith(prefix);
+    })
     .map((agent) => {
       const runtime = agent.runtimeId ? runtimeById.get(agent.runtimeId) : undefined;
       return {
-        agentId: agent.id,
+        agentId: agent.businessAgentId || agent.id,
+        harborAgentId: agent.id,
         name: agent.name,
         role: agent.role,
         skills: [...agent.skills],
