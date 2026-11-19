@@ -44,6 +44,7 @@ test('registry projection exposes M01 dispatchability without leaking full harbo
   assert.equal(snapshot.registrySystem, 'M13');
   assert.equal(item.dispatchable, true);
   assert.equal(item.m01State, 'active');
+  assert.equal(item.m01AgentId, agent.id);
   assert.deepEqual(item.effectiveScopes, ['task:execute']);
   assert.equal('instructions' in item, false);
 });
@@ -85,5 +86,6 @@ test('businessAgentId is the stable cross-system registry key', (t) => {
   assert.equal(registry.items.length, 1);
   assert.equal(registry.items[0]!.agentId, 'AG-FAC-001');
   assert.equal(registry.items[0]!.harborAgentId, created.id);
+  assert.equal(registry.items[0]!.m01AgentId, created.id);
   assert.equal(registry.items[0]!.dispatchable, true);
 });

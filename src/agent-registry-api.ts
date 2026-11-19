@@ -12,6 +12,7 @@ export interface AgentRegistryItem {
   runtimeId: string | null;
   runtimeStatus: string | null;
   m01State: string;
+  m01AgentId: string | null;
   effectiveScopes: string[];
   dispatchable: boolean;
   updatedAt: string;
@@ -48,6 +49,7 @@ export function buildAgentRegistrySnapshot(
         runtimeId: agent.runtimeId,
         runtimeStatus: runtime?.status ?? null,
         m01State: agent.m01Registration.state,
+        m01AgentId: agent.m01Registration.m01AgentId,
         effectiveScopes: [...agent.m01Registration.effectiveScopes],
         dispatchable: isM01AgentDispatchable(agent),
         updatedAt: agent.updatedAt,
