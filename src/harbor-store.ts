@@ -99,6 +99,7 @@ export function defaultHarborM01Registration(): HarborM01Registration {
 
 export const HarborAgentSchema = z.object({
   id: identifierSchema,
+  businessAgentId: identifierSchema.nullable().default(null),
   name: trimmedString(80, 1),
   role: trimmedString(120, 1),
   description: trimmedString(500),
@@ -211,6 +212,12 @@ export const HarborSnapshotSchema = z.object({
 
   const runtimeIds = new Set(snapshot.runtimes.map((runtime) => runtime.id));
   const agentIds = new Set(snapshot.agents.map((agent) => agent.id));
+  addDuplicateIssues(
+    snapshot.agents.flatMap((agent) => agent.businessAgentId ? [agent.businessAgentId] : []),
+    ctx,
+    ['agents'],
+    'Agent businessAgentId',
+  );
   const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
 
   snapshot.agents.forEach((agent, index) => {
@@ -298,7 +305,7 @@ export type HarborM01RegistrationInput = Readonly<{
   reason?: string | null;
 }>;
 const HARBOR_AGENT_CREATE_KEYS = new Set([
-  'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
+  'businessAgentId', 'name', 'role', 'description', 'instructions', 'provider', 'model', 'runtimeId',
   'parentAgentId', 'hierarchyLevel', 'autonomyLevel', 'access', 'skills',
 ]);
 export type HarborRuntimeCreateInput = Readonly<Record<string, unknown>> & { name?: unknown };
@@ -496,8 +503,13 @@ export class HarborStore {
       if (parentAgentId && !snapshot.agents.some((agent) => agent.id === parentAgentId)) {
         throw new Error('所选上级 Agent 不存在');
       }
+      const businessAgentId = optionalText(input, 'businessAgentId', 160) || null;
+      if (businessAgentId && snapshot.agents.some((item) => item.businessAgentId === businessAgentId)) {
+        throw new Error(`Agent businessAgentId 已存在: ${businessAgentId}`);
+      }
       const agent = HarborAgentSchema.parse({
         id: `agent-${this.idFactory()}`,
+        businessAgentId,
         name: requiredText(input, 'name', 80),
         role: requiredText(input, 'role', 120),
         description: optionalText(input, 'description', 500),
