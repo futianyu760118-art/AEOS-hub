@@ -6,7 +6,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ZodError } from 'zod';
 import { loadConversations, saveConversations, upsertConversation, dataDir, convFile, type Conversation, type ConversationMessage } from './conversations.ts';
@@ -73,6 +73,8 @@ import {
 import { UsageStore } from './usage-store.ts';
 import { CodexRuntimeAdapter, RuntimeSupervisor, type RuntimeApprovalRequest, type RuntimeEvent } from './runtime/index.ts';
 import { BrowserSessionAuth, loginUsernameFromEnvironment, passwordFromEnvironment } from './web-auth.ts';
+import { verifyAeosHmac } from './aeos-internal-auth.ts';
+import { buildAgentRegistrySnapshot } from './agent-registry-api.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
@@ -1314,19 +1316,19 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promis
 }
 
 function verifyPersonLifecycleSignature(req: IncomingMessage, raw: Buffer): boolean {
-  const keyId = String(req.headers['x-aeos-key-id'] ?? '');
-  const timestamp = String(req.headers['x-aeos-timestamp'] ?? '');
-  const supplied = String(req.headers['x-aeos-signature'] ?? '').replace(/^sha256=/, '');
-  const expectedKeyId = process.env.AEOS_PERSON_LIFECYCLE_KEY_ID || 'm01-kernel';
-  const secret = process.env.AEOS_PERSON_LIFECYCLE_SECRET || process.env.AEOS_HUB_PERSON_LIFECYCLE_SECRET || '';
-  const timestampMs = Number(timestamp);
-  if (!keyId || keyId !== expectedKeyId || !timestamp || !Number.isInteger(timestampMs) || !supplied || !secret) return false;
-  const maxSkew = Number(process.env.AEOS_PERSON_LIFECYCLE_MAX_SKEW_SECONDS || 300) * 1000;
-  if (Math.abs(Date.now() - timestampMs) > maxSkew) return false;
-  const expected = createHmac('sha256', secret).update(timestamp).update('.').update(raw).digest('hex');
-  const expectedBytes = Buffer.from(expected);
-  const suppliedBytes = Buffer.from(supplied);
-  return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+  return verifyAeosHmac(req.headers, raw, {
+    keyId: process.env.AEOS_PERSON_LIFECYCLE_KEY_ID || 'm01-kernel',
+    secret: process.env.AEOS_PERSON_LIFECYCLE_SECRET || process.env.AEOS_HUB_PERSON_LIFECYCLE_SECRET || '',
+    maxSkewSeconds: Number(process.env.AEOS_PERSON_LIFECYCLE_MAX_SKEW_SECONDS || 300),
+  });
+}
+
+function verifyAgentRegistrySignature(req: IncomingMessage): boolean {
+  return verifyAeosHmac(req.headers, Buffer.alloc(0), {
+    keyId: process.env.AEOS_AGENT_REGISTRY_KEY_ID || 'fac-m09',
+    secret: process.env.AEOS_AGENT_REGISTRY_SECRET || '',
+    maxSkewSeconds: Number(process.env.AEOS_AGENT_REGISTRY_MAX_SKEW_SECONDS || 300),
+  });
 }
 
 const MIME: Record<string, string> = {
@@ -1357,6 +1359,18 @@ const server = createServer(async (req, res) => {
     sendJson(res, evidenceHealth() ? 503 : 200, { status: evidenceHealth() ? 'degraded' : 'ok' }); return;
   }
   if (!validOrigin(req.headers.origin, req.headers.host)) { sendJson(res, 403, { error: 'origin denied' }); return; }
+  if (url.pathname === '/internal/aeos/agent-registry') {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: 'method not allowed' }); return; }
+    if (!verifyAgentRegistrySignature(req)) { sendJson(res, 401, { error: 'Agent Registry 签名无效' }); return; }
+    try {
+      const prefix = (url.searchParams.get('prefix') ?? '').trim();
+      if (prefix.length > 160) { sendJson(res, 400, { error: 'prefix 过长' }); return; }
+      sendJson(res, 200, buildAgentRegistrySnapshot(loadHarbor(), { prefix }));
+    } catch (error) {
+      sendJson(res, 500, { error: (error as Error).message });
+    }
+    return;
+  }
   if (url.pathname === '/internal/aeos/person-lifecycle') {
     if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return; }
     try {
