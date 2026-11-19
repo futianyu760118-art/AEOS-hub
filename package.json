@@ -30,6 +30,7 @@
     "test:m01-registration": "node --experimental-strip-types --test test/m01-agent-registration.test.ts",
     "test:m01-console": "node --experimental-strip-types --test test/m01-console-contract.test.ts",
     "register:m01-hub-agent": "node --experimental-strip-types scripts/register-m01-hub-agent.ts",
+    "setup:fac-agents": "node --experimental-strip-types scripts/ensure-fac-agents.ts",
     "smoke:protocol": "node scripts/smoke-protocol.mjs",
     "check:types": "tsc --noEmit",
     "setup:kitting-agents": "node scripts/ensure-material-kitting-agents.ts",
